@@ -1,27 +1,35 @@
 package reposcan
 
 import (
+	"SecureMCP/proto"
 	"context"
 )
 
 type RepoScanner struct {
 	repoPath       string
+	config         *Config
 	scaScanner     *SCAScanner
 	secretsScanner *SecretsScanner
 	sastScanner    *SASTScanner
 }
 
-func NewRepoScanner(repoPath string) *RepoScanner {
+func NewDefaultRepoScanner(repoPath string) *RepoScanner {
+	config := DefaultConfig()
+	return NewRepoScannerWithConfig(repoPath, config)
+}
+
+func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
 	return &RepoScanner{
 		repoPath:       repoPath,
-		scaScanner:     NewSCAScanner(repoPath),
-		secretsScanner: NewSecretsScanner(repoPath),
-		sastScanner:    NewSASTScanner(repoPath),
+		config:         config,
+		scaScanner:     NewSCAScanner(repoPath, config),
+		secretsScanner: NewSecretsScanner(repoPath, config),
+		sastScanner:    NewSASTScanner(repoPath, config),
 	}
 }
 
-func (s *RepoScanner) Scan(ctx context.Context) ([]Finding, error) {
-	findings := []Finding{}
+func (s *RepoScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+	findings := []proto.Finding{}
 	scaFindings, err := s.scaScanner.Scan(ctx)
 	if err != nil {
 		return nil, err

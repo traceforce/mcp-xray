@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "internal/proto";
+
+// RiskSeverity represents security risk levels
+enum RiskSeverity {
+  RISK_SEVERITY_UNKNOWN = 0;
+  RISK_SEVERITY_LOW = 1;
+  RISK_SEVERITY_MEDIUM = 2;
+  RISK_SEVERITY_HIGH = 3;
+  RISK_SEVERITY_CRITICAL = 4;
+}
+
+// FindingType represents the type of security finding
+enum FindingType {
+  FINDING_TYPE_UNKNOWN = 0;
+  FINDING_TYPE_SCA = 1;      // Software Composition Analysis
+  FINDING_TYPE_SECRETS = 2;  // Secret detection
+  FINDING_TYPE_SAST = 3;     // Static Application Security Testing
+}
+
+// Finding represents a security finding from a scan
+message Finding {
+  string tool = 1;
+  FindingType type = 2;
+  RiskSeverity severity = 3;
+  string rule_id = 4;
+  string title = 5;
+  string file = 6;      // Optional
+  int32 line = 7;       // Optional
+  string message = 8;   // Optional
+
+  // SCA-specific (optional but useful)
+  string package = 9;   // Optional
+  string version = 10;  // Optional
+  string fixed = 11;    // Optional
+}

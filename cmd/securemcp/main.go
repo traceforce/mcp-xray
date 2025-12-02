@@ -38,7 +38,7 @@ func NewRepoScanCommand() *cobra.Command {
 			if len(args) > 0 {
 				repoPath = args[0]
 			}
-			scanner := reposcan.NewRepoScanner(repoPath)
+			scanner := reposcan.NewDefaultRepoScanner(repoPath)
 			findings, err := scanner.Scan(context.Background())
 			if err != nil {
 				fmt.Println("Error scanning repository:", err)

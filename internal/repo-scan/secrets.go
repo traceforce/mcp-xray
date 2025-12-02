@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"SecureMCP/proto"
+
 	"github.com/zricethezav/gitleaks/v8/detect"
 	"github.com/zricethezav/gitleaks/v8/report"
 	"github.com/zricethezav/gitleaks/v8/sources"
@@ -11,15 +13,17 @@ import (
 
 type SecretsScanner struct {
 	repoPath string
+	config   *Config
 }
 
-func NewSecretsScanner(repoPath string) *SecretsScanner {
+func NewSecretsScanner(repoPath string, config *Config) *SecretsScanner {
 	return &SecretsScanner{
 		repoPath: repoPath,
+		config:   config,
 	}
 }
 
-func (s *SecretsScanner) Scan(ctx context.Context) ([]Finding, error) {
+func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	// 1) Load default config (same rules as CLI when no custom config is provided)
 	// NewDetectorDefaultConfig creates a detector with the default ruleset.
 	detector, err := detect.NewDetectorDefaultConfig()
@@ -53,18 +57,18 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]Finding, error) {
 	return findings, nil
 }
 
-func FromGitleaks(findings []report.Finding) []Finding {
-	out := make([]Finding, 0, len(findings))
+func FromGitleaks(findings []report.Finding) []proto.Finding {
+	out := make([]proto.Finding, 0, len(findings))
 
 	for _, f := range findings {
-		out = append(out, Finding{
+		out = append(out, proto.Finding{
 			Tool:     "gitleaks",
-			Type:     "secrets",
-			Severity: "high", // treat all secrets as high/error
-			RuleID:   f.RuleID,
+			Type:     proto.FindingType_FINDING_TYPE_SECRETS,
+			Severity: proto.RiskSeverity_RISK_SEVERITY_HIGH, // treat all secrets as high/error
+			RuleId:   f.RuleID,
 			Title:    f.Description,
 			File:     f.File,
-			Line:     f.StartLine,
+			Line:     int32(f.StartLine),
 			Message:  f.Description, // avoid empty message
 		})
 	}

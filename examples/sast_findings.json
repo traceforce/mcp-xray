@@ -1,0 +1,742 @@
+[
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/PYPI_SETUP.md",
+    "line": 22,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/PYPI_SETUP.md",
+    "line": 48,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/PYPI_SETUP.md",
+    "line": 63,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/PYPI_SETUP.md",
+    "line": 154,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/README_python.md",
+    "line": 54,
+    "message": "chmod 777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/README_python.md",
+    "line": 54,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/README_python.md",
+    "line": 55,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 21,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 24,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 82,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 83,
+    "message": "chmod 777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 83,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "low",
+    "rule_id": "pip_install",
+    "title": "Package installation",
+    "file": "/Users/xiahua/src/mcp-discover/TEST_README.md",
+    "line": 157,
+    "message": "pip install"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 39,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "doas",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 39,
+    "message": "doas"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 46,
+    "message": "rm\\s+-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 49,
+    "message": "chmod\\s+777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 51,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 77,
+    "message": "chmod', '777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/mcp_server_config_scan.py",
+    "line": 79,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_cve_integration.py",
+    "line": 49,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_cve_integration.py",
+    "line": 49,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_cve_integration.py",
+    "line": 50,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 28,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 28,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 30,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 30,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_exec",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 31,
+    "message": "exec("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 44,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 44,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf_root",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "rm -rf /') // "
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_exec",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "exec("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 223,
+    "message": "rm\", \"args\": [\"-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 233,
+    "message": "chmod\", \"args\": [\"777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 238,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 239,
+    "message": "rm\", \"-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 239,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_pkg/root/usr/local/mcp_scout/test_vulnerabilities.py",
+    "line": 255,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 39,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "doas",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 39,
+    "message": "doas"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 46,
+    "message": "rm\\s+-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 49,
+    "message": "chmod\\s+777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 51,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 77,
+    "message": "chmod', '777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/mcp_server_config_scan.py",
+    "line": 79,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_cve_integration.py",
+    "line": 49,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_cve_integration.py",
+    "line": 49,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_cve_integration.py",
+    "line": 50,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 28,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 28,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 30,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 30,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_exec",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 31,
+    "message": "exec("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 44,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 44,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf_root",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "rm -rf /') // "
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_exec",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_local_mcp_vulnerabilities.py",
+    "line": 46,
+    "message": "exec("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 223,
+    "message": "rm\", \"args\": [\"-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "chmod_777",
+    "title": "Insecure file permissions",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 233,
+    "message": "chmod\", \"args\": [\"777"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 238,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 239,
+    "message": "rm\", \"-rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 239,
+    "message": "sudo"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "rm_rf",
+    "title": "Destructive file operations",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "rm -rf"
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "python_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "critical",
+    "rule_id": "nodejs_eval",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 250,
+    "message": "eval("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "high",
+    "rule_id": "python_os_system",
+    "title": "Code execution",
+    "file": "/Users/xiahua/src/mcp-discover/mcp_scout/test_vulnerabilities.py",
+    "line": 255,
+    "message": "os.system("
+  },
+  {
+    "tool": "sast",
+    "type": "SAST",
+    "severity": "medium",
+    "rule_id": "sudo",
+    "title": "Privilege escalation",
+    "file": "/Users/xiahua/src/mcp-discover/simplemdm-script.sh",
+    "line": 16,
+    "message": "sudo"
+  }
+]

@@ -1,6 +1,7 @@
 package reposcan
 
 import (
+	"SecureMCP/proto"
 	"context"
 	"fmt"
 	"log"
@@ -14,15 +15,17 @@ import (
 
 type SCAScanner struct {
 	repoPath string
+	config   *Config
 }
 
-func NewSCAScanner(repoPath string) *SCAScanner {
+func NewSCAScanner(repoPath string, config *Config) *SCAScanner {
 	return &SCAScanner{
 		repoPath: repoPath,
+		config:   config,
 	}
 }
 
-func (s *SCAScanner) Scan(ctx context.Context) ([]Finding, error) {
+func (s *SCAScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	actions := osvscanner.ScannerActions{
 		// Scan this directory as "project source"
 		DirectoryPaths: []string{s.repoPath},
@@ -48,41 +51,41 @@ func (s *SCAScanner) Scan(ctx context.Context) ([]Finding, error) {
 }
 
 // severityFromScore maps CVSS base score => unified bucket.
-func severityFromScore(score float64) string {
+func severityFromScore(score float64) proto.RiskSeverity {
 	switch {
 	case score >= 9.0:
-		return "critical"
+		return proto.RiskSeverity_RISK_SEVERITY_CRITICAL
 	case score >= 7.0:
-		return "high"
+		return proto.RiskSeverity_RISK_SEVERITY_HIGH
 	case score >= 4.0:
-		return "medium"
+		return proto.RiskSeverity_RISK_SEVERITY_MEDIUM
 	case score > 0.0:
-		return "low"
+		return proto.RiskSeverity_RISK_SEVERITY_LOW
 	default:
-		return "info"
+		return proto.RiskSeverity_RISK_SEVERITY_UNKNOWN
 	}
 }
 
 // normalizeLabel handles DB-provided coarse labels (like MODERATE).
-func normalizeLabel(label string) string {
+func normalizeLabel(label string) proto.RiskSeverity {
 	switch strings.ToUpper(strings.TrimSpace(label)) {
 	case "CRITICAL":
-		return "critical"
+		return proto.RiskSeverity_RISK_SEVERITY_CRITICAL
 	case "HIGH":
-		return "high"
+		return proto.RiskSeverity_RISK_SEVERITY_HIGH
 	case "MEDIUM", "MODERATE":
-		return "medium"
+		return proto.RiskSeverity_RISK_SEVERITY_MEDIUM
 	case "LOW":
-		return "low"
+		return proto.RiskSeverity_RISK_SEVERITY_LOW
 	default:
-		return "info"
+		return proto.RiskSeverity_RISK_SEVERITY_UNKNOWN
 	}
 }
 
 // normalizeOSVSeverity reads an osvschema.Vulnerability and returns:
 // - unified severity bucket
 // - best CVSS base score found (0 if none)
-func normalizeOSVSeverity(v *osvschema.Vulnerability) (string, float64) {
+func normalizeOSVSeverity(v *osvschema.Vulnerability) (proto.RiskSeverity, float64) {
 	// 1) Prefer database_specific.severity if present (fast, consistent)
 	if lbl, ok := getDatabaseSpecificString(v, "severity"); ok {
 		return normalizeLabel(lbl), 0
@@ -114,7 +117,7 @@ func normalizeOSVSeverity(v *osvschema.Vulnerability) (string, float64) {
 	}
 
 	// 3) Fallback
-	return "info", 0
+	return proto.RiskSeverity_RISK_SEVERITY_UNKNOWN, 0
 }
 
 // getDatabaseSpecificString safely pulls a string from v.DatabaseSpecific.Fields[key]
@@ -134,8 +137,8 @@ func getDatabaseSpecificString(v *osvschema.Vulnerability, key string) (string, 
 }
 
 // FromOSV converts osv-scanner results into unified Finding objects.
-func FromOSV(results models.VulnerabilityResults) []Finding {
-	out := []Finding{}
+func FromOSV(results models.VulnerabilityResults) []proto.Finding {
+	out := []proto.Finding{}
 
 	for _, r := range results.Results {
 		for _, pkg := range r.Packages {
@@ -145,11 +148,11 @@ func FromOSV(results models.VulnerabilityResults) []Finding {
 			for _, vuln := range pkg.Vulnerabilities {
 				sev, _ := normalizeOSVSeverity(vuln)
 
-				out = append(out, Finding{
+				out = append(out, proto.Finding{
 					Tool:     "osv",
-					Type:     "sca",
+					Type:     proto.FindingType_FINDING_TYPE_SCA,
 					Severity: sev,
-					RuleID:   vuln.GetId(),
+					RuleId:   vuln.GetId(),
 					Title:    firstNonEmpty(vuln.GetSummary(), vuln.GetId()),
 					Message:  firstNonEmpty(vuln.GetDetails(), vuln.GetSummary()),
 
