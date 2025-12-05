@@ -1,8 +1,9 @@
 package reposcan
 
 import (
-	"SecureMCP/proto"
 	"context"
+
+	"SecureMCP/proto"
 )
 
 type RepoScanner struct {

@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package proto;
+
+option go_package = "internal/proto";
+
+// MCPTransportType represents the transport mechanism for MCP communication
+enum MCPTransportType {
+  MCP_TRANSPORT_TYPE_UNKNOWN = 0;
+  MCP_TRANSPORT_TYPE_STDIO = 1;
+  MCP_TRANSPORT_TYPE_HTTP = 2;
+  MCP_TRANSPORT_TYPE_SSE = 3;
+}

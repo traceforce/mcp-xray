@@ -1,11 +1,12 @@
 package reposcan
 
 import (
-	"SecureMCP/proto"
 	"context"
 	"fmt"
 	"log"
 	"strings"
+
+	"SecureMCP/proto"
 
 	"github.com/google/osv-scanner/v2/pkg/models"
 	"github.com/google/osv-scanner/v2/pkg/osvscanner"
