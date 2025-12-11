@@ -93,21 +93,26 @@ func NewLLMAnalyzerFromEnv() *LLMAnalyzer {
 
 // SecurityFinding represents a security finding from LLM analysis
 type SecurityFinding struct {
-	Severity string `json:"severity"` // "low", "medium", "high", "critical"
+	ToolName string `json:"tool_name,omitempty"` // Required for batch analysis
+	Severity string `json:"severity"`            // "low", "medium", "high", "critical"
 	RuleID   string `json:"rule_id"`
 	Title    string `json:"title"`
 	Message  string `json:"message"`
 	Category string `json:"category,omitempty"` // e.g., "command_injection", "path_traversal", etc.
 }
 
-// AnalyzeTool analyzes a tool for security risks
-func (a *LLMAnalyzer) AnalyzeTool(ctx context.Context, tool Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+// AnalyzeTools analyzes multiple tools for security risks in a single LLM call
+func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
 	if a.apiKey == "" {
 		return nil, fmt.Errorf("no API key configured")
 	}
 
-	// Build the prompt for LLM analysis
-	prompt := a.buildAnalysisPrompt(tool)
+	if len(tools) == 0 {
+		return []proto.Finding{}, nil
+	}
+
+	// Build the prompt for batch LLM analysis
+	prompt := a.buildBatchAnalysisPrompt(tools)
 
 	// Call the LLM
 	response, err := a.callLLM(ctx, prompt)
@@ -116,7 +121,7 @@ func (a *LLMAnalyzer) AnalyzeTool(ctx context.Context, tool Tool, mcpServerName 
 	}
 
 	// Parse the response
-	findings, err := a.parseLLMResponse(response, tool, mcpServerName, configPath)
+	findings, err := a.parseBatchLLMResponse(response, tools, mcpServerName, configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse LLM response: %w", err)
 	}
@@ -124,14 +129,21 @@ func (a *LLMAnalyzer) AnalyzeTool(ctx context.Context, tool Tool, mcpServerName 
 	return findings, nil
 }
 
-// buildAnalysisPrompt creates a prompt for analyzing a tool
-func (a *LLMAnalyzer) buildAnalysisPrompt(tool Tool) string {
+// buildBatchAnalysisPrompt creates a prompt for analyzing multiple tools
+func (a *LLMAnalyzer) buildBatchAnalysisPrompt(tools []Tool) string {
+	var toolsList strings.Builder
+	for i, tool := range tools {
+		toolsList.WriteString(fmt.Sprintf("\nTool %d:\n", i+1))
+		toolsList.WriteString(fmt.Sprintf("  Name: %s\n", tool.Name))
+		toolsList.WriteString(fmt.Sprintf("  Description: %s\n", tool.Description))
+	}
 
-	return fmt.Sprintf(`Analyze the following MCP tool for security risks. Focus on:
+	return fmt.Sprintf(`Analyze the following MCP tools for security risks. Focus on:
 1. Tool name: Does it suggest dangerous operations (e.g., file deletion, command execution, network access)?
 2. Tool description: Does it describe operations that could be exploited?
 
-Return a JSON array of security findings. Each finding should have:
+Return a JSON object with a "results" field containing an array of security findings. Each finding should have:
+- tool_name: The name of the tool this finding applies to (required for batch analysis)
 - severity: "low", "medium", "high", or "critical"
 - rule_id: A unique identifier for the type of risk (e.g., "command_injection", "path_traversal")
 - title: A brief title describing the risk
@@ -140,10 +152,9 @@ Return a JSON array of security findings. Each finding should have:
 
 Return ONLY valid JSON, no markdown, no code fences, no additional text.
 
-Tool Name: %s
-Tool Description: %s
+Tools to analyze:%s
 
-JSON Response:`, tool.Name, tool.Description)
+JSON Response:`, toolsList.String())
 }
 
 // callLLM calls the LLM API
@@ -311,6 +322,73 @@ func (a *LLMAnalyzer) parseLLMResponse(response string, tool Tool, mcpServerName
 			Title:         f.Title,
 			McpServerName: mcpServerName,
 			McpToolName:   tool.Name,
+			File:          configPath,
+			Message:       f.Message,
+		})
+	}
+
+	return protoFindings, nil
+}
+
+// parseBatchLLMResponse parses the batch LLM response and converts it to proto.Finding
+func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+	// Create a map of tool names to tools for quick lookup
+	toolMap := make(map[string]Tool)
+	for _, tool := range tools {
+		toolMap[tool.Name] = tool
+	}
+
+	var findings []SecurityFinding
+
+	// Try to parse as wrapped object with "results" field (expected format for batch)
+	var wrapped struct {
+		Results []SecurityFinding `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(response), &wrapped); err == nil {
+		findings = wrapped.Results
+	} else {
+		// Fallback: try to parse as direct array
+		if err2 := json.Unmarshal([]byte(response), &findings); err2 != nil {
+			return nil, fmt.Errorf("failed to parse LLM response as JSON: %v (also tried wrapped format: %v)", err2, err)
+		}
+	}
+
+	// Convert to proto.Finding, mapping findings to their respective tools
+	protoFindings := make([]proto.Finding, 0, len(findings))
+	for _, f := range findings {
+		// Determine which tool this finding belongs to
+		var targetTool Tool
+		if f.ToolName != "" {
+			// Finding explicitly specifies tool name
+			if tool, ok := toolMap[f.ToolName]; ok {
+				targetTool = tool
+			} else {
+				// Tool name not found, skip this finding or use first tool as fallback
+				continue
+			}
+		} else {
+			// No tool name specified, this shouldn't happen in batch mode but handle gracefully
+			if len(tools) > 0 {
+				targetTool = tools[0]
+			} else {
+				continue
+			}
+		}
+
+		severity := a.mapSeverity(f.Severity)
+		ruleID := f.RuleID
+		if ruleID == "" {
+			ruleID = "llm_analyzer_finding"
+		}
+
+		protoFindings = append(protoFindings, proto.Finding{
+			Tool:          "llm_analyzer",
+			Type:          proto.FindingType_FINDING_TYPE_SAST,
+			Severity:      severity,
+			RuleId:        ruleID,
+			Title:         f.Title,
+			McpServerName: mcpServerName,
+			McpToolName:   targetTool.Name,
 			File:          configPath,
 			Message:       f.Message,
 		})

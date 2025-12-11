@@ -1,0 +1,351 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SecureMCP",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/SecureMCP",
+          "rules": [
+            {
+              "id": "github-fine-grained-pat",
+              "shortDescription": {
+                "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+              }
+            },
+            {
+              "id": "aws-access-token",
+              "shortDescription": {
+                "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+              }
+            },
+            {
+              "id": "openai-api-key",
+              "shortDescription": {
+                "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+              }
+            },
+            {
+              "id": "generic-api-key",
+              "shortDescription": {
+                "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "aws-access-token",
+          "level": "error",
+          "message": {
+            "text": "Identified a pattern that may indicate AWS credentials, risking unauthorized cloud resource access and data breaches on AWS platforms."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "github-fine-grained-pat",
+          "level": "error",
+          "message": {
+            "text": "Found a GitHub Fine-Grained Personal Access Token, risking unauthorized repository access and code manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "openai-api-key",
+          "level": "error",
+          "message": {
+            "text": "Found an OpenAI API Key, posing a risk of unauthorized access to AI services and data manipulation."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        }
+      ]
+    }
+  ]
+}

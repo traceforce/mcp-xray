@@ -1,0 +1,455 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SecureMCP",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/SecureMCP",
+          "rules": [
+            {
+              "id": "insufficient_input_validation",
+              "shortDescription": {
+                "text": "Insufficient Input Validation on Tool Arguments"
+              }
+            },
+            {
+              "id": "missing_authorization_context",
+              "shortDescription": {
+                "text": "No Apparent Authorization or Permission Checks"
+              }
+            },
+            {
+              "id": "code_injection",
+              "shortDescription": {
+                "text": "Arbitrary Content Injection into Repository"
+              }
+            },
+            {
+              "id": "code_modification",
+              "shortDescription": {
+                "text": "Direct Repository Commit Creation"
+              }
+            },
+            {
+              "id": "spam_abuse",
+              "shortDescription": {
+                "text": "Issue Creation and Potential Abuse"
+              }
+            },
+            {
+              "id": "code_review_bypass",
+              "shortDescription": {
+                "text": "Pull Request Creation for Malicious Code Introduction"
+              }
+            },
+            {
+              "id": "reconnaissance",
+              "shortDescription": {
+                "text": "Connection Status Reconnaissance"
+              }
+            },
+            {
+              "id": "arbitrary_tool_execution",
+              "shortDescription": {
+                "text": "Arbitrary Tool Execution Without Validation"
+              }
+            },
+            {
+              "id": "credential_exposure_risk",
+              "shortDescription": {
+                "text": "Potential Credential Exposure Through Connection Initiation"
+              }
+            },
+            {
+              "id": "connection_hijacking",
+              "shortDescription": {
+                "text": "Risk of Connection Hijacking or Unauthorized Access"
+              }
+            },
+            {
+              "id": "privilege_escalation",
+              "shortDescription": {
+                "text": "Repository Access Control Modification"
+              }
+            },
+            {
+              "id": "metadata_manipulation",
+              "shortDescription": {
+                "text": "Issue Metadata Manipulation"
+              }
+            },
+            {
+              "id": "information_disclosure",
+              "shortDescription": {
+                "text": "Code Comparison and Information Exposure"
+              }
+            },
+            {
+              "id": "social_engineering",
+              "shortDescription": {
+                "text": "Comment Injection and Social Engineering"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "arbitrary_tool_execution",
+          "level": "error",
+          "message": {
+            "text": "This tool allows execution of arbitrary tools discovered through search with user-controlled arguments. The tool accepts any tool_slug and arbitrary arguments without apparent validation or sandboxing. This could allow execution of dangerous operations like file deletion, command execution, or unauthorized API calls depending on what tools are available in the COMPOSIO ecosystem. An attacker could potentially execute privileged GitHub operations or other integrated services without proper authorization checks."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_EXECUTE_TOOL",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "missing_authorization_context",
+          "level": "error",
+          "message": {
+            "text": "The tool description does not mention any authorization, permission checks, or access control mechanisms. This suggests that any user with access to this tool could execute any discovered tool regardless of their privilege level. This could lead to privilege escalation where low-privileged users execute administrative or sensitive operations through the GITHUB_EXECUTE_TOOL interface."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_EXECUTE_TOOL",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "credential_exposure_risk",
+          "level": "error",
+          "message": {
+            "text": "This tool accepts authentication parameters (like API keys) to create connections. If not properly secured, this could lead to credential exposure through logs, error messages, or insecure storage. The tool description does not indicate any encryption, secure storage, or validation mechanisms for sensitive authentication data. Attackers could potentially intercept or extract credentials during the connection process."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_INITIATE_CONNECTION",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "insufficient_input_validation",
+          "level": "error",
+          "message": {
+            "text": "The tool accepts 'arguments' as Record\u003cstring, any\u003e, which means any arbitrary data structure can be passed without type validation or sanitization. This could lead to injection attacks, parameter tampering, or exploitation of downstream tools that don't properly validate their inputs. Malicious payloads could be crafted to exploit vulnerabilities in the executed tools."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_EXECUTE_TOOL",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "privilege_escalation",
+          "level": "error",
+          "message": {
+            "text": "This tool can add users as repository collaborators or modify their permissions, potentially granting unauthorized access to sensitive code and data. An attacker could use this to escalate privileges, add malicious collaborators, or grant excessive permissions to compromised accounts. Requires strict authorization controls and audit logging."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_ADD_A_REPOSITORY_COLLABORATOR",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "code_modification",
+          "level": "error",
+          "message": {
+            "text": "This tool can create commits directly in the repository, bypassing normal code review processes. An attacker could inject malicious code, backdoors, or vulnerabilities directly into the codebase, modify security-critical files, or alter project history. This represents a critical supply chain security risk and requires strong authentication and authorization controls."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CREATE_A_COMMIT",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "code_injection",
+          "level": "warning",
+          "message": {
+            "text": "This tool can create git blobs with arbitrary content in base64 or UTF-8 encoding, potentially allowing injection of malicious code, backdoors, or sensitive data into the repository. While blobs alone don't execute, they can be incorporated into commits and deployed. Requires validation of content and strict access controls."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CREATE_A_BLOB",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "social_engineering",
+          "level": "warning",
+          "message": {
+            "text": "This tool can create comments on issues and pull requests, which could be exploited for phishing attacks, social engineering, spreading misinformation, or injecting malicious links. Attackers could impersonate legitimate users, manipulate discussions, or use comments to distribute malware. Requires content filtering and authentication verification."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CREATE_AN_ISSUE_COMMENT",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "code_review_bypass",
+          "level": "warning",
+          "message": {
+            "text": "This tool can create pull requests that could introduce malicious code, backdoors, or vulnerabilities. While PRs typically require review, attackers could use social engineering, create misleading descriptions, or exploit automated merge processes. Could be used in supply chain attacks or to introduce subtle security flaws."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CREATE_A_PULL_REQUEST",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "reconnaissance",
+          "level": "warning",
+          "message": {
+            "text": "This tool reveals information about active GitHub app connections, which could be used for reconnaissance to identify when an agent has active permissions to perform actions. An attacker could use this to time attacks, verify compromised credentials, or map the security posture of the integration."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CHECK_ACTIVE_CONNECTION",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "information_disclosure",
+          "level": "warning",
+          "message": {
+            "text": "This tool can compare commits across branches and forks, potentially exposing sensitive code changes, security patches before public disclosure, or proprietary implementation details. An attacker could use this to identify vulnerabilities by analyzing security-related commits or extract intellectual property."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_COMPARE_TWO_COMMITS",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "information_disclosure",
+          "level": "warning",
+          "message": {
+            "text": "This tool allows searching and discovering available tools with their descriptions and input schemas. While useful for legitimate purposes, it could enable attackers to enumerate all available capabilities, identify vulnerable tools, and map the attack surface. The returned input_schema information could reveal implementation details that assist in crafting targeted attacks against specific tools."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_SEARCH_TOOLS",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "connection_hijacking",
+          "level": "warning",
+          "message": {
+            "text": "The tool allows initiating connections to GitHub with user-provided parameters. Without proper validation and rate limiting, this could be abused to create unauthorized connections, exhaust connection limits, or perform connection-based attacks. If multiple users share the same environment, one user could potentially hijack or interfere with another user's GitHub connection."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_INITIATE_CONNECTION",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "spam_abuse",
+          "level": "note",
+          "message": {
+            "text": "This tool can create issues in repositories, which could be abused for spam, phishing attacks, social engineering, or to overwhelm project maintainers. Malicious actors could create misleading security reports, inject malicious links, or use issues for reconnaissance. Requires rate limiting and content validation."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_CREATE_AN_ISSUE",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "metadata_manipulation",
+          "level": "note",
+          "message": {
+            "text": "This tool can add or create labels on issues, potentially allowing an attacker to manipulate issue tracking, hide security vulnerabilities by mislabeling them, or create misleading labels. The ability to create new labels could lead to namespace pollution or confusion in project workflows."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_ADD_LABELS_TO_AN_ISSUE",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "metadata_manipulation",
+          "level": "note",
+          "message": {
+            "text": "This tool can modify issue assignees, which could be used to misdirect work, cause confusion in project management, or obscure security issues by assigning them to inactive users. While limited in direct security impact, it could be part of a social engineering or disruption campaign."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_token.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "composio",
+            "mcpToolName": "GITHUB_ADD_ASSIGNEES_TO_AN_ISSUE",
+            "tool": "llm_analyzer",
+            "type": "SAST"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -43,13 +43,26 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			fmt.Printf("Warning: failed to get tools for server %s: %v\n", server.Name, err)
 			continue
 		}
-		for _, tool := range tools {
-			fmt.Printf("Analyzing tool: %v\nDescription: %v\nInput Schema: %v\n", tool.Name, tool.Description, formatJSON(tool.InputSchema))
-			findings, err := s.analyzeTool(ctx, tool, server.Name)
+		if len(tools) == 0 {
+			continue
+		}
+
+		fmt.Printf("Analyzing %d tools for server %s\n", len(tools), server.Name)
+		// Batch analyze tools in groups of 10
+		const batchSize = 10
+		for i := 0; i < len(tools); i += batchSize {
+			end := i + batchSize
+			if end > len(tools) {
+				end = len(tools)
+			}
+			batch := tools[i:end]
+			fmt.Printf("Analyzing batch %d-%d of %d tools for server %s\n", i+1, end, len(tools), server.Name)
+
+			findings, err := s.analyzeTools(ctx, batch, server.Name)
 			if err != nil {
-				// Log error but continue with other tools
-				fmt.Printf("Warning: failed to analyze tool %s: %v\n", tool.Name, err)
-				break
+				// Log error but continue with other batches
+				fmt.Printf("Warning: failed to analyze batch %d-%d for server %s: %v\n", i+1, end, server.Name, err)
+				continue
 			}
 			allFindings = append(allFindings, findings...)
 		}
@@ -58,11 +71,11 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	return allFindings, nil
 }
 
-func (s *ToolsScanner) analyzeTool(ctx context.Context, tool Tool, mcpServerName string) ([]proto.Finding, error) {
+func (s *ToolsScanner) analyzeTools(ctx context.Context, tools []Tool, mcpServerName string) ([]proto.Finding, error) {
 	if s.llmAnalyzer == nil {
 		return []proto.Finding{}, nil
 	}
-	return s.llmAnalyzer.AnalyzeTool(ctx, tool, mcpServerName, s.MCPconfigPath)
+	return s.llmAnalyzer.AnalyzeTools(ctx, tools, mcpServerName, s.MCPconfigPath)
 }
 
 // formatJSON returns pretty-printed JSON when possible, or falls back to raw bytes.

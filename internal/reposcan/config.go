@@ -11,14 +11,14 @@ type Config struct {
 	MaxFileSize int64
 	// ExcludePatterns are directory patterns to exclude from scanning
 	// These are matched against path segments (e.g., ".venv", "node_modules", "cache")
-	ExcludePatterns []string
+	ExcludedPaths []string
 }
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		MaxFileSize: 1 * 1024 * 1024, // 1MB
-		ExcludePatterns: []string{
+		MaxFileSize: 10 * 1024 * 1024, // 10MB
+		ExcludedPaths: []string{
 			".venv",
 			"venv",
 			"__pycache__",
@@ -80,7 +80,7 @@ func (c *Config) ShouldExclude(filePath string) bool {
 		}
 
 		// Check if this part matches any exclude pattern
-		for _, pattern := range c.ExcludePatterns {
+		for _, pattern := range c.ExcludedPaths {
 			// Wildcard matching for patterns like "*.egg-info" or ".env.*.local"
 			if strings.Contains(pattern, "*") {
 				if matched, _ := filepath.Match(pattern, part); matched {

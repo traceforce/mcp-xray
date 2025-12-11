@@ -1,0 +1,1276 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "SecureMCP",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/SecureMCP",
+          "rules": [
+            {
+              "id": "GHSA-rwvp-r38j-9rgg",
+              "shortDescription": {
+                "text": "rardecode: DoS risk due to unrestricted RAR dictionary sizes"
+              }
+            },
+            {
+              "id": "GO-2025-4135",
+              "shortDescription": {
+                "text": "Malformed constraint may cause denial of service in golang.org/x/crypto/ssh/agent"
+              }
+            },
+            {
+              "id": "GHSA-f6x5-jh6r-wrfv",
+              "shortDescription": {
+                "text": "golang.org/x/crypto/ssh/agent vulnerable to panic if message is malformed due to out of bounds read"
+              }
+            },
+            {
+              "id": "GHSA-j5w8-q4qc-rx2x",
+              "shortDescription": {
+                "text": "golang.org/x/crypto/ssh allows an attacker to cause unbounded memory consumption"
+              }
+            },
+            {
+              "id": "GO-2025-4155",
+              "shortDescription": {
+                "text": "Excessive resource consumption when printing error string for host certificate validation in crypto/x509"
+              }
+            },
+            {
+              "id": "generic-api-key",
+              "shortDescription": {
+                "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+              }
+            },
+            {
+              "id": "sudo",
+              "shortDescription": {
+                "text": "Privilege escalation"
+              }
+            },
+            {
+              "id": "pmset",
+              "shortDescription": {
+                "text": "System configuration changes"
+              }
+            },
+            {
+              "id": "GO-2025-4134",
+              "shortDescription": {
+                "text": "Unbounded memory consumption in golang.org/x/crypto/ssh"
+              }
+            },
+            {
+              "id": "GO-2025-4175",
+              "shortDescription": {
+                "text": "Improper application of excluded DNS name constraints when verifying wildcard names in crypto/x509"
+              }
+            },
+            {
+              "id": "nodejs_require_dynamic",
+              "shortDescription": {
+                "text": "Code execution"
+              }
+            },
+            {
+              "id": "doas",
+              "shortDescription": {
+                "text": "Privilege escalation"
+              }
+            },
+            {
+              "id": "networksetup",
+              "shortDescription": {
+                "text": "System configuration changes"
+              }
+            },
+            {
+              "id": "kext_load",
+              "shortDescription": {
+                "text": "System security bypass"
+              }
+            },
+            {
+              "id": "GO-2025-4020",
+              "shortDescription": {
+                "text": "DoS risk due to unrestricted RAR dictionary sizes in github.com/nwaples/rardecode"
+              }
+            },
+            {
+              "id": "scutil",
+              "shortDescription": {
+                "text": "System configuration changes"
+              }
+            },
+            {
+              "id": "curl_pipe_shell",
+              "shortDescription": {
+                "text": "Remote code execution"
+              }
+            },
+            {
+              "id": "shutdown_reboot",
+              "shortDescription": {
+                "text": "System control"
+              }
+            },
+            {
+              "id": "GHSA-9h52-p55h-vw2f",
+              "shortDescription": {
+                "text": "Model Context Protocol (MCP) Python SDK does not enable DNS rebinding protection by default"
+              }
+            },
+            {
+              "id": "brew_install",
+              "shortDescription": {
+                "text": "Package installation"
+              }
+            },
+            {
+              "id": "killall",
+              "shortDescription": {
+                "text": "Process management"
+              }
+            },
+            {
+              "id": "osascript",
+              "shortDescription": {
+                "text": "System automation"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "curl_pipe_shell",
+          "level": "error",
+          "message": {
+            "text": "curl | bash"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 80
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "kext_load",
+          "level": "error",
+          "message": {
+            "text": "kextload"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 126
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "curl_pipe_shell",
+          "level": "error",
+          "message": {
+            "text": "curl|wget)\\b[^\\n]*\\|\\s*\\b(sh|bash|zsh|tcsh"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 114
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "curl_pipe_shell",
+          "level": "error",
+          "message": {
+            "text": "curl | bash"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 70
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "kext_load",
+          "level": "error",
+          "message": {
+            "text": "kextload"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 126
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "curl_pipe_shell",
+          "level": "error",
+          "message": {
+            "text": "curl|wget)\\\\b[^\\\\n]*\\\\|\\\\s*\\\\b(sh|bash|zsh|tcsh"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 103
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "pmset",
+          "level": "error",
+          "message": {
+            "text": "pmset"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 195
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "scutil",
+          "level": "error",
+          "message": {
+            "text": "scutil"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 273
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "generic-api-key",
+          "level": "error",
+          "message": {
+            "text": "Detected a Generic API Key, potentially exposing access to various services and sensitive operations."
+          },
+          "properties": {
+            "tool": "gitleaks",
+            "type": "SECRETS"
+          }
+        },
+        {
+          "ruleId": "GHSA-9h52-p55h-vw2f",
+          "level": "error",
+          "message": {
+            "text": "### Description\n\nThe Model Context Protocol (MCP) Python SDK does not enable DNS rebinding protection by default for HTTP-based servers. When an HTTP-based MCP server is run on localhost without authentication using `FastMCP` with streamable HTTP or SSE transport, and has not configured `TransportSecuritySettings`, a malicious website could exploit DNS rebinding to bypass same-origin policy restrictions and send requests to the local MCP server. This could allow an attacker to invoke tools or access resources exposed by the MCP server on behalf of the user in those limited circumstances.\n\nNote that running HTTP-based MCP servers locally without authentication is not recommended per MCP security best practices. This issue does not affect servers using stdio transport.\n\nServers created via `FastMCP()` now have DNS rebinding protection enabled by default when the `host` parameter is `127.0.0.1` or `localhost`. Users are advised to update to version `1.23.0` to receive this automatic protection. Users with custom low-level server configurations using `StreamableHTTPSessionManager` or `SseServerTransport` directly should explicitly configure `TransportSecuritySettings` when running an unauthenticated server on localhost."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/examples/mcp_server/requirements.txt"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "1.23.0",
+            "package": "mcp",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "1.22.0"
+          }
+        },
+        {
+          "ruleId": "networksetup",
+          "level": "error",
+          "message": {
+            "text": "networksetup"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 267
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "nodejs_require_dynamic",
+          "level": "error",
+          "message": {
+            "text": "require(\\\"@eslint/plugin-kit\\\")"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-cve-secrets.sarif.json"
+                },
+                "region": {
+                  "startLine": 536
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "pmset",
+          "level": "error",
+          "message": {
+            "text": "pmset"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 261
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "shutdown_reboot",
+          "level": "error",
+          "message": {
+            "text": "shutdown"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 188
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "pmset",
+          "level": "error",
+          "message": {
+            "text": "pmset"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 43
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "scutil",
+          "level": "error",
+          "message": {
+            "text": "scutil"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 49
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "killall",
+          "level": "error",
+          "message": {
+            "text": "killall"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 55
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "killall",
+          "level": "error",
+          "message": {
+            "text": "killall"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 169
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "networksetup",
+          "level": "error",
+          "message": {
+            "text": "networksetup"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 67
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "scutil",
+          "level": "error",
+          "message": {
+            "text": "scutil"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 241
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "scutil",
+          "level": "error",
+          "message": {
+            "text": "scutil"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 238
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "networksetup",
+          "level": "error",
+          "message": {
+            "text": "networksetup"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 218
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "killall",
+          "level": "error",
+          "message": {
+            "text": "killall"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 146
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "killall",
+          "level": "error",
+          "message": {
+            "text": "killall"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 149
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "shutdown_reboot",
+          "level": "error",
+          "message": {
+            "text": "shutdown"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 172
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "pmset",
+          "level": "error",
+          "message": {
+            "text": "pmset"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 192
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "networksetup",
+          "level": "error",
+          "message": {
+            "text": "networksetup"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 215
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "sudo",
+          "level": "warning",
+          "message": {
+            "text": "sudo"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 207
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "GHSA-rwvp-r38j-9rgg",
+          "level": "warning",
+          "message": {
+            "text": "rardecode versions \u003c= 2.1.1 fail to restrict the dictionary size when reading large RAR dictionary sizes, which allows an attacker to provide a specially crafted RAR file and cause Denial of Service via an Out Of Memory Crash."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "2.2.0",
+            "package": "github.com/nwaples/rardecode/v2",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "2.1.0"
+          }
+        },
+        {
+          "ruleId": "GHSA-f6x5-jh6r-wrfv",
+          "level": "warning",
+          "message": {
+            "text": "SSH Agent servers do not validate the size of messages when processing new identity requests, which may cause the program to panic if the message is malformed due to an out of bounds read."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "0.45.0",
+            "package": "golang.org/x/crypto",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "0.44.0"
+          }
+        },
+        {
+          "ruleId": "GHSA-j5w8-q4qc-rx2x",
+          "level": "warning",
+          "message": {
+            "text": "SSH servers parsing GSSAPI authentication requests do not validate the number of mechanisms specified in the request, allowing an attacker to cause unbounded memory consumption."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "0.45.0",
+            "package": "golang.org/x/crypto",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "0.44.0"
+          }
+        },
+        {
+          "ruleId": "sudo",
+          "level": "warning",
+          "message": {
+            "text": "sudo"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 261
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "sudo",
+          "level": "warning",
+          "message": {
+            "text": "sudo"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 264
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "doas",
+          "level": "warning",
+          "message": {
+            "text": "doas"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 284
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "doas",
+          "level": "warning",
+          "message": {
+            "text": "doas"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 287
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "osascript",
+          "level": "warning",
+          "message": {
+            "text": "osascript"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 307
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "osascript",
+          "level": "warning",
+          "message": {
+            "text": "osascript"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 310
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "sudo",
+          "level": "warning",
+          "message": {
+            "text": "sudo"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 31
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "osascript",
+          "level": "warning",
+          "message": {
+            "text": "osascript"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 237
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "doas",
+          "level": "warning",
+          "message": {
+            "text": "doas"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "internal/reposcan/sast.go"
+                },
+                "region": {
+                  "startLine": 213
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "osascript",
+          "level": "warning",
+          "message": {
+            "text": "osascript"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 61
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "doas",
+          "level": "warning",
+          "message": {
+            "text": "doas"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/findings/repo-scan-dangerous-commands.sarif.json"
+                },
+                "region": {
+                  "startLine": 37
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "brew_install",
+          "level": "note",
+          "message": {
+            "text": "brew install"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "Makefile"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              }
+            }
+          ],
+          "properties": {
+            "tool": "sast",
+            "type": "SAST"
+          }
+        },
+        {
+          "ruleId": "GO-2025-4155",
+          "level": "note",
+          "message": {
+            "text": "Within HostnameError.Error(), when constructing an error string, there is no limit to the number of hosts that will be printed out. Furthermore, the error string is constructed by repeated string concatenation, leading to quadratic runtime. Therefore, a certificate provided by a malicious actor can result in excessive resource consumption."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "1.24.11",
+            "package": "stdlib",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "1.25.4"
+          }
+        },
+        {
+          "ruleId": "GO-2025-4134",
+          "level": "note",
+          "message": {
+            "text": "SSH servers parsing GSSAPI authentication requests do not validate the number of mechanisms specified in the request, allowing an attacker to cause unbounded memory consumption."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "0.45.0",
+            "package": "golang.org/x/crypto",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "0.44.0"
+          }
+        },
+        {
+          "ruleId": "GO-2025-4020",
+          "level": "note",
+          "message": {
+            "text": "DoS risk due to unrestricted RAR dictionary sizes in github.com/nwaples/rardecode"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "2.2.0",
+            "package": "github.com/nwaples/rardecode/v2",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "2.1.0"
+          }
+        },
+        {
+          "ruleId": "GO-2025-4135",
+          "level": "note",
+          "message": {
+            "text": "SSH Agent servers do not validate the size of messages when processing new identity requests, which may cause the program to panic if the message is malformed due to an out of bounds read."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "0.45.0",
+            "package": "golang.org/x/crypto",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "0.44.0"
+          }
+        },
+        {
+          "ruleId": "GO-2025-4175",
+          "level": "note",
+          "message": {
+            "text": "An excluded subdomain constraint in a certificate chain does not restrict the usage of wildcard SANs in the leaf certificate. For example a constraint that excludes the subdomain test.example.com does not prevent a leaf certificate from claiming the SAN *.example.com."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "/Users/xiahua/src/SecureMCP/go.mod"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "fixed": "1.24.11",
+            "package": "stdlib",
+            "tool": "osv",
+            "type": "SCA",
+            "version": "1.25.4"
+          }
+        }
+      ]
+    }
+  ]
+}
