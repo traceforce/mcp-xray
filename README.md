@@ -1,6 +1,6 @@
 # SecureMCP
 
-A comprehensive security auditing tool for Model Context Protocol (MCP) servers. Generates production-ready [SARIF reports](https://sarifweb.azurewebsites.net/) for seamless integration with security tooling and CI/CD pipelines.
+A comprehensive open-source security auditing tool for Model Context Protocol (MCP) servers. Generates production-ready [SARIF reports](https://sarifweb.azurewebsites.net/) for seamless integration with security tooling and CI/CD pipelines.
 
 ## Overview
 
