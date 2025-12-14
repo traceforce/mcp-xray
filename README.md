@@ -198,12 +198,17 @@ SecureMCP supports the following LLM providers for tool analysis:
 
 For LLM-based tool analysis, configure your LLM API credentials:
 
-#### Anthropic or OpenAI
+#### Anthropic
 ```bash
-export LLM_API_KEY=your-api-key
+export ANTHROPIC_API_KEY=your-api-key
 ```
 
-The same `LLM_API_KEY` environment variable is used for both Anthropic and OpenAI models. The tool automatically detects which provider to use based on the model name.
+#### OpenAI
+```bash
+export OPENAI_API_KEY=your-api-key
+```
+
+Each provider requires its own specific environment variable. The tool automatically detects which provider to use based on the model name.
 
 #### AWS Bedrock
 For AWS Bedrock models, configure AWS credentials using one of the standard AWS SDK methods:
@@ -225,13 +230,8 @@ SecureMCP uses AWS SDK that will automatically load credentials from the environ
 Contributions are welcome! Please ensure that:
 
 1. Code follows Go best practices
-2. Tests are included for new features
-3. Protocol buffers are regenerated after changes
-4. Documentation is updated
-
-## License
-
-[Specify your license here]
+2. Tests and examples are included for new features
+3. Documentation is updated
 
 ## References
 
