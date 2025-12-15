@@ -120,9 +120,35 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser
 		}, nil
 	}
 
-	var findings []proto.Finding
+	var allFindings []proto.Finding
 
-	// Create custom transport for Connection checks
+	// Perform certificate checks. All errors found are critical findings.
+	findings, err := s.checkCertificate(cfg)
+	if len(findings) > 0 || err != nil {
+		// If certficate check fails, there's no need to perform further checks.
+		return findings, err
+	}
+
+	// If the certificate check passes, perform TLS version checks.
+	for _, tlsVersion := range []uint16{tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13} {
+		findings, err := s.checkTLSVersion(tlsVersion, cfg)
+		if err != nil {
+			return allFindings, err
+		}
+		allFindings = append(allFindings, findings...)
+	}
+
+	return allFindings, nil
+}
+
+func (s *ConnectionScanner) checkCertificate(cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+	var findings []proto.Finding
+	if cfg.URL == nil {
+		return nil, fmt.Errorf("URL is not set")
+	}
+	urlStr := *cfg.URL
+
+	// Create custom transport for Connection checks. Force the TLS version to the specified version.
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS11,
@@ -137,50 +163,44 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser
 	// Make request to check Connection
 	resp, err := client.Get(urlStr)
 	if err != nil {
-		fmt.Printf("Http error: %s\n", err.Error())
+		fmt.Printf("Http error: %s, response: %+v\n", err.Error(), resp)
 		if strings.Contains(strings.ToLower(err.Error()), "certificate") {
-			findings = append(findings, proto.Finding{
-				Tool:          "connection-scanner",
-				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
-				RuleId:        "invalid-certificate",
-				Title:         "Invalid Connection certificate",
-				McpServerName: cfg.Name,
-				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("The MCP server '%s' is configured with an invalid or untrusted TLS certificate. Connection to %s failed with certificate error: %s. This may indicate a man-in-the-middle attack or misconfigured server.", cfg.Name, urlStr, err.Error()),
-			})
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
+					RuleId:        "invalid-certificate",
+					Title:         "Invalid Connection certificate",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("The MCP server '%s' is configured with an invalid or untrusted TLS certificate. Connection to %s failed with certificate error: %s. This may indicate a man-in-the-middle attack or misconfigured server.", cfg.Name, urlStr, err.Error()),
+				},
+			}, nil
+		} else if resp == nil {
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
+					RuleId:        "connenction-failed-no-response",
+					Title:         "Connection failed - no response",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("Failed to connect to MCP server %s. No response received.", urlStr),
+				},
+			}, nil
+		} else {
+			// Fall through for futher analysis on the response
 		}
-		return findings, nil
 	}
 	defer resp.Body.Close()
 
 	// Check TLS version
 	fmt.Printf("Response authentication header: %+v\n", resp.Header.Get("WWW-Authenticate"))
 	if resp.TLS != nil {
+		// Log the TLS version as we'll perform further checks on the TLS version later.
 		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
-		if resp.TLS.Version < tls.VersionTLS13 {
-			findings = append(findings, proto.Finding{
-				Tool:          "connection-scanner",
-				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
-				RuleId:        "tls-version-below-1.3",
-				Title:         "TLS version 1.3 or higher is recommended",
-				McpServerName: cfg.Name,
-				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("The MCP server '%s' at %s is using a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3.", cfg.Name, urlStr),
-			})
-		} else if resp.TLS.Version < tls.VersionTLS12 {
-			findings = append(findings, proto.Finding{
-				Tool:          "connection-scanner",
-				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
-				RuleId:        "tls-version-below-1.2",
-				Title:         "TLS version 1.2 or higher is recommended",
-				McpServerName: cfg.Name,
-				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("The MCP server '%s' at %s is using a TLS version below 1.2, which is considered insecure. TLS versions below 1.2 are vulnerable to various attacks and should not be used. Please upgrade to TLS 1.2 or higher immediately.", cfg.Name, urlStr),
-			})
-		}
 	} else {
 		findings = append(findings, proto.Finding{
 			Tool:          "connection-scanner",
@@ -192,6 +212,84 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser
 			File:          s.MCPconfigPath,
 			Message:       fmt.Sprintf("The MCP server '%s' at %s is not using TLS encryption. All communication is unencrypted and vulnerable to interception and man-in-the-middle attacks. This is a critical security issue. Please configure the server to use HTTPS with a valid TLS certificate.", cfg.Name, urlStr),
 		})
+	}
+
+	return findings, nil
+}
+
+// checkTLSVersion checks if the server supports the specified TLS version.
+// For highest security, the MCP server should only support the highest version available and never anything below 1.2.
+func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+	var findings []proto.Finding
+	if cfg.URL == nil {
+		return nil, fmt.Errorf("URL is not set")
+	}
+	urlStr := *cfg.URL
+
+	// Create custom transport for Connection checks. Force the TLS version to the specified version.
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			MinVersion: tlsVersion,
+			MaxVersion: tlsVersion,
+		},
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   10 * time.Second,
+	}
+
+	// Make request to check Connection
+	resp, err := client.Get(urlStr)
+	if err != nil {
+		fmt.Printf("Http error: %s\n", err.Error())
+	}
+
+	if resp == nil {
+		// For tls version 1.1 and 1.2, we will not return a finding if the server does not support the version
+		// as it's recommended to only support the highest version available.
+		if tlsVersion == tls.VersionTLS13 {
+			findings = append(findings, proto.Finding{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "tls-version-1.3-not-supported",
+				Title:         "TLS version 1.3 is not supported",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server '%s' at %s does not support TLS version 1.3 which has the highest security standard. Please upgrade to TLS 1.3 or higher.", cfg.Name, urlStr),
+			})
+		}
+		return findings, nil
+	}
+	defer resp.Body.Close()
+
+	// Check TLS version
+	fmt.Printf("Response authentication header: %+v\n", resp.Header.Get("WWW-Authenticate"))
+	if resp.TLS != nil {
+		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
+		if resp.TLS.Version == tls.VersionTLS12 {
+			findings = append(findings, proto.Finding{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+				RuleId:        "tls-version-below-1.3",
+				Title:         "TLS version 1.3 or higher is recommended",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server '%s' at %s accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3.", cfg.Name, urlStr),
+			})
+		} else if resp.TLS.Version <= tls.VersionTLS11 {
+			findings = append(findings, proto.Finding{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "tls-version-below-1.2",
+				Title:         "TLS version 1.2 or higher is recommended",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server '%s' at %s accepts a TLS version below 1.2, which is considered insecure. TLS versions below 1.2 are vulnerable to various attacks and should not be used. Please upgrade to TLS 1.2 or higher immediately.", cfg.Name, urlStr),
+			})
+		}
 	}
 
 	return findings, nil
