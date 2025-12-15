@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "Supabase": {
+    "Asana": {
       "type": "http",
-      "url": "https://mcp.supabase.com/mcp"
+      "url": "https://mcp.asana.com/mcp"
     }
   }
 }

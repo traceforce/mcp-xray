@@ -16,9 +16,9 @@
               }
             },
             {
-              "id": "oauth-flow-detected",
+              "id": "oauth-coarse-grained-scopes",
               "shortDescription": {
-                "text": "OAuth flow detected with valid PRM, ASMD endpoints and scopes"
+                "text": "OAuth PRM scopes are coarse-grained"
               }
             }
           ]
@@ -26,10 +26,10 @@
       },
       "results": [
         {
-          "ruleId": "tls-version-1.2-detected",
-          "level": "warning",
+          "ruleId": "oauth-coarse-grained-scopes",
+          "level": "error",
           "message": {
-            "text": "The MCP server 'Supabase' at https://mcp.supabase.com/mcp accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
+            "text": "The MCP server's protected resource metadata (RPM) 'Asana' is using a single default scope. Please consult with the MCP server owner for the correct scopes to use."
           },
           "locations": [
             {
@@ -41,16 +41,16 @@
             }
           ],
           "properties": {
-            "mcpServerName": "Supabase",
+            "mcpServerName": "Asana",
             "tool": "connection-scanner",
             "type": "CONNECTION"
           }
         },
         {
-          "ruleId": "oauth-flow-detected",
-          "level": "note",
+          "ruleId": "tls-version-1.2-detected",
+          "level": "warning",
           "message": {
-            "text": "The remote MCP server “Supabase” is configured to use OAuth authentication and exposes valid Protected Resource Metadata (PRM) and Authorization Server Metadata (ASMD) endpoints. Ensure that OAuth scopes are restricted to the minimum set required for the MCP server's intended functionality, following the principle of least privilege."
+            "text": "The MCP server 'Asana' at https://mcp.asana.com/mcp accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
           },
           "locations": [
             {
@@ -62,7 +62,7 @@
             }
           ],
           "properties": {
-            "mcpServerName": "Supabase",
+            "mcpServerName": "Asana",
             "tool": "connection-scanner",
             "type": "CONNECTION"
           }

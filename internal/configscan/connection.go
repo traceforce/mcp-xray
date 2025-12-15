@@ -355,7 +355,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
 				RuleId:        "oauth-prm-not-configured",
 				Title:         "OAuth PRM not configured",
 				McpServerName: cfg.Name,
@@ -372,7 +372,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
 				RuleId:        "oauth-asmd-not-configured",
 				Title:         "OAuth ASMD not configured",
 				McpServerName: cfg.Name,
@@ -382,19 +382,79 @@ func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]
 		}, nil
 	}
 
-	if len(asmd.ScopesSupported) == 0 && len(prm.ScopesSupported) == 0 {
+	// Evaluate the scopes supported by the MCP server.
+	fmt.Printf("PRM OAuth scopes for %s: scope count %d\n", cfg.Name, len(prm.ScopesSupported))
+	fmt.Printf("ASMD OAuth scopes for %s: scope count %d\n", cfg.Name, len(asmd.ScopesSupported))
+	if len(prm.ScopesSupported) == 0 {
 		return []proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
 				RuleId:        "oauth-scopes-not-configured",
-				Title:         "OAuth scopes not configured",
+				Title:         "OAuth PRM scopes not configured",
 				McpServerName: cfg.Name,
 				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("The MCP server '%s' is not using OAuth scopes for authentication. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides.", cfg.Name),
+				Message:       fmt.Sprintf("The MCP server's protected resource metadata (RPM) '%s' is not using OAuth scopes for authentication. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides.", cfg.Name),
 			},
 		}, nil
+	} else if len(prm.ScopesSupported) == 1 && strings.Contains(strings.ToLower(prm.ScopesSupported[0]), "default") {
+		return []proto.Finding{
+			{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "oauth-coarse-grained-scopes",
+				Title:         "OAuth PRM scopes are coarse-grained",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server's protected resource metadata (RPM) '%s' is using a single default scope. Please consult with the MCP server owner for the correct scopes to use.", cfg.Name),
+			},
+		}, nil
+	}
+
+	if len(asmd.ScopesSupported) == 0 {
+		return []proto.Finding{
+			{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "oauth-scopes-not-configured",
+				Title:         "OAuth ASMD scopes not configured",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server's authorization server metadata (ASMD) '%s' is not using OAuth scopes. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides.", cfg.Name),
+			},
+		}, nil
+	} else if len(asmd.ScopesSupported) == 1 && strings.Contains(strings.ToLower(asmd.ScopesSupported[0]), "default") {
+		return []proto.Finding{
+			{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "oauth-coarse-grained-scopes",
+				Title:         "OAuth ASMD scopes are coarse-grained",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server's authorization server metadata (ASMD) '%s' is using a single default scope. Please make sure to consult with the MCP server owner for the correct scopes to use.", cfg.Name),
+			},
+		}, nil
+	}
+
+	findings, err := s.checkOauthScopes(prm.ScopesSupported, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(findings) > 0 {
+		return findings, nil
+	}
+
+	findings, err = s.checkOauthScopes(asmd.ScopesSupported, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if len(findings) > 0 {
+		return findings, nil
 	}
 
 	return []proto.Finding{
@@ -409,4 +469,65 @@ func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]
 			Message:       fmt.Sprintf("The remote MCP server “%s” is configured to use OAuth authentication and exposes valid Protected Resource Metadata (PRM) and Authorization Server Metadata (ASMD) endpoints. Ensure that OAuth scopes are restricted to the minimum set required for the MCP server's intended functionality, following the principle of least privilege.", cfg.Name),
 		},
 	}, nil
+}
+
+func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+	for _, scope := range scopes {
+		normalizedScope := strings.ToLower(scope)
+		if strings.Contains(normalizedScope, "delete") || strings.Contains(normalizedScope, "truncate") {
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+					RuleId:        "oauth-delete-scope-detected",
+					Title:         "OAuth delete scope detected",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("The MCP server '%s' scopes contains a delete scope. This is a high security risk. Please evaluate the scope and remove the scope during the MCP dynamic client registration if possible.", cfg.Name),
+				},
+			}, nil
+		}
+	}
+
+	for _, scope := range scopes {
+		normalizedScope := strings.ToLower(scope)
+		if strings.Contains(normalizedScope, "write") || strings.Contains(normalizedScope, "create") ||
+			strings.Contains(normalizedScope, "update") {
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+					RuleId:        "oauth-write-scope-detected",
+					Title:         "OAuth write scope detected",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("The MCP server '%s' scopes contains a write scope. This is a medium security risk. Please evaluate the scope and remove the scope during the MCP dynamic client registration if your application does not need it.", cfg.Name),
+				},
+			}, nil
+		}
+	}
+
+	for _, scope := range scopes {
+		normalizedScope := strings.ToLower(scope)
+		if strings.Contains(normalizedScope, "read") || strings.Contains(normalizedScope, "list") ||
+			strings.Contains(normalizedScope, "get") || strings.Contains(normalizedScope, "query") ||
+			strings.Contains(normalizedScope, "search") || strings.Contains(normalizedScope, "find") ||
+			strings.Contains(normalizedScope, "retrieve") || strings.Contains(normalizedScope, "view") {
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_LOW,
+					RuleId:        "oauth-read-scope-detected",
+					Title:         "OAuth read scope detected",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("The MCP server '%s' scopes contains a read scope. This is a low security risk. Please evaluate the scope and make sure the resource it reads is not sensitive or confidential.", cfg.Name),
+				},
+			}, nil
+		}
+	}
+	return []proto.Finding{}, nil
 }
