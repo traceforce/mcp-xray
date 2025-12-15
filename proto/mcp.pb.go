@@ -74,6 +74,62 @@ func (MCPTransportType) EnumDescriptor() ([]byte, []int) {
 	return file_mcp_proto_rawDescGZIP(), []int{0}
 }
 
+// IdentityControlType represents the authentication method used by MCP servers
+type IdentityControlType int32
+
+const (
+	IdentityControlType_IDENTITY_CONTROL_TYPE_UNKNOWN    IdentityControlType = 0 // Unknown auth method
+	IdentityControlType_IDENTITY_CONTROL_TYPE_BASIC_AUTH IdentityControlType = 1 // Username/password
+	IdentityControlType_IDENTITY_CONTROL_TYPE_TOKEN      IdentityControlType = 2 // API keys, bearer tokens
+	IdentityControlType_IDENTITY_CONTROL_TYPE_OAUTH      IdentityControlType = 3 // OAuth flow
+	IdentityControlType_IDENTITY_CONTROL_TYPE_NO_AUTH    IdentityControlType = 4 // No auth
+)
+
+// Enum value maps for IdentityControlType.
+var (
+	IdentityControlType_name = map[int32]string{
+		0: "IDENTITY_CONTROL_TYPE_UNKNOWN",
+		1: "IDENTITY_CONTROL_TYPE_BASIC_AUTH",
+		2: "IDENTITY_CONTROL_TYPE_TOKEN",
+		3: "IDENTITY_CONTROL_TYPE_OAUTH",
+		4: "IDENTITY_CONTROL_TYPE_NO_AUTH",
+	}
+	IdentityControlType_value = map[string]int32{
+		"IDENTITY_CONTROL_TYPE_UNKNOWN":    0,
+		"IDENTITY_CONTROL_TYPE_BASIC_AUTH": 1,
+		"IDENTITY_CONTROL_TYPE_TOKEN":      2,
+		"IDENTITY_CONTROL_TYPE_OAUTH":      3,
+		"IDENTITY_CONTROL_TYPE_NO_AUTH":    4,
+	}
+)
+
+func (x IdentityControlType) Enum() *IdentityControlType {
+	p := new(IdentityControlType)
+	*p = x
+	return p
+}
+
+func (x IdentityControlType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (IdentityControlType) Descriptor() protoreflect.EnumDescriptor {
+	return file_mcp_proto_enumTypes[1].Descriptor()
+}
+
+func (IdentityControlType) Type() protoreflect.EnumType {
+	return &file_mcp_proto_enumTypes[1]
+}
+
+func (x IdentityControlType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use IdentityControlType.Descriptor instead.
+func (IdentityControlType) EnumDescriptor() ([]byte, []int) {
+	return file_mcp_proto_rawDescGZIP(), []int{1}
+}
+
 var File_mcp_proto protoreflect.FileDescriptor
 
 const file_mcp_proto_rawDesc = "" +
@@ -83,7 +139,13 @@ const file_mcp_proto_rawDesc = "" +
 	"\x1aMCP_TRANSPORT_TYPE_UNKNOWN\x10\x00\x12\x1c\n" +
 	"\x18MCP_TRANSPORT_TYPE_STDIO\x10\x01\x12\x1b\n" +
 	"\x17MCP_TRANSPORT_TYPE_HTTP\x10\x02\x12\x1a\n" +
-	"\x16MCP_TRANSPORT_TYPE_SSE\x10\x03B\x10Z\x0einternal/protob\x06proto3"
+	"\x16MCP_TRANSPORT_TYPE_SSE\x10\x03*\xc3\x01\n" +
+	"\x13IdentityControlType\x12!\n" +
+	"\x1dIDENTITY_CONTROL_TYPE_UNKNOWN\x10\x00\x12$\n" +
+	" IDENTITY_CONTROL_TYPE_BASIC_AUTH\x10\x01\x12\x1f\n" +
+	"\x1bIDENTITY_CONTROL_TYPE_TOKEN\x10\x02\x12\x1f\n" +
+	"\x1bIDENTITY_CONTROL_TYPE_OAUTH\x10\x03\x12!\n" +
+	"\x1dIDENTITY_CONTROL_TYPE_NO_AUTH\x10\x04B\x10Z\x0einternal/protob\x06proto3"
 
 var (
 	file_mcp_proto_rawDescOnce sync.Once
@@ -97,9 +159,10 @@ func file_mcp_proto_rawDescGZIP() []byte {
 	return file_mcp_proto_rawDescData
 }
 
-var file_mcp_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_mcp_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_mcp_proto_goTypes = []any{
-	(MCPTransportType)(0), // 0: proto.MCPTransportType
+	(MCPTransportType)(0),    // 0: proto.MCPTransportType
+	(IdentityControlType)(0), // 1: proto.IdentityControlType
 }
 var file_mcp_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -119,7 +182,7 @@ func file_mcp_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_mcp_proto_rawDesc), len(file_mcp_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   0,
 			NumExtensions: 0,
 			NumServices:   0,

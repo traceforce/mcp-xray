@@ -72,29 +72,30 @@ type TokenResponse struct {
 
 func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	fmt.Println("1) Discovering Protected Resource Metadata (PRM)…")
-	prm, err := o.discoverPRM(o.httpClient)
+	prm, err := o.discoverPRM()
 	if err != nil {
 		return "", err
 	}
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
-	asmd, err := o.discoverASMetadata(o.httpClient, prm)
+	asmd, err := o.discoverASMetadata(prm)
 	if err != nil {
 		return "", err
 	}
 
 	scopes := asmd.ScopesSupported
 	if len(scopes) == 0 {
+		// Fallback to PRM scopes if ASMD scopes are not supported.
 		scopes = prm.ScopesSupported
 	}
 	if len(scopes) == 0 {
-		// fallback minimal scopes
+		// Fallback to minimal scopes if both PRM and ASMD scopes are not supported.
 		scopes = []string{"openid", "email", "profile"}
 	}
 	scopeStr := strings.Join(scopes, " ")
 
 	fmt.Println("3) Dynamic Client Registration (public client)…")
-	dcr, err := o.dynamicClientRegister(o.httpClient, asmd)
+	dcr, err := o.dynamicClientRegister(asmd)
 	if err != nil {
 		return "", err
 	}
@@ -129,7 +130,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok := o.exchangeCode(o.httpClient, asmd.TokenEndpoint, dcr.ClientID, dcr.ClientSecret, code, verifier)
+	tok := o.exchangeCode(asmd.TokenEndpoint, dcr.ClientID, dcr.ClientSecret, code, verifier)
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
@@ -140,7 +141,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 
 // ---------- OAuth discovery ----------
 
-func (o *OAuthConfig) discoverPRM(c *http.Client) (*PRM, error) {
+func (o *OAuthConfig) discoverPRM() (*PRM, error) {
 	// Send initialize without auth to trigger 401
 	initPayload := map[string]any{
 		"jsonrpc": "2.0",
@@ -162,7 +163,7 @@ func (o *OAuthConfig) discoverPRM(c *http.Client) (*PRM, error) {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", ProtocolVersion)
 
-	resp, err := c.Do(req)
+	resp, err := o.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +177,7 @@ func (o *OAuthConfig) discoverPRM(c *http.Client) (*PRM, error) {
 		rmURL = origin(o.MCPUrl) + "/.well-known/oauth-protected-resource"
 	}
 
-	rmResp, err := c.Get(rmURL)
+	rmResp, err := o.httpClient.Get(rmURL)
 	if err != nil {
 		return nil, err
 	}
@@ -193,14 +194,14 @@ func (o *OAuthConfig) discoverPRM(c *http.Client) (*PRM, error) {
 	return &prm, nil
 }
 
-func (o *OAuthConfig) discoverASMetadata(c *http.Client, prm *PRM) (*ASMetadata, error) {
+func (o *OAuthConfig) discoverASMetadata(prm *PRM) (*ASMetadata, error) {
 	authBase := origin(o.MCPUrl)
 	if len(prm.AuthorizationServers) > 0 {
 		authBase = strings.TrimRight(prm.AuthorizationServers[0], "/")
 	}
 
 	mdURL := authBase + "/.well-known/oauth-authorization-server"
-	resp, err := c.Get(mdURL)
+	resp, err := o.httpClient.Get(mdURL)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +229,7 @@ func (o *OAuthConfig) discoverASMetadata(c *http.Client, prm *PRM) (*ASMetadata,
 	return &asmd, nil
 }
 
-func (o *OAuthConfig) dynamicClientRegister(c *http.Client, asmd *ASMetadata) (*DCRResponse, error) {
+func (o *OAuthConfig) dynamicClientRegister(asmd *ASMetadata) (*DCRResponse, error) {
 	regEP := asmd.RegistrationEndpoint
 	if regEP == "" {
 		regEP = origin(o.MCPUrl) + "/register"
@@ -243,7 +244,7 @@ func (o *OAuthConfig) dynamicClientRegister(c *http.Client, asmd *ASMetadata) (*
 	}
 
 	b, _ := json.Marshal(payload)
-	resp, err := c.Post(regEP, "application/json", strings.NewReader(string(b)))
+	resp, err := o.httpClient.Post(regEP, "application/json", strings.NewReader(string(b)))
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +289,7 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	return u.String()
 }
 
-func (o *OAuthConfig) exchangeCode(c *http.Client, tokenEP, clientID, clientSecret, code, codeVerifier string) TokenResponse {
+func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) TokenResponse {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -301,7 +302,7 @@ func (o *OAuthConfig) exchangeCode(c *http.Client, tokenEP, clientID, clientSecr
 	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := c.Do(req)
+	resp, err := o.httpClient.Do(req)
 	if err != nil {
 		log.Fatalf("Token exchange failed: %v", err)
 	}

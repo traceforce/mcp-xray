@@ -11,3 +11,12 @@ enum MCPTransportType {
   MCP_TRANSPORT_TYPE_HTTP = 2;
   MCP_TRANSPORT_TYPE_SSE = 3;
 }
+
+// IdentityControlType represents the authentication method used by MCP servers
+enum IdentityControlType {
+  IDENTITY_CONTROL_TYPE_UNKNOWN = 0;    // Unknown auth method
+  IDENTITY_CONTROL_TYPE_BASIC_AUTH = 1; // Username/password 
+  IDENTITY_CONTROL_TYPE_TOKEN = 2;      // API keys, bearer tokens
+  IDENTITY_CONTROL_TYPE_OAUTH = 3;      // OAuth flow
+  IDENTITY_CONTROL_TYPE_NO_AUTH = 4;    // No auth
+}

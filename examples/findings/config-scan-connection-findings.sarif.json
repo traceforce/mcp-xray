@@ -1,0 +1,73 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "tls-version-1.2-detected",
+              "shortDescription": {
+                "text": "TLS version 1.3 or higher is recommended"
+              }
+            },
+            {
+              "id": "oauth-flow-detected",
+              "shortDescription": {
+                "text": "OAuth flow detected with valid PRM, ASMD endpoints and scopes"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "tls-version-1.2-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server 'Supabase' at https://mcp.supabase.com/mcp accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "Supabase",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "oauth-flow-detected",
+          "level": "note",
+          "message": {
+            "text": "The remote MCP server “Supabase” is configured to use OAuth authentication and exposes valid Protected Resource Metadata (PRM) and Authorization Server Metadata (ASMD) endpoints. Ensure that OAuth scopes are restricted to the minimum set required for the MCP server's intended functionality, following the principle of least privilege."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "Supabase",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        }
+      ]
+    }
+  ]
+}
