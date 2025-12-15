@@ -106,3 +106,57 @@ func TestCheckCertificate_ConnectionError(t *testing.T) {
 	assert.Equal(t, findings[0].McpServerName, "test-server")
 	assert.Equal(t, findings[0].File, "/test/config.json")
 }
+
+func TestDetectIdentityControl(t *testing.T) {
+	t.Run("Test Asana MCP server", func(t *testing.T) {
+		url := "https://mcp.asana.com/sse"
+		scanner := NewConnectionScanner("/test/config.json")
+		cfg := configparser.MCPServerConfig{
+			Name: "test-server",
+			URL:  &url,
+		}
+		findings, err := scanner.detectIdentityControl(cfg)
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(findings), fmt.Sprintf("Test detect identity control: expected 1 findings, got %d", len(findings)))
+		assert.Equal(t, findings[0].RuleId, "oauth-authentication")
+		assert.Equal(t, findings[0].Severity, proto.RiskSeverity_RISK_SEVERITY_LOW)
+		assert.Equal(t, findings[0].Tool, "connection-scanner")
+		assert.Equal(t, findings[0].Type, proto.FindingType_FINDING_TYPE_CONNECTION)
+		assert.Equal(t, findings[0].McpServerName, "test-server")
+		assert.Equal(t, findings[0].File, "/test/config.json")
+	})
+
+	t.Run("Test Supabase MCP server", func(t *testing.T) {
+		url := "https://mcp.supabase.com/mcp"
+		scanner := NewConnectionScanner("/test/config.json")
+		cfg := configparser.MCPServerConfig{
+			Name: "test-server",
+			URL:  &url,
+		}
+		findings, err := scanner.detectIdentityControl(cfg)
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(findings), fmt.Sprintf("Test detect identity control: expected 1 findings, got %d", len(findings)))
+		assert.Equal(t, findings[0].Severity, proto.RiskSeverity_RISK_SEVERITY_LOW)
+		assert.Equal(t, findings[0].Tool, "connection-scanner")
+		assert.Equal(t, findings[0].Type, proto.FindingType_FINDING_TYPE_CONNECTION)
+		assert.Equal(t, findings[0].McpServerName, "test-server")
+		assert.Equal(t, findings[0].File, "/test/config.json")
+	})
+
+	t.Run("Test No authentication", func(t *testing.T) {
+		url := "https://www.google.com"
+		scanner := NewConnectionScanner("/test/config.json")
+		cfg := configparser.MCPServerConfig{
+			Name: "test-server",
+			URL:  &url,
+		}
+		findings, err := scanner.detectIdentityControl(cfg)
+		assert.Nil(t, err)
+		assert.Equal(t, 1, len(findings), fmt.Sprintf("Test detect identity control: expected 1 findings, got %d", len(findings)))
+		assert.Equal(t, findings[0].Severity, proto.RiskSeverity_RISK_SEVERITY_HIGH)
+		assert.Equal(t, findings[0].Tool, "connection-scanner")
+		assert.Equal(t, findings[0].Type, proto.FindingType_FINDING_TYPE_CONNECTION)
+		assert.Equal(t, findings[0].McpServerName, "test-server")
+		assert.Equal(t, findings[0].File, "/test/config.json")
+	})
+}

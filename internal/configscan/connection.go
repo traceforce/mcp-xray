@@ -138,6 +138,13 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser
 		allFindings = append(allFindings, findings...)
 	}
 
+	// Detect the authentication method used by the MCP server.
+	findings, err = s.detectIdentityControl(cfg)
+	if err != nil {
+		return allFindings, err
+	}
+	allFindings = append(allFindings, findings...)
+
 	return allFindings, nil
 }
 
@@ -293,4 +300,59 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg configparser.
 	}
 
 	return findings, nil
+}
+
+// Detect the authentication method used by the MCP server.
+func (s *ConnectionScanner) detectIdentityControl(cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+	// Directly check HTTP authentication
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+
+	resp, err := client.Get(*cfg.URL)
+	if resp == nil || err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		wwwAuthenticateKey := "WWW-Authenticate"
+		authHeader := resp.Header.Get(wwwAuthenticateKey)
+
+		fmt.Printf("authHeader: %s\n", authHeader)
+
+		if authHeader != "" && strings.Contains(strings.ToLower(authHeader), "oauth") {
+			return []proto.Finding{
+				{
+					Tool:          "connection-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_LOW,
+					RuleId:        "oauth-authentication",
+					Title:         "OAuth authentication detected",
+					McpServerName: cfg.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("The MCP server '%s' is using OAuth authentication. Make sure its scope is limited to the minimum required for the MCP server to function properly.", cfg.Name),
+				},
+			}, nil
+		}
+	case http.StatusOK:
+		return []proto.Finding{
+			{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
+				RuleId:        "no-authentication",
+				Title:         "No authentication detected",
+				McpServerName: cfg.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server '%s' is not using any authentication. This is a high security risk. Please make sure the server does not have acces to any proprietary data or sensitive information.", cfg.Name),
+			},
+		}, nil
+	default:
+		// Do not report findings if we cannot find anything definitive.
+		return []proto.Finding{}, nil
+	}
+
+	return []proto.Finding{}, nil
 }
