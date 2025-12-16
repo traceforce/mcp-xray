@@ -36,7 +36,7 @@ type ConditionKind string
 const (
 	CondAllPresent ConditionKind = "all_present"
 	CondAnyPresent ConditionKind = "any_present"
-	CondAllNear    ConditionKind = "all_near"
+	CondAnyNear    ConditionKind = "any_near"
 )
 
 type Condition struct {
@@ -139,25 +139,15 @@ func evalCondition(cond Condition, tokenMatches map[string][]int) bool {
 		}
 		return false
 
-	case CondAllNear:
+	case CondAnyNear:
 		if cond.Window <= 0 || len(cond.Names) == 0 {
 			return false
 		}
-		for _, name := range cond.Names {
-			if !stringPresent(name, tokenMatches) {
-				return false
-			}
-		}
+
 		first := cond.Names[0]
 		firstPos := tokenMatches[first]
 		if len(firstPos) == 0 {
-			// no tokens for anchor; fall back to all_present
-			for _, name := range cond.Names {
-				if !stringPresent(name, tokenMatches) {
-					return false
-				}
-			}
-			return true
+			return false
 		}
 
 		for _, anchor := range firstPos {

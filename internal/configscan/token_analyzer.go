@@ -55,6 +55,12 @@ func (a *TokenAnalyzer) AnalyzeTool(ctx context.Context, description string, nam
 	mcpServerName string, configPath string) ([]proto.Finding, error) {
 	internalFindings := tokenanalyzer.Analyze(description, a.rules)
 
+	// Truncate description to first 1000 characters
+	truncDesc := description
+	if len(truncDesc) > 1000 {
+		truncDesc = truncDesc[:1000]
+	}
+
 	findings := []proto.Finding{}
 	for _, finding := range internalFindings {
 		findings = append(findings, proto.Finding{
@@ -66,7 +72,7 @@ func (a *TokenAnalyzer) AnalyzeTool(ctx context.Context, description string, nam
 			McpServerName: mcpServerName,
 			McpToolName:   name,
 			File:          configPath,
-			Message:       finding.Meta["reason"] + " Original tool description: " + description,
+			Message:       finding.Meta["reason"] + " Original tool description: " + truncDesc,
 		})
 	}
 

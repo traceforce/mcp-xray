@@ -4,9 +4,9 @@
       "type": "http",
       "url": "https://mcp.asana.com/mcp"
     },
-    "github test server": {
+    "supabase test server": {
       "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/"
+      "url": "https://mcp.supabase.com/mcp"
     }
   }
 }
