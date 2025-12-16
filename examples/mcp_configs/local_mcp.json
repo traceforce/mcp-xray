@@ -7,6 +7,14 @@
           "AWS_DOCUMENTATION_PARTITION": "aws"
         },
         "args": []
+      },
+      "playwright": {
+        "command": "npx",
+        "args": [
+          "@playwright/mcp@latest",
+          "--isolated",
+          "--storage-state={path/to/storage.json}"
+        ]
       }
     }
   }

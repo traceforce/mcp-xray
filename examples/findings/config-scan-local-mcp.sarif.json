@@ -1,0 +1,67 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "stdio-transport-detected",
+              "shortDescription": {
+                "text": "STDIO transport detected"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "stdio-transport-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server “AWS Documentation” is configured to use a STDIO transport. MCP servers running locally with STDIO access may execute system commands, which can potentially cause damage to the local system. Ensure that such servers are trusted and run with appropriate safeguards and least-privilege permissions."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/local_mcp.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "AWS Documentation",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "stdio-transport-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server “playwright” is configured to use a STDIO transport. MCP servers running locally with STDIO access may execute system commands, which can potentially cause damage to the local system. Ensure that such servers are trusted and run with appropriate safeguards and least-privilege permissions."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/local_mcp.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "playwright",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        }
+      ]
+    }
+  ]
+}

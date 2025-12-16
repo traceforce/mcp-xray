@@ -67,7 +67,8 @@ func NewConfigScanCommand() *cobra.Command {
 				llmModel = ""
 			}
 
-			scanner, err := configscan.NewConfigScanner(configPath, analyzerType, llmModel)
+			toolsOutputFile, _ := cmd.Flags().GetString("tools-output")
+			scanner, err := configscan.NewConfigScanner(configPath, analyzerType, llmModel, toolsOutputFile)
 			if err != nil {
 				fmt.Println("Error creating config scanner:", err)
 				os.Exit(1)
@@ -85,9 +86,10 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings.sarif.json)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
 	cmd.Flags().String("analyzer-type", "token", "Analyzer type to use: 'token' or 'llm' (default: token)")
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
+	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	return cmd
 }
 

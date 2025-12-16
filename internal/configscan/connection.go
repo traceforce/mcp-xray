@@ -39,12 +39,27 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	for _, server := range servers {
 		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
 		classification := ClassifyTransport(server)
-		if classification == proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP {
+		switch classification {
+		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
 			results, err := s.ScanConnection(ctx, server)
 			if err != nil {
 				return nil, err
 			}
 			findings = append(findings, results...)
+		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO:
+			findings = append(findings, proto.Finding{
+				Tool:          "connection-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+				RuleId:        "stdio-transport-detected",
+				Title:         "STDIO transport detected",
+				McpServerName: server.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("The MCP server “%s” is configured to use a STDIO transport. MCP servers running locally with STDIO access may execute system commands, which can potentially cause damage to the local system. Ensure that such servers are trusted and run with appropriate safeguards and least-privilege permissions.", server.Name),
+			})
+		default:
+			// Skip unknown transport
+			continue
 		}
 	}
 

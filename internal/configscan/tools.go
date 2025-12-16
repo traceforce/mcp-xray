@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,11 +20,12 @@ type ToolsAnalyzer interface {
 }
 
 type ToolsScanner struct {
-	MCPconfigPath string
-	toolsAnalyzer ToolsAnalyzer
+	MCPconfigPath   string
+	toolsAnalyzer   ToolsAnalyzer
+	toolsOutputFile string
 }
 
-func NewToolsScanner(configPath string, analyzerType string, model string) (*ToolsScanner, error) {
+func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string) (*ToolsScanner, error) {
 	switch analyzerType {
 	case "token":
 		tokenAnalyzer, err := NewTokenAnalyzer()
@@ -31,8 +33,9 @@ func NewToolsScanner(configPath string, analyzerType string, model string) (*Too
 			return nil, err
 		}
 		return &ToolsScanner{
-			MCPconfigPath: configPath,
-			toolsAnalyzer: tokenAnalyzer,
+			MCPconfigPath:   configPath,
+			toolsAnalyzer:   tokenAnalyzer,
+			toolsOutputFile: toolsOutputFile,
 		}, nil
 	case "llm":
 		llmAnalyzer, err := NewLLMAnalyzerFromEnvWithModel(model)
@@ -40,8 +43,9 @@ func NewToolsScanner(configPath string, analyzerType string, model string) (*Too
 			return nil, err
 		}
 		return &ToolsScanner{
-			MCPconfigPath: configPath,
-			toolsAnalyzer: llmAnalyzer,
+			MCPconfigPath:   configPath,
+			toolsAnalyzer:   llmAnalyzer,
+			toolsOutputFile: toolsOutputFile,
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported analyzer type: %s", analyzerType)
@@ -58,6 +62,8 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	fmt.Printf("Tools scanner scanning %d MCP servers\n", len(servers))
 
 	var allFindings []proto.Finding
+	var serverToolsData []ServerToolsData
+
 	for _, server := range servers {
 		tools, err := s.GetTools(ctx, server)
 		if err != nil {
@@ -78,17 +84,27 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			}
 			return nil, err
 		}
+
+		// Collect tools data for JSON output (even if empty)
+		serverToolsData = append(serverToolsData, ServerToolsData{
+			Server: server.Name,
+			Tools:  tools,
+		})
+
 		if len(tools) == 0 {
 			continue
 		}
-
-		fmt.Printf("Analyzing %d tools for server %s\n", len(tools), server.Name)
 
 		findings, err := s.toolsAnalyzer.AnalyzeTools(ctx, tools, server.Name, s.MCPconfigPath)
 		if err != nil {
 			return nil, err
 		}
 		allFindings = append(allFindings, findings...)
+	}
+
+	// Write tools to JSON file
+	if err := s.writeToolsToJSON(serverToolsData); err != nil {
+		return nil, fmt.Errorf("failed to write tools to JSON: %w", err)
 	}
 
 	fmt.Printf("Tools scanner found %d findings\n", len(allFindings))
@@ -113,6 +129,12 @@ type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+}
+
+// ServerToolsData represents tools data for a single server
+type ServerToolsData struct {
+	Server string `json:"server"`
+	Tools  []Tool `json:"tools"`
 }
 
 // MCPRequest represents a JSON-RPC request to an MCP server
@@ -278,4 +300,27 @@ func (s *ToolsScanner) getToolsDirectHTTP(ctx context.Context, session *MCPSessi
 	}
 
 	return result.Tools, nil
+}
+
+// writeToolsToJSON writes the tools data for all servers to a JSON file
+func (s *ToolsScanner) writeToolsToJSON(serverToolsData []ServerToolsData) error {
+	// If no output file specified, generate filename based on config path
+	if len(s.toolsOutputFile) == 0 {
+		//skip writing tools to file
+		s.toolsOutputFile = fmt.Sprintf("tools_summary_%v.json", time.Now().Format(time.RFC3339))
+	}
+
+	// Create JSON data
+	jsonData, err := json.MarshalIndent(serverToolsData, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal tools data: %w", err)
+	}
+
+	// Write to file
+	if err := os.WriteFile(s.toolsOutputFile, jsonData, 0644); err != nil {
+		return fmt.Errorf("failed to write tools file: %w", err)
+	}
+
+	fmt.Printf("Tools data written to %s\n", s.toolsOutputFile)
+	return nil
 }

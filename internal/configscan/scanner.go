@@ -13,8 +13,8 @@ type ConfigScanner struct {
 	toolsScanner      *ToolsScanner
 }
 
-func NewConfigScanner(configPath string, analyzerType string, model string) (*ConfigScanner, error) {
-	toolsScanner, err := NewToolsScanner(configPath, analyzerType, model)
+func NewConfigScanner(configPath string, analyzerType string, model string, toolsOutputFile string) (*ConfigScanner, error) {
+	toolsScanner, err := NewToolsScanner(configPath, analyzerType, model, toolsOutputFile)
 	if err != nil {
 		return nil, err
 	}
