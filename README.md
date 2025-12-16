@@ -17,9 +17,9 @@ Analyzes MCP server configurations for security issues. Designed to be run befor
   - **Token Analyzer** (default): Fast, rule-based pattern matching that detects:
     - Destructive commands
     - Command injection and arbitrary tool execution
-    - Unvalidated user input
     - Insecure permission assignments
-    - Active connection leaks
+    - Content modification
+    - Unvalidated user input
     - Information disclosure risks
   - **LLM Analyzer**: Deep semantic analysis using large language models to detect:
     - Arbitrary tool execution without validation
@@ -123,20 +123,9 @@ MCP X-Ray generates reports in [SARIF (Static Analysis Results Interchange Forma
 
 ## Examples
 
-Example scan outputs are available in `examples/findings/`:
+Example scan outputs are available in `examples/findings/`.
 
-- `config-scan-risky-tools.sarif.json`: Configuration scan findings for tools with high security risks
-- `config-scan-secrets.sarif.json`: Configuration scan findings for secrets exposed in configurations
-- `repo-scan-cve-secrets.sarif.json`: Repository scan findings for CVE vulnerabilities and secrets
-- `repo-scan-dangerous-commands.sarif.json`: Repository scan findings for dangerous command patterns
-
-Example MCP configuration files are available in the `examples/mcp_configs/` directory:
-
-- `local_mcp.json`: Local STDIO-based MCP server
-- `remote_mcp_token.json`: Remote HTTP server with token authentication
-- `remote_mcp_oauth.json`: Remote HTTP server with OAuth authentication
-- `mcp_with_env.json`: Configuration using environment variables
-- `mcp_with_proxy.json`: Configuration with proxy settings
+Example MCP configuration files are available in the `examples/mcp_configs/` directory.
 
 An example MCP Server is available in the `examples/mcp_server/` directory:
 - `mcp_server.py`: FastMCP server using streamable-http transport
