@@ -20,6 +20,24 @@
               "shortDescription": {
                 "text": "OAuth PRM scopes are coarse-grained"
               }
+            },
+            {
+              "id": "oauth-scopes-not-configured",
+              "shortDescription": {
+                "text": "OAuth ASMD scopes not configured"
+              }
+            },
+            {
+              "id": "oauth-write-scope-detected",
+              "shortDescription": {
+                "text": "Write scope detected in PRM"
+              }
+            },
+            {
+              "id": "401_unauthorized",
+              "shortDescription": {
+                "text": "MCP server returned 401 Unauthorized error"
+              }
             }
           ]
         }
@@ -29,7 +47,7 @@
           "ruleId": "oauth-coarse-grained-scopes",
           "level": "error",
           "message": {
-            "text": "The MCP server's protected resource metadata (RPM) 'Asana' is using a single default scope. Please consult with the MCP server owner for the correct scopes to use."
+            "text": "The MCP server's protected resource metadata (RPM) 'asana test server' is using a single default scope. Please consult with the MCP server owner for the correct scopes to use."
           },
           "locations": [
             {
@@ -41,7 +59,28 @@
             }
           ],
           "properties": {
-            "mcpServerName": "Asana",
+            "mcpServerName": "asana test server",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "oauth-scopes-not-configured",
+          "level": "error",
+          "message": {
+            "text": "The MCP server's authorization server metadata (ASMD) 'asana test server' is not using OAuth scopes. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "asana test server",
             "tool": "connection-scanner",
             "type": "CONNECTION"
           }
@@ -50,7 +89,7 @@
           "ruleId": "tls-version-1.2-detected",
           "level": "warning",
           "message": {
-            "text": "The MCP server 'Asana' at https://mcp.asana.com/mcp accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
+            "text": "The MCP server 'asana test server' at https://mcp.asana.com/mcp accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
           },
           "locations": [
             {
@@ -62,8 +101,92 @@
             }
           ],
           "properties": {
-            "mcpServerName": "Asana",
+            "mcpServerName": "asana test server",
             "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "tls-version-1.2-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server 'github test server' at https://api.githubcopilot.com/mcp/ accepts a TLS version below 1.3. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider upgrading to TLS 1.3."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "github test server",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "oauth-write-scope-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server 'github test server' scopes contains a write scope. This is a medium security risk. Please evaluate the scope and remove the scope during the MCP dynamic client registration if your application does not need it."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "github test server",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "oauth-write-scope-detected",
+          "level": "warning",
+          "message": {
+            "text": "The MCP server 'github test server' scopes contains a write scope. This is a medium security risk. Please evaluate the scope and remove the scope during the MCP dynamic client registration if your application does not need it."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "github test server",
+            "tool": "connection-scanner",
+            "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "401_unauthorized",
+          "level": "warning",
+          "message": {
+            "text": "Authorization issue: Failed to get tools from MCP server 'github test server' due to 401 Unauthorized error. This may indicate missing or invalid authentication credentials, or insufficient OAuth scopes. Error: direct tools/list failed: HTTP error 401: bad request: missing required Authorization header\n"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "github test server",
+            "tool": "tools-scanner",
             "type": "CONNECTION"
           }
         }

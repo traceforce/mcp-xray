@@ -1,8 +1,12 @@
 {
   "mcpServers": {
-    "Asana": {
+    "asana test server": {
       "type": "http",
       "url": "https://mcp.asana.com/mcp"
+    },
+    "github test server": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
     }
   }
 }

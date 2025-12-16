@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -60,6 +61,21 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	for _, server := range servers {
 		tools, err := s.GetTools(ctx, server)
 		if err != nil {
+			// If the error is a 401 Unauthorized error, report a medium severity finding
+			// and suggest the user to check the OAuth scopes.
+			if strings.Contains(err.Error(), "401") {
+				allFindings = append(allFindings, proto.Finding{
+					Tool:          "tools-scanner",
+					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+					Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+					RuleId:        "401_unauthorized",
+					Title:         "MCP server returned 401 Unauthorized error",
+					McpServerName: server.Name,
+					File:          s.MCPconfigPath,
+					Message:       fmt.Sprintf("Authorization issue: Failed to get tools from MCP server '%s' due to 401 Unauthorized error. This may indicate missing or invalid authentication credentials, or insufficient OAuth scopes. Error: %v", server.Name, err),
+				})
+				continue
+			}
 			return nil, err
 		}
 		if len(tools) == 0 {
