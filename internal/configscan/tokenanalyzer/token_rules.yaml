@@ -15,10 +15,9 @@ rules:
         values: ["file", "files", "directory", "directories", "folder", "folders", "repo", "repos", "branch", "branches", "record", "records", "collection", "collections", "table", "tables", "resource", "resources", "data", "system"]
 
     condition:
-      kind: all_near
+      kind: any_near
       names: ["$danger_verb", "$danger_obj"]
       window: 6
-
 
   - id: command_injection
     severity: high
@@ -32,23 +31,55 @@ rules:
 
       - name: "$obj"
         type: tokens
-        values: ["tool", "slug", "command", "commands", "script", "code"]
-
-      - name: "$user"
-        type: tokens
-        values: ["user", "provided", "input", "arguments", "arbitrary", "any"]
-
-      - name: "$p_arbitrary_tool"
-        type: phrase
-        values:
-          - "executes an arbitrary tool slug"
-          - "arbitrary input for the tool slug and arguments"
+        values: ["tool", "slug", "command", "commands", "script", "code", "function", "functions", "sql", "query", "queries", "statement", "statements"]
 
     condition:
-      kind: all_near
-      names: ["$exec", "$obj", "$user"]
+      kind: any_near
+      names: ["$exec", "$obj"]
       window: 8
 
+  - id: insecure_permission_assignment
+    severity: high
+    meta:
+      category: permissions
+      reason: Tool modifies permissions/access for users; risk of over-privileged access.
+    strings:
+      - name: "$verb"
+        type: tokens
+        values: ["add", "adds", "update", "updates", "modify", "modifies", "set", "grant"]
+
+      - name: "$perm"
+        type: tokens
+        values: ["permission", "permissions", "access", "privilege", "privileges"]
+
+      - name: "$who"
+        type: tokens
+        values: ["collaborator", "user", "member", "role"]
+
+    condition:
+      kind: any_near
+      names: ["$verb", "$perm", "$who"]
+      window: 6
+  
+  - id: content_modification
+    severity: medium
+    meta:
+      category: risky_commands
+      reason: Tool modifies content; risk of unintended changes or data loss.
+    strings:
+      - name: "$verb"
+        type: tokens
+        values: ["create", "update", "write", "post", "put", "set", "add", "insert", "modify", "edit", "save", "upload", "replace", "rename", "move", "copy", "append", "patch", "grant", "send", "execute", "run", "publish", "deploy", "fork", "merge", "commit", "push", "assign", "approve", "enable", "activate", "configure", "triage", "label", "pin", "star", "clone", "new", "start", "navigate", "fill", "initiate"]
+
+      - name: "$obj"
+        type: tokens
+        values: ["database", "databases", "table", "tables", "row", "rows", "collection", "collections", "record", "records", "repo", "repos", "branch", "branches", "commit", "commits", "history", "contents", "file", "files", "directory", "directories", "folder", "folders"]
+
+    condition:
+      kind: any_near
+      names: ["$verb", "$obj"]
+      window: 6
+  
   - id: unvalidated_user_input
     severity: medium
     meta:
@@ -68,55 +99,9 @@ rules:
         values: ["input", "arguments", "content", "data"]
 
     condition:
-      kind: all_near
+      kind: any_near
       names: ["$user", "$prov", "$data"]
       window: 5
-
-  - id: insecure_permission_assignment
-    severity: medium
-    meta:
-      category: permissions
-      reason: Tool modifies permissions/access for users or collaborators; risk of over-privileged access.
-    strings:
-      - name: "$verb"
-        type: tokens
-        values: ["add", "adds", "update", "updates", "modify", "modifies", "set", "grant"]
-
-      - name: "$perm"
-        type: tokens
-        values: ["permission", "permissions", "access", "privilege", "privileges"]
-
-      - name: "$who"
-        type: tokens
-        values: ["collaborator", "user", "member", "role"]
-
-    condition:
-      kind: all_near
-      names: ["$verb", "$perm", "$who"]
-      window: 6
-
-  - id: active_connection_leak
-    severity: medium
-    meta:
-      category: connection_leak
-      reason: Tool exposes status of active connections; possible information disclosure / unauthorized use.
-    strings:
-      - name: "$check"
-        type: tokens
-        values: ["check", "checks", "verify", "verifies"]
-
-      - name: "$active"
-        type: tokens
-        values: ["active", "existing"]
-
-      - name: "$conn"
-        type: tokens
-        values: ["connection", "connections", "session", "sessions"]
-
-    condition:
-      kind: all_near
-      names: ["$check", "$active", "$conn"]
-      window: 6
 
   - id: information_disclosure
     severity: low
@@ -126,17 +111,13 @@ rules:
     strings:
       - name: "$verb"
         type: tokens
-        values: ["compare", "compares", "diff"]
+        values: ["get", "list", "read", "fetch", "query", "search", "find", "retrieve", "view", "show", "download", "export", "scan", "watch", "select", "inspect", "monitor", "browse", "analyze", "review", "examine", "understand", "access", "track", "recommend", "suggest", "check", "compare", "verify"]
 
       - name: "$obj"
         type: tokens
-        values: ["commit", "commits", "history", "contents"]
-
-      - name: "$ctx"
-        type: tokens
-        values: ["context", "diff", "changes", "difference"]
+        values: ["database", "databases", "table", "tables", "row", "rows", "collection", "collections", "record", "records", "repo", "repos", "branch", "branches", "commit", "commits", "history", "contents"]
 
     condition:
-      kind: all_near
+      kind: any_near
       names: ["$verb", "$obj"]
       window: 6

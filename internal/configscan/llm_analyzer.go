@@ -236,6 +236,12 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpSe
 			ruleID = "llm_analyzer_finding"
 		}
 
+		// Truncate description to first 1000 characters
+		truncDesc := toolMap[targetTool.Name].Description
+		if len(truncDesc) > 1000 {
+			truncDesc = truncDesc[:1000]
+		}
+
 		protoFindings = append(protoFindings, proto.Finding{
 			Tool:          "llm_analyzer",
 			Type:          proto.FindingType_FINDING_TYPE_SAST,
@@ -245,7 +251,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpSe
 			McpServerName: mcpServerName,
 			McpToolName:   targetTool.Name,
 			File:          configPath,
-			Message:       f.Message + " Original tool description: " + toolMap[targetTool.Name].Description,
+			Message:       f.Message + " Original tool description: " + truncDesc,
 		})
 	}
 

@@ -549,7 +549,7 @@ func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg configparser.M
 					Title:         fmt.Sprintf("Write scope detected in %s", scopeType),
 					McpServerName: cfg.Name,
 					File:          s.MCPconfigPath,
-					Message:       fmt.Sprintf("The MCP server '%s' scopes contains a write scope. This is a medium security risk. Please evaluate the scope and remove the scope during the MCP dynamic client registration if your application does not need it.", cfg.Name),
+					Message:       fmt.Sprintf("The MCP server '%s' scopes contains a write scope. Please evaluate the scope and remove the scope during the MCP dynamic client registration if your application does not need it.", cfg.Name),
 				},
 			}, nil
 		}

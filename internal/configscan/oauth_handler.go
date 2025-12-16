@@ -107,7 +107,8 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	fmt.Println("4) Starting local redirect server…")
 	codeCh := make(chan string, 1)
 	errCh := make(chan string, 1)
-	go startRedirectServer(codeCh, errCh)
+	shutdownServer := startRedirectServer(codeCh, errCh)
+	defer shutdownServer() // Ensure server is shut down when function returns
 
 	verifier, challenge := makePKCE()
 	state := randB64URL(16)
@@ -115,7 +116,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, dcr.ClientID, scopeStr, challenge, state)
 
 	fmt.Println("5) Opening browser for login/consent…")
-	fmt.Println("   If it doesn’t open, paste this URL into your browser:")
+	fmt.Println("   If it doesn't open, paste this URL into your browser:")
 	fmt.Println(authURL)
 	openBrowser(authURL)
 
@@ -123,9 +124,12 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	var code string
 	select {
 	case code = <-codeCh:
+		// Server will be shut down by defer
 	case err := <-errCh:
+		shutdownServer() // Shutdown before log.Fatalf (which exits)
 		log.Fatalf("OAuth error: %s", err)
 	case <-time.After(3 * time.Minute):
+		shutdownServer() // Shutdown before log.Fatal (which exits)
 		log.Fatal("Timed out waiting for OAuth callback")
 	}
 
@@ -134,7 +138,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
-	fmt.Printf("   Access token acquired %+v", tok)
+	fmt.Printf(" Access token acquired %+v\n\n", tok)
 
 	return tok.AccessToken, nil
 }
@@ -320,7 +324,7 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	return tr
 }
 
-func startRedirectServer(codeCh chan<- string, errCh chan<- string) {
+func startRedirectServer(codeCh chan<- string, errCh chan<- string) func() {
 	mux := http.NewServeMux()
 	mux.HandleFunc(RedirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -343,10 +347,27 @@ func startRedirectServer(codeCh chan<- string, errCh chan<- string) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		errCh <- fmt.Sprintf("redirect_listen_failed: %v", err)
-		return
+		return func() {} // Return no-op function if listen fails
 	}
 	srv := &http.Server{Handler: mux}
-	_ = srv.Serve(ln) // serve one callback, then main exits
+
+	// Start server in goroutine
+	go func() {
+		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			// Only send error if server wasn't explicitly closed
+			select {
+			case errCh <- fmt.Sprintf("redirect_server_error: %v", err):
+			default:
+			}
+		}
+	}()
+
+	// Return shutdown function
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}
 }
 
 // ---------- utilities ----------
