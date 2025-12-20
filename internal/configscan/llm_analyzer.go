@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
+	"mcpxray/internal/libmcp"
 	"mcpxray/internal/llm"
 	"mcpxray/proto"
 )
@@ -33,14 +33,10 @@ type LLMAnalyzer struct {
 var _ ToolsAnalyzer = (*LLMAnalyzer)(nil)
 
 // NewLLMAnalyzerFromEnvWithModel creates a new LLM analyzer from environment variables with an optional model override
-func NewLLMAnalyzerFromEnvWithModel(model string) (*LLMAnalyzer, error) {
-	llmClient, err := llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
-	if err != nil {
-		return nil, err
-	}
+func NewLLMAnalyzerFromEnvWithModel(llmClient *llm.LLMClient) *LLMAnalyzer {
 	return &LLMAnalyzer{
 		llmClient: llmClient,
-	}, nil
+	}
 }
 
 // SecurityFinding represents a security finding from LLM analysis
@@ -54,7 +50,7 @@ type SecurityFinding struct {
 }
 
 // AnalyzeTools analyzes multiple tools for security risks in a single LLM call
-func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []libmcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
 	if len(tools) == 0 {
 		return []proto.Finding{}, nil
 	}
@@ -71,7 +67,7 @@ func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerN
 	// Batch tools based on size (name + description) until reaching maxBatchSizeBytes
 	i := 0
 	for i < len(tools) {
-		var batch []Tool
+		var batch []libmcp.Tool
 		currentBatchSize := 0
 		startIdx := i
 		endIdx := startIdx
@@ -100,7 +96,7 @@ func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerN
 		prompt := a.buildBatchAnalysisPrompt(batch)
 
 		// Call the LLM
-		response, err := a.callLLM(ctx, prompt)
+		response, err := a.llmClient.CallLLM(ctx, prompt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to call LLM: %w", err)
 		}
@@ -118,7 +114,7 @@ func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerN
 }
 
 // buildBatchAnalysisPrompt creates a prompt for analyzing multiple tools
-func (a *LLMAnalyzer) buildBatchAnalysisPrompt(tools []Tool) string {
+func (a *LLMAnalyzer) buildBatchAnalysisPrompt(tools []libmcp.Tool) string {
 	var toolsList strings.Builder
 	for i, tool := range tools {
 		toolsList.WriteString(fmt.Sprintf("\nTool %d:\n", i+1))
@@ -145,45 +141,15 @@ Tools to analyze:%s
 JSON Response:`, toolsList.String())
 }
 
-// callLLM calls the LLM API
-func (a *LLMAnalyzer) callLLM(ctx context.Context, userPrompt string) (string, error) {
-	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities. 
-Analyze the provided tool information and return a JSON array of security findings.
-Each finding must have: severity, rule_id, title, message, and optionally category.
-Return ONLY valid JSON, no markdown formatting, no code fences.`
-
-	content, err := a.llmClient.ChatClient.Chat(ctx, systemPrompt, []llm.ChatMessage{
-		{Role: "user", Content: userPrompt},
-	})
-	if err != nil {
-		return "", err
-	}
-
-	// Check if response is empty
-	if content == "" {
-		return "", fmt.Errorf("LLM returned empty response")
-	}
-
-	// Strip markdown code fences if present - handle various formats
-	content = a.stripMarkdownCodeFences(content)
-
-	// Check again after trimming
-	if content == "" {
-		return "", fmt.Errorf("LLM response is empty after trimming markdown")
-	}
-
-	return content, nil
-}
-
 // parseBatchLLMResponse parses the batch LLM response and converts it to proto.Finding
-func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []libmcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
 	// Validate response is not empty
 	if response == "" {
 		return nil, fmt.Errorf("LLM response is empty, cannot parse JSON")
 	}
 
 	// Create a map of tool names to tools for quick lookup
-	toolMap := make(map[string]Tool)
+	toolMap := make(map[string]libmcp.Tool)
 	for _, tool := range tools {
 		toolMap[tool.Name] = tool
 	}
@@ -212,7 +178,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpSe
 	protoFindings := make([]proto.Finding, 0, len(findings))
 	for _, f := range findings {
 		// Determine which tool this finding belongs to
-		var targetTool Tool
+		var targetTool libmcp.Tool
 		if f.ToolName != "" {
 			// Finding explicitly specifies tool name
 			if tool, ok := toolMap[f.ToolName]; ok {
@@ -256,38 +222,6 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []Tool, mcpSe
 	}
 
 	return protoFindings, nil
-}
-
-// stripMarkdownCodeFences removes markdown code fences from the content
-// Handles various formats: ```json, ```, with or without newlines
-func (a *LLMAnalyzer) stripMarkdownCodeFences(content string) string {
-	content = strings.TrimSpace(content)
-
-	// Try to find JSON content by looking for the first { and last }
-	// This handles cases where there might be text or backticks before/after
-	firstBrace := strings.Index(content, "{")
-	lastBrace := strings.LastIndex(content, "}")
-
-	if firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace {
-		// Extract just the JSON portion
-		content = content[firstBrace : lastBrace+1]
-	} else {
-		// Fallback to string manipulation if JSON braces not found
-		// Remove opening code fences (with or without language specifier)
-		content = strings.TrimPrefix(content, "```json")
-		content = strings.TrimPrefix(content, "```")
-		content = strings.TrimSpace(content)
-
-		// Remove closing code fences (handle multiple cases)
-		content = strings.TrimSuffix(content, "```")
-		content = strings.TrimSpace(content)
-
-		// Remove any remaining standalone backticks
-		content = strings.ReplaceAll(content, "```", "")
-		content = strings.TrimSpace(content)
-	}
-
-	return content
 }
 
 // mapSeverity maps string severity to proto.RiskSeverity

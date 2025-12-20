@@ -14,11 +14,45 @@
               "shortDescription": {
                 "text": "STDIO transport detected"
               }
+            },
+            {
+              "id": "content_modification",
+              "shortDescription": {
+                "text": "risky_commands - content_modification"
+              }
+            },
+            {
+              "id": "command_injection",
+              "shortDescription": {
+                "text": "command_injection - command_injection"
+              }
             }
           ]
         }
       },
       "results": [
+        {
+          "ruleId": "command_injection",
+          "level": "error",
+          "message": {
+            "text": "Execution of tool/command based on user-controlled or arbitrary input. Original tool description: Run Playwright code snippet"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/local_mcp.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "playwright",
+            "mcpToolName": "browser_run_code",
+            "tool": "token_analyzer",
+            "type": "TOOL_ANALYSIS"
+          }
+        },
         {
           "ruleId": "stdio-transport-detected",
           "level": "warning",
@@ -59,6 +93,28 @@
             "mcpServerName": "playwright",
             "tool": "connection-scanner",
             "type": "CONNECTION"
+          }
+        },
+        {
+          "ruleId": "content_modification",
+          "level": "warning",
+          "message": {
+            "text": "Tool modifies content; risk of unintended changes or data loss. Original tool description: Upload one or multiple files"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "examples/mcp_configs/local_mcp.json"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "playwright",
+            "mcpToolName": "browser_file_upload",
+            "tool": "token_analyzer",
+            "type": "TOOL_ANALYSIS"
           }
         }
       ]

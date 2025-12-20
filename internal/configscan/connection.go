@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	configparser "mcpxray/internal/configparser"
+	"mcpxray/internal/libmcp"
 	"mcpxray/proto"
 )
 
@@ -28,7 +28,7 @@ func NewConnectionScanner(configPath string) *ConnectionScanner {
 // For STDIO MCP servers, this part will be skipped.
 func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	// Parse configPath
-	servers, err := configparser.NewConfigParser(s.MCPconfigPath).Parse()
+	servers, err := libmcp.NewConfigParser(s.MCPconfigPath).Parse()
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	findings := []proto.Finding{}
 	for _, server := range servers {
 		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
-		classification := ClassifyTransport(server)
+		classification := libmcp.ClassifyTransport(server)
 		switch classification {
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
 			results, err := s.ScanConnection(ctx, server)
@@ -113,7 +113,7 @@ func isLocalhostOrLoopback(urlStr string) bool {
 	return false
 }
 
-func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
 	}
@@ -167,7 +167,7 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg configparser
 	return allFindings, nil
 }
 
-func (s *ConnectionScanner) checkCertificate(cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
 	var findings []proto.Finding
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
@@ -245,7 +245,7 @@ func (s *ConnectionScanner) checkCertificate(cfg configparser.MCPServerConfig) (
 
 // checkTLSVersion checks if the server supports the specified TLS version.
 // For highest security, the MCP server should only support the highest version available and never anything below 1.2.
-func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
 	var findings []proto.Finding
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
@@ -322,7 +322,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg configparser.
 }
 
 // Detect the authentication method used by the MCP server.
-func (s *ConnectionScanner) detectIdentityControl(cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
 	// Directly check HTTP authentication
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -373,11 +373,11 @@ func (s *ConnectionScanner) detectIdentityControl(cfg configparser.MCPServerConf
 	}
 }
 
-func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]proto.Finding, error) {
-	oauthConfig := NewOAuthConfig(*cfg.URL)
+func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
+	oauthConfig := libmcp.NewOAuthConfig(*cfg.URL)
 
 	fmt.Println("1) Checking Protected Resource Metadata (PRM) is properly configured")
-	prm, err := oauthConfig.discoverPRM()
+	prm, err := oauthConfig.DiscoverPRM()
 	if err != nil {
 		return []proto.Finding{
 			{
@@ -394,7 +394,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg configparser.MCPServerConfig) ([]
 	}
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
-	asmd, err := oauthConfig.discoverASMetadata(prm)
+	asmd, err := oauthConfig.DiscoverASMetadata(prm)
 	if err != nil {
 		return []proto.Finding{
 			{
@@ -518,7 +518,7 @@ func checkStringSliceForKeywords(keywords []string, scope string) bool {
 
 // checkOauthScopes checks if the scopes contain any delete, write, or read scopes. To reduce the amount of findings for
 // a given MCP server, we will only report the most critical finding found.
-func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg configparser.MCPServerConfig, scopeType string) ([]proto.Finding, error) {
+func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServerConfig, scopeType string) ([]proto.Finding, error) {
 	for _, scope := range scopes {
 		normalizedScope := strings.ToLower(scope)
 		if checkStringSliceForKeywords(deleteKeywords, normalizedScope) {

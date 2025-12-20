@@ -1,4 +1,4 @@
-package configparser
+package libmcp
 
 // MCPServerConfig is the normalized representation returned by all parsers
 type MCPServerConfig struct {

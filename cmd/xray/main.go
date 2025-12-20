@@ -8,6 +8,7 @@ import (
 	"time"
 
 	configscan "mcpxray/internal/configscan"
+	"mcpxray/internal/pentest"
 	"mcpxray/internal/report"
 	reposcan "mcpxray/internal/reposcan"
 	"mcpxray/proto"
@@ -194,9 +195,69 @@ func NewRepoScanCommand() *cobra.Command {
 	return cmd
 }
 
+func NewPentestCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "pentest <config-file>",
+		Short: "Run a pentest against the specified URL using the MCP servers in the configuration file",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			configPath := args[0]
+			llmModel, _ := cmd.Flags().GetString("llm-model")
+
+			// Validate that configPath is a file, not a directory
+			fileInfo, err := os.Stat(configPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Printf("Error: config file does not exist: %s\n", configPath)
+				} else {
+					fmt.Printf("Error: cannot access config file: %s\n", err)
+				}
+				os.Exit(1)
+			}
+			if fileInfo.IsDir() {
+				fmt.Printf("Error: config path must be a file, not a directory: %s\n", configPath)
+				os.Exit(1)
+			}
+
+			// Validate LLM model
+			if llmModel == "" {
+				fmt.Println("Error: llm-model is required")
+				os.Exit(1)
+			}
+
+			// Create pentest tool
+			pentestTool, err := pentest.NewPentestTool(configPath, llmModel)
+			if err != nil {
+				fmt.Printf("Error creating pentest tool: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Run pentest
+			ctx := context.Background()
+			findings, err := pentestTool.Pentest(ctx)
+			if err != nil {
+				fmt.Printf("Error running pentest: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Write findings to output file
+			outputPath, _ := cmd.Flags().GetString("output")
+			if err := writeFindings(findings, outputPath, "pentest"); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+		},
+	}
+	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
+
+	return cmd
+}
+
 func init() {
 	rootCmd.AddCommand(NewConfigScanCommand())
 	rootCmd.AddCommand(NewRepoScanCommand())
+	rootCmd.AddCommand(NewPentestCommand())
 }
 
 func main() {

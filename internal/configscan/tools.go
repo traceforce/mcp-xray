@@ -6,17 +6,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
-	configparser "mcpxray/internal/configparser"
-	metadata "mcpxray/internal/metadata"
+	"mcpxray/internal/libmcp"
+	"mcpxray/internal/llm"
 	"mcpxray/proto"
 )
 
 type ToolsAnalyzer interface {
-	AnalyzeTools(ctx context.Context, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error)
+	AnalyzeTools(ctx context.Context, tools []libmcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error)
 }
 
 type ToolsScanner struct {
@@ -38,13 +36,13 @@ func NewToolsScanner(configPath string, analyzerType string, model string, tools
 			toolsOutputFile: toolsOutputFile,
 		}, nil
 	case "llm":
-		llmAnalyzer, err := NewLLMAnalyzerFromEnvWithModel(model)
+		llmClient, err := llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
 		if err != nil {
 			return nil, err
 		}
 		return &ToolsScanner{
 			MCPconfigPath:   configPath,
-			toolsAnalyzer:   llmAnalyzer,
+			toolsAnalyzer:   NewLLMAnalyzerFromEnvWithModel(llmClient),
 			toolsOutputFile: toolsOutputFile,
 		}, nil
 	default:
@@ -54,7 +52,7 @@ func NewToolsScanner(configPath string, analyzerType string, model string, tools
 
 func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	// Parse configPath
-	servers, err := configparser.NewConfigParser(s.MCPconfigPath).Parse()
+	servers, err := libmcp.NewConfigParser(s.MCPconfigPath).Parse()
 	if err != nil {
 		return nil, err
 	}
@@ -62,10 +60,16 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	fmt.Printf("Tools scanner scanning %d MCP servers\n", len(servers))
 
 	var allFindings []proto.Finding
-	var serverToolsData []ServerToolsData
+	var serverToolsData []libmcp.ServerToolsData
 
 	for _, server := range servers {
-		tools, err := s.GetTools(ctx, server)
+		session, err := libmcp.NewMCPSession(ctx, server)
+		if err != nil {
+			return nil, err
+		}
+		defer session.Close()
+
+		tools, err := libmcp.GetTools(ctx, session)
 		if err != nil {
 			// If the error is a 401 Unauthorized error, report a medium severity finding
 			// and suggest the user to check the OAuth scopes.
@@ -86,7 +90,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 		}
 
 		// Collect tools data for JSON output (even if empty)
-		serverToolsData = append(serverToolsData, ServerToolsData{
+		serverToolsData = append(serverToolsData, libmcp.ServerToolsData{
 			Server: server.Name,
 			Tools:  tools,
 		})
@@ -100,6 +104,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			return nil, err
 		}
 		allFindings = append(allFindings, findings...)
+
 	}
 
 	// Write tools to JSON file
@@ -112,198 +117,8 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	return allFindings, nil
 }
 
-/**********************************Tool helper functions*****************************************/
-const (
-	MCPTimeout         = 5 * time.Second
-	MCPProtocolVersion = "2025-06-18"
-	MCPJSONRPCVersion  = "2.0"
-)
-
-var (
-	requestIDCounter int64
-	httpSessions     sync.Map // url + headers -> *MCPSession
-)
-
-// Tool represents an MCP tool definition
-type Tool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
-}
-
-// ServerToolsData represents tools data for a single server
-type ServerToolsData struct {
-	Server string `json:"server"`
-	Tools  []Tool `json:"tools"`
-}
-
-// MCPRequest represents a JSON-RPC request to an MCP server
-type MCPRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
-}
-
-// MCPResponse represents a JSON-RPC response from an MCP server
-type MCPResponse struct {
-	JSONRPC string          `json:"jsonrpc"`
-	Result  json.RawMessage `json:"result,omitempty"`
-	Error   *MCPError       `json:"error,omitempty"`
-	ID      int             `json:"id"`
-}
-
-// MCPError represents an error in an MCP response
-type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-// ToolsListResult represents the result of a tools/list call
-type ToolsListResult struct {
-	Tools []Tool `json:"tools"`
-}
-
-// GetTools discovers available tools from an MCP server
-func (s *ToolsScanner) GetTools(ctx context.Context, cfg configparser.MCPServerConfig) ([]Tool, error) {
-	transport := ClassifyTransport(cfg)
-
-	fmt.Printf("Transport for MCP %s: %+v\n", cfg.Name, transport)
-
-	switch transport {
-	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO:
-		return s.getToolsSTDIO(ctx, cfg)
-	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP, proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE:
-		return s.getToolsHTTP(ctx, cfg)
-	default:
-		return nil, fmt.Errorf("unsupported transport type: %v", transport)
-	}
-}
-
-// getToolsSTDIO gets tools using STDIO transport
-func (s *ToolsScanner) getToolsSTDIO(ctx context.Context, cfg configparser.MCPServerConfig) ([]Tool, error) {
-
-	session, err := newMCPStdioSession(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer session.Close()
-
-	toolsReq := MCPRequest{
-		JSONRPC: MCPJSONRPCVersion,
-		Method:  "tools/list",
-		Params:  map[string]interface{}{},
-		ID:      int(atomic.AddInt64(&requestIDCounter, 1)),
-	}
-
-	toolsResp, err := session.sendRequest(toolsReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send tools/list request: %w", err)
-	}
-
-	if toolsResp.Error != nil {
-		return nil, fmt.Errorf("tools/list failed: %s", toolsResp.Error.Message)
-	}
-
-	var result ToolsListResult
-	if err := json.Unmarshal(toolsResp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse tools result: %w", err)
-	}
-
-	return result.Tools, nil
-}
-
-// getToolsHTTP gets tools from an MCP server using HTTP transport with universal session management
-func (s *ToolsScanner) getToolsHTTP(ctx context.Context, cfg configparser.MCPServerConfig) ([]Tool, error) {
-	if cfg.URL == nil {
-		return nil, fmt.Errorf("no URL specified for HTTP transport")
-	}
-
-	session, err := getOrCreateHTTPSession(*cfg.URL, cfg.Headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get session: %w", err)
-	}
-
-	// Standard MCP flow: initialize first, then tools/list
-	initReq := MCPRequest{
-		JSONRPC: MCPJSONRPCVersion,
-		Method:  "initialize",
-		Params: map[string]interface{}{
-			"protocolVersion": MCPProtocolVersion,
-			"capabilities":    map[string]interface{}{},
-			"clientInfo": map[string]string{
-				"name":    metadata.Name,
-				"version": metadata.Version,
-			},
-		},
-		ID: int(atomic.AddInt64(&requestIDCounter, 1)),
-	}
-
-	initResp, err := session.sendRequest(ctx, initReq)
-	if err != nil {
-		// If initialize fails, try direct tools/list (some servers allow this)
-		return s.getToolsDirectHTTP(ctx, session)
-	}
-
-	if initResp.Error != nil {
-		// If initialize has an error, try direct approach
-		return s.getToolsDirectHTTP(ctx, session)
-	}
-
-	// Send tools/list request (session ID will be included automatically if needed)
-	toolsReq := MCPRequest{
-		JSONRPC: MCPJSONRPCVersion,
-		Method:  "tools/list",
-		Params:  map[string]interface{}{},
-		ID:      int(atomic.AddInt64(&requestIDCounter, 1)),
-	}
-
-	toolsResp, err := session.sendRequest(ctx, toolsReq)
-	if err != nil {
-		// If tools/list fails after successful initialize, try direct approach
-		return s.getToolsDirectHTTP(ctx, session)
-	}
-
-	if toolsResp.Error != nil {
-		return nil, fmt.Errorf("tools/list error: %s", toolsResp.Error.Message)
-	}
-
-	var result ToolsListResult
-	if err := json.Unmarshal(toolsResp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse tools result: %w", err)
-	}
-
-	return result.Tools, nil
-}
-
-// getToolsDirectHTTP tries tools/list without initialize
-func (s *ToolsScanner) getToolsDirectHTTP(ctx context.Context, session *MCPSession) ([]Tool, error) {
-	toolsReq := MCPRequest{
-		JSONRPC: MCPJSONRPCVersion,
-		Method:  "tools/list",
-		Params:  map[string]interface{}{},
-		ID:      int(atomic.AddInt64(&requestIDCounter, 1)),
-	}
-
-	toolsResp, err := session.sendRequest(ctx, toolsReq)
-	if err != nil {
-		return nil, fmt.Errorf("direct tools/list failed: %w", err)
-	}
-
-	if toolsResp.Error != nil {
-		return nil, fmt.Errorf("direct tools/list error: %s", toolsResp.Error.Message)
-	}
-
-	var result ToolsListResult
-	if err := json.Unmarshal(toolsResp.Result, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse tools result: %w", err)
-	}
-
-	return result.Tools, nil
-}
-
 // writeToolsToJSON writes the tools data for all servers to a JSON file
-func (s *ToolsScanner) writeToolsToJSON(serverToolsData []ServerToolsData) error {
+func (s *ToolsScanner) writeToolsToJSON(serverToolsData []libmcp.ServerToolsData) error {
 	// If no output file specified, generate filename based on config path
 	if len(s.toolsOutputFile) == 0 {
 		//skip writing tools to file

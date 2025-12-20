@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	configparser "mcpxray/internal/configparser"
+	"mcpxray/internal/libmcp"
 	"mcpxray/proto"
 
 	"github.com/zricethezav/gitleaks/v8/detect"
@@ -23,7 +23,7 @@ func NewSecretsScanner(configPath string) *SecretsScanner {
 }
 
 func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
-	servers, err := configparser.NewConfigParser(s.configPath).Parse()
+	servers, err := libmcp.NewConfigParser(s.configPath).Parse()
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	return findings, nil
 }
 
-func DetectSecrets(cfg configparser.MCPServerConfig, configPath string) []proto.Finding {
+func DetectSecrets(cfg libmcp.MCPServerConfig, configPath string) []proto.Finding {
 	fmt.Printf("Scanning secrets for server %s\n", cfg.Name)
 
 	if strings.TrimSpace(cfg.RawJSON) == "" {
@@ -55,7 +55,7 @@ func DetectSecrets(cfg configparser.MCPServerConfig, configPath string) []proto.
 	return FromGitleaks(cfg, results, configPath)
 }
 
-func FromGitleaks(cfg configparser.MCPServerConfig, findings []report.Finding, configPath string) []proto.Finding {
+func FromGitleaks(cfg libmcp.MCPServerConfig, findings []report.Finding, configPath string) []proto.Finding {
 	out := make([]proto.Finding, 0, len(findings))
 
 	for _, f := range findings {

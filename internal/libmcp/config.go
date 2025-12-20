@@ -1,4 +1,4 @@
-package configparser
+package libmcp
 
 import (
 	"encoding/json"

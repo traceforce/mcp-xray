@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"mcpxray/internal/configscan/tokenanalyzer"
+	"mcpxray/internal/libmcp"
 	"mcpxray/internal/yararules"
 	"mcpxray/proto"
 )
@@ -39,7 +40,7 @@ func mapSeverity(s string) proto.RiskSeverity {
 	}
 }
 
-func (a *TokenAnalyzer) AnalyzeTools(ctx context.Context, tools []Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+func (a *TokenAnalyzer) AnalyzeTools(ctx context.Context, tools []libmcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
 	allFindings := []proto.Finding{}
 	for _, tool := range tools {
 		findings, err := a.AnalyzeTool(ctx, tool.Description, tool.Name, mcpServerName, configPath)

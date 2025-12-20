@@ -1,4 +1,4 @@
-package configscan
+package libmcp
 
 import (
 	"bufio"
@@ -20,20 +20,27 @@ import (
 	"syscall"
 	"time"
 
-	configparser "mcpxray/internal/configparser"
 	metadata "mcpxray/internal/metadata"
+	"mcpxray/proto"
 
 	"github.com/cenkalti/backoff/v4"
 )
 
+type MCPSession interface {
+	SendRequest(ctx context.Context, req MCPRequest) (*MCPResponse, error)
+	Close() error
+}
+
 // MCPSession represents an HTTP MCP session
-type MCPSession struct {
+type MCPHttpSession struct {
 	client    *http.Client
 	sessionID string
 	url       string
 	headers   map[string]string
 	mu        sync.Mutex // protects sessionID
 }
+
+var _ MCPSession = (MCPSession)(nil)
 
 // MCPStdioSession represents a STDIO MCP session
 type MCPStdioSession struct {
@@ -48,8 +55,85 @@ type MCPStdioSession struct {
 	closed  bool
 }
 
+// MCPRequest represents a JSON-RPC request to an MCP server
+type MCPRequest struct {
+	JSONRPC string      `json:"jsonrpc"`
+	Method  string      `json:"method"`
+	Params  interface{} `json:"params"`
+	ID      int         `json:"id"`
+}
+
+// MCPResponse represents a JSON-RPC response from an MCP server
+type MCPResponse struct {
+	JSONRPC string          `json:"jsonrpc"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   *MCPError       `json:"error,omitempty"`
+	ID      int             `json:"id"`
+}
+
+// MCPError represents an error in an MCP response
+type MCPError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+const (
+	MCPTimeout         = 5 * time.Second
+	MCPProtocolVersion = "2025-06-18"
+	MCPJSONRPCVersion  = "2.0"
+)
+
+var (
+	requestIDCounter int64
+	httpSessions     sync.Map // url + headers -> *MCPSession
+)
+
+var _ MCPSession = (MCPSession)(nil)
+
+func NewMCPSession(ctx context.Context, cfg MCPServerConfig) (MCPSession, error) {
+	transport := ClassifyTransport(cfg)
+	var session MCPSession
+	var err error
+	switch transport {
+	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO:
+		session, err = newMCPStdioSession(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		return session, nil
+	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP, proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE:
+		session, err = getOrCreateHTTPSession(*cfg.URL, cfg.Headers)
+		if err != nil {
+			return nil, err
+		}
+
+		// Standard MCP flow: initialize first before we can send any other requests
+		initReq := MCPRequest{
+			JSONRPC: MCPJSONRPCVersion,
+			Method:  "initialize",
+			Params: map[string]interface{}{
+				"protocolVersion": MCPProtocolVersion,
+				"capabilities":    map[string]interface{}{},
+				"clientInfo": map[string]string{
+					"name":    metadata.Name,
+					"version": metadata.Version,
+				},
+			},
+			ID: int(atomic.AddInt64(&requestIDCounter, 1)),
+		}
+
+		initResp, err := session.SendRequest(ctx, initReq)
+		if err != nil || initResp.Error != nil {
+			return nil, fmt.Errorf("failed to initialize session: %w", err)
+		}
+		return session, nil
+	default:
+		return nil, fmt.Errorf("unsupported transport type: %v", transport)
+	}
+}
+
 // newMCPSession creates a new MCP HTTP session
-func newMCPSession(url string, headers map[string]string) *MCPSession {
+func newMCPHttpSession(url string, headers map[string]string) *MCPHttpSession {
 	jar, _ := cookiejar.New(nil)
 	tr := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
@@ -62,7 +146,7 @@ func newMCPSession(url string, headers map[string]string) *MCPSession {
 		ForceAttemptHTTP2:     true,
 	}
 
-	return &MCPSession{
+	return &MCPHttpSession{
 		client: &http.Client{
 			Jar:       jar,
 			Transport: tr,
@@ -97,7 +181,7 @@ func hasAccessToken(headers map[string]string) bool {
 }
 
 // getOrCreateHTTPSession gets or creates a cached HTTP session
-func getOrCreateHTTPSession(url string, headers map[string]string) (*MCPSession, error) {
+func getOrCreateHTTPSession(url string, headers map[string]string) (*MCPHttpSession, error) {
 	// Initialize headers map if nil to avoid panics
 	if headers == nil {
 		headers = make(map[string]string)
@@ -105,22 +189,22 @@ func getOrCreateHTTPSession(url string, headers map[string]string) (*MCPSession,
 
 	key := httpCacheKey(url, headers)
 	if v, ok := httpSessions.Load(key); ok {
-		return v.(*MCPSession), nil
+		return v.(*MCPHttpSession), nil
 	}
 
 	// If the headers do not contain an access token, discover it and add it to the headers
 	if !hasAccessToken(headers) {
 		oauthConfig := NewOAuthConfig(url)
-		accessToken, err := oauthConfig.oauthDiscovery()
+		accessToken, err := oauthConfig.OauthDiscovery()
 		if err == nil && accessToken != "" {
 			headers["Authorization"] = "Bearer " + accessToken
 		}
 		// If we cannot discover the access token, just continue with the existing headers
 		// the the server might not require authentication
 	}
-	s := newMCPSession(url, headers)
+	s := newMCPHttpSession(url, headers)
 	actual, _ := httpSessions.LoadOrStore(key, s)
-	return actual.(*MCPSession), nil
+	return actual.(*MCPHttpSession), nil
 }
 
 // canonicalizeHeaders creates canonical string of headers
@@ -144,7 +228,7 @@ func canonicalizeHeaders(h map[string]string) string {
 }
 
 // newMCPStdioSession creates a new STDIO MCP session with retry
-func newMCPStdioSession(ctx context.Context, cfg configparser.MCPServerConfig) (*MCPStdioSession, error) {
+func newMCPStdioSession(ctx context.Context, cfg MCPServerConfig) (*MCPStdioSession, error) {
 	var session *MCPStdioSession
 
 	bo := backoff.NewExponentialBackOff()
@@ -166,7 +250,7 @@ func newMCPStdioSession(ctx context.Context, cfg configparser.MCPServerConfig) (
 }
 
 // newMCPStdioSessionOnce creates a STDIO session
-func newMCPStdioSessionOnce(ctx context.Context, cfg configparser.MCPServerConfig) (*MCPStdioSession, error) {
+func newMCPStdioSessionOnce(ctx context.Context, cfg MCPServerConfig) (*MCPStdioSession, error) {
 	if cfg.Command == nil {
 		return nil, fmt.Errorf("no command specified for STDIO transport")
 	}
@@ -285,8 +369,9 @@ func (s *MCPStdioSession) initialize() error {
 }
 
 // sendRequest sends a request through the STDIO session
-func (s *MCPStdioSession) sendRequest(req MCPRequest) (*MCPResponse, error) {
+func (s *MCPStdioSession) SendRequest(_ context.Context, req MCPRequest) (*MCPResponse, error) {
 	s.mu.Lock()
+	req.ID = int(atomic.AddInt64(&requestIDCounter, 1))
 	defer s.mu.Unlock()
 
 	if s.closed {
@@ -340,8 +425,8 @@ func (s *MCPStdioSession) Close() error {
 	return nil
 }
 
-// sendRequest sends an MCP request and manages session state with simple retry
-func (s *MCPSession) sendRequest(ctx context.Context, req MCPRequest) (*MCPResponse, error) {
+// SendRequest sends an MCP request and manages session state with simple retry
+func (s *MCPHttpSession) SendRequest(ctx context.Context, req MCPRequest) (*MCPResponse, error) {
 	var resp *MCPResponse
 
 	bo := backoff.NewExponentialBackOff()
@@ -363,7 +448,7 @@ func (s *MCPSession) sendRequest(ctx context.Context, req MCPRequest) (*MCPRespo
 }
 
 // sendRequestOnce performs a single HTTP request attempt
-func (s *MCPSession) sendRequestOnce(ctx context.Context, req MCPRequest) (*MCPResponse, error) {
+func (s *MCPHttpSession) sendRequestOnce(ctx context.Context, req MCPRequest) (*MCPResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -569,4 +654,11 @@ func parseSSEResponse(ctx context.Context, body io.Reader) (*MCPResponse, error)
 	}
 
 	return &mcpResp, nil
+}
+
+func (s *MCPHttpSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.client.CloseIdleConnections()
+	return nil
 }

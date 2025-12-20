@@ -1,4 +1,4 @@
-package configscan
+package libmcp
 
 import (
 	"context"
@@ -70,15 +70,15 @@ type TokenResponse struct {
 	Scope        string `json:"scope,omitempty"`
 }
 
-func (o *OAuthConfig) oauthDiscovery() (string, error) {
+func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	fmt.Println("1) Discovering Protected Resource Metadata (PRM)…")
-	prm, err := o.discoverPRM()
+	prm, err := o.DiscoverPRM()
 	if err != nil {
 		return "", err
 	}
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
-	asmd, err := o.discoverASMetadata(prm)
+	asmd, err := o.DiscoverASMetadata(prm)
 	if err != nil {
 		return "", err
 	}
@@ -95,7 +95,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 	scopeStr := strings.Join(scopes, " ")
 
 	fmt.Println("3) Dynamic Client Registration (public client)…")
-	dcr, err := o.dynamicClientRegister(asmd)
+	dcr, err := o.DynamicClientRegister(asmd)
 	if err != nil {
 		return "", err
 	}
@@ -145,7 +145,7 @@ func (o *OAuthConfig) oauthDiscovery() (string, error) {
 
 // ---------- OAuth discovery ----------
 
-func (o *OAuthConfig) discoverPRM() (*PRM, error) {
+func (o *OAuthConfig) DiscoverPRM() (*PRM, error) {
 	// Send initialize without auth to trigger 401
 	initPayload := map[string]any{
 		"jsonrpc": "2.0",
@@ -198,7 +198,7 @@ func (o *OAuthConfig) discoverPRM() (*PRM, error) {
 	return &prm, nil
 }
 
-func (o *OAuthConfig) discoverASMetadata(prm *PRM) (*ASMetadata, error) {
+func (o *OAuthConfig) DiscoverASMetadata(prm *PRM) (*ASMetadata, error) {
 	authBase := origin(o.MCPUrl)
 	if len(prm.AuthorizationServers) > 0 {
 		authBase = strings.TrimRight(prm.AuthorizationServers[0], "/")
@@ -233,7 +233,7 @@ func (o *OAuthConfig) discoverASMetadata(prm *PRM) (*ASMetadata, error) {
 	return &asmd, nil
 }
 
-func (o *OAuthConfig) dynamicClientRegister(asmd *ASMetadata) (*DCRResponse, error) {
+func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, error) {
 	regEP := asmd.RegistrationEndpoint
 	if regEP == "" {
 		regEP = origin(o.MCPUrl) + "/register"

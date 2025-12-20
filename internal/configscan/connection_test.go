@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	configparser "mcpxray/internal/configparser"
+	"mcpxray/internal/libmcp"
 	"mcpxray/proto"
 
 	"github.com/stretchr/testify/assert"
@@ -16,7 +16,7 @@ func TestCheckCertificate(t *testing.T) {
 
 	t.Run("Invalid TLS certificate", func(t *testing.T) {
 		url := "https://expired.badssl.com/"
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}
@@ -33,7 +33,7 @@ func TestCheckCertificate(t *testing.T) {
 
 	t.Run("Untrusted root TLS certificate", func(t *testing.T) {
 		url := "https://untrusted-root.badssl.com/"
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}
@@ -53,7 +53,7 @@ func TestCheckTLSVersion_WithTLS(t *testing.T) {
 	url := "https://mcp.asana.com/mcp"
 
 	scanner := NewConnectionScanner("/test/config.json")
-	cfg := configparser.MCPServerConfig{
+	cfg := libmcp.MCPServerConfig{
 		Name: "test-server",
 		URL:  &url,
 	}
@@ -90,7 +90,7 @@ func TestCheckTLSVersion_WithTLS(t *testing.T) {
 func TestCheckCertificate_ConnectionError(t *testing.T) {
 	scanner := NewConnectionScanner("/test/config.json")
 	invalidURL := "https://invalid-domain-that-does-not-exist-12345.com"
-	cfg := configparser.MCPServerConfig{
+	cfg := libmcp.MCPServerConfig{
 		Name: "test-server",
 		URL:  &invalidURL,
 	}
@@ -111,7 +111,7 @@ func TestDetectIdentityControl(t *testing.T) {
 	t.Run("Test Asana MCP server", func(t *testing.T) {
 		url := "https://mcp.asana.com/sse"
 		scanner := NewConnectionScanner("/test/config.json")
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}
@@ -135,7 +135,7 @@ func TestDetectIdentityControl(t *testing.T) {
 	t.Run("Test Github MCP server", func(t *testing.T) {
 		url := "https://api.githubcopilot.com/mcp/"
 		scanner := NewConnectionScanner("/test/config.json")
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}
@@ -154,7 +154,7 @@ func TestDetectIdentityControl(t *testing.T) {
 	t.Run("Test Supabase MCP server", func(t *testing.T) {
 		url := "https://mcp.supabase.com/mcp"
 		scanner := NewConnectionScanner("/test/config.json")
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}
@@ -173,7 +173,7 @@ func TestDetectIdentityControl(t *testing.T) {
 	t.Run("Test No authentication", func(t *testing.T) {
 		url := "https://www.google.com"
 		scanner := NewConnectionScanner("/test/config.json")
-		cfg := configparser.MCPServerConfig{
+		cfg := libmcp.MCPServerConfig{
 			Name: "test-server",
 			URL:  &url,
 		}

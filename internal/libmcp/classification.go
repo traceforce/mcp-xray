@@ -1,15 +1,14 @@
-package configscan
+package libmcp
 
 import (
 	"strings"
 
-	configparser "mcpxray/internal/configparser"
 	"mcpxray/proto"
 )
 
 // ClassifyTransport determines the transport mechanism based on MCP server configuration
 // Uses explicit Type field when available, otherwise falls back to legacy detection logic.
-func ClassifyTransport(cfg configparser.MCPServerConfig) proto.MCPTransportType {
+func ClassifyTransport(cfg MCPServerConfig) proto.MCPTransportType {
 	// Use explicit type field if present (Claude Code format)
 	if cfg.Type != nil && norm(*cfg.Type) != "" {
 		switch norm(*cfg.Type) {
