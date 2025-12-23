@@ -237,9 +237,8 @@ func NewPentestCommand() *cobra.Command {
 				}
 			}
 
-			// Validate LLM model (only required if test plan is not provided)
-			if testPlanFile == "" && llmModel == "" {
-				fmt.Println("Error: llm-model is required when test-plan is not provided")
+			if llmModel == "" {
+				fmt.Println("Error: llm-model is required")
 				os.Exit(1)
 			}
 
@@ -266,7 +265,7 @@ func NewPentestCommand() *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required if test-plan is not provided)")
+	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
 	cmd.Flags().String("test-plan", "", "Optional input test YAML file to use instead of generating a plan")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
 

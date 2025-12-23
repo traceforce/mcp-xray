@@ -17,9 +17,10 @@ import (
 
 // SDKSession wraps the official MCP SDK session to match our interface
 type SDKSession struct {
-	Session *mcp.ClientSession
-	Client  *mcp.Client
-	Type    proto.MCPTransportType
+	Session   *mcp.ClientSession
+	Client    *mcp.Client
+	Type      proto.MCPTransportType
+	Transport mcp.Transport
 }
 
 // NewSDKSession creates a new session using the official MCP SDK
@@ -89,9 +90,10 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	}
 
 	return &SDKSession{
-		Session: session,
-		Client:  client,
-		Type:    transportType,
+		Session:   session,
+		Client:    client,
+		Type:      transportType,
+		Transport: transport,
 	}, nil
 }
 
@@ -105,20 +107,24 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, error) {
 
 	// Create HTTP client with custom transport that adds headers
 	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 20 * time.Second,
 	}
 
 	if !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url)
 		accessToken, err := oauthConfig.OauthDiscovery()
-		if err == nil && accessToken != "" {
+		if err != nil {
+			// Log the error but don't fail - server might not require auth
+			fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+			fmt.Printf("Attempting connection without authentication...\n")
+		} else if accessToken != "" {
 			if cfg.Headers == nil {
 				cfg.Headers = make(map[string]string)
 			}
 			cfg.Headers["Authorization"] = "Bearer " + accessToken
 		}
 		// If we cannot discover the access token, just continue with the existing headers
-		// the the server might not require authentication
+		// the server might not require authentication
 	}
 
 	// If headers are configured, wrap the transport to add them to all requests

@@ -1,12 +1,11 @@
 {
   "mcpServers": {
-    "asana test server": {
-      "type": "http",
-      "url": "https://mcp.asana.com/mcp"
-    },
     "supabase test server": {
       "type": "http",
-      "url": "https://mcp.supabase.com/mcp"
+      "url": "https://mcp.supabase.com/mcp",
+      "headers": {
+        "Authorization": "Bearer sbp_oauth_55196d2657352fed4f9e879b51615076de87586b"
+      }
     }
   }
 }
