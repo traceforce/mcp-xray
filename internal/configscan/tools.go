@@ -71,7 +71,20 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	for _, server := range servers {
 		session, err := libmcp.NewSDKSession(ctx, server)
 		if err != nil {
-			return nil, err
+			// Handle connection errors gracefully - continue with other servers
+			fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
+			// Optionally add a finding about the connection failure
+			allFindings = append(allFindings, proto.Finding{
+				Tool:          "tools-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+				RuleId:        "connection_failed",
+				Title:         "Failed to connect to MCP server",
+				McpServerName: server.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err),
+			})
+			continue
 		}
 		defer session.Close()
 
@@ -94,7 +107,19 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 				})
 				continue
 			}
-			return nil, err
+			// Handle other errors gracefully too
+			fmt.Printf("Warning: Failed to list tools for MCP server '%s': %v\n", server.Name, err)
+			allFindings = append(allFindings, proto.Finding{
+				Tool:          "tools-scanner",
+				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+				RuleId:        "tools_list_failed",
+				Title:         "Failed to list tools from MCP server",
+				McpServerName: server.Name,
+				File:          s.MCPconfigPath,
+				Message:       fmt.Sprintf("Could not retrieve tools from MCP server '%s'. Error: %v", server.Name, err),
+			})
+			continue
 		}
 
 		if len(listToolsResult.Tools) == 0 {

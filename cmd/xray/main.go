@@ -24,26 +24,58 @@ var rootCmd = &cobra.Command{
 
 func NewConfigScanCommand() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "config-scan <config-file>",
+		Use:   "config-scan [config-file]",
 		Short: "Scan the configuration of the MCP server",
-		Args:  cobra.ExactArgs(1),
+		Long:  "Scan the configuration of the MCP server. Use --scan-known-configs to scan all known config paths.",
+		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Scanning the configuration of the MCP server")
-			configPath := args[0]
+			scanKnownConfigs, _ := cmd.Flags().GetBool("scan-known-configs")
 
-			// Validate that configPath is a file, not a directory
-			fileInfo, err := os.Stat(configPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					fmt.Printf("Error: config file does not exist: %s\n", configPath)
-				} else {
-					fmt.Printf("Error: cannot access config file: %s\n", err)
+			var configPaths []string
+
+			if scanKnownConfigs {
+				fmt.Println("Scanning all known MCP config paths")
+				allPaths, err := configscan.GetAllKnownConfigPaths()
+				if err != nil {
+					fmt.Printf("Error getting known config paths: %v\n", err)
+					os.Exit(1)
 				}
-				os.Exit(1)
-			}
-			if fileInfo.IsDir() {
-				fmt.Printf("Error: config path must be a file, not a directory: %s\n", configPath)
-				os.Exit(1)
+
+				// Filter to only existing files
+				for _, path := range allPaths {
+					if fileInfo, err := os.Stat(path); err == nil && !fileInfo.IsDir() {
+						configPaths = append(configPaths, path)
+						fmt.Printf("Found config: %s\n", path)
+					}
+				}
+
+				if len(configPaths) == 0 {
+					fmt.Println("No known config files found")
+					os.Exit(0)
+				}
+			} else {
+				if len(args) == 0 {
+					fmt.Println("Error: config file path is required when --scan-known-configs is not set")
+					os.Exit(1)
+				}
+				configPath := args[0]
+
+				// Validate that configPath is a file, not a directory
+				fileInfo, err := os.Stat(configPath)
+				if err != nil {
+					if os.IsNotExist(err) {
+						fmt.Printf("Error: config file does not exist: %s\n", configPath)
+					} else {
+						fmt.Printf("Error: cannot access config file: %s\n", err)
+					}
+					os.Exit(1)
+				}
+				if fileInfo.IsDir() {
+					fmt.Printf("Error: config path must be a file, not a directory: %s\n", configPath)
+					os.Exit(1)
+				}
+
+				configPaths = []string{configPath}
 			}
 
 			analyzerType, _ := cmd.Flags().GetString("analyzer-type")
@@ -69,19 +101,28 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 
 			toolsOutputFile, _ := cmd.Flags().GetString("tools-output")
-			scanner, err := configscan.NewConfigScanner(configPath, analyzerType, llmModel, toolsOutputFile)
-			if err != nil {
-				fmt.Println("Error creating config scanner:", err)
-				os.Exit(1)
-			}
-			findings, err := scanner.Scan(context.Background())
-			if err != nil {
-				fmt.Println("Error scanning configuration:", err)
-				os.Exit(1)
+
+			// Scan all config paths and combine findings
+			var allFindings []proto.Finding
+			ctx := context.Background()
+
+			for _, configPath := range configPaths {
+				fmt.Printf("\nScanning: %s\n", configPath)
+				scanner, err := configscan.NewConfigScanner(configPath, analyzerType, llmModel, toolsOutputFile)
+				if err != nil {
+					fmt.Printf("Warning: Error creating config scanner for %s: %v\n", configPath, err)
+					continue
+				}
+				findings, err := scanner.Scan(ctx)
+				if err != nil {
+					fmt.Printf("Warning: Error scanning configuration %s: %v\n", configPath, err)
+					continue
+				}
+				allFindings = append(allFindings, findings...)
 			}
 
 			outputPath, _ := cmd.Flags().GetString("output")
-			if err := writeFindings(findings, outputPath, "config-scan"); err != nil {
+			if err := writeFindings(allFindings, outputPath, "config-scan"); err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
@@ -91,6 +132,7 @@ func NewConfigScanCommand() *cobra.Command {
 	cmd.Flags().String("analyzer-type", "token", "Analyzer type to use: 'token' or 'llm' (default: token)")
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
+	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
 	return cmd
 }
 

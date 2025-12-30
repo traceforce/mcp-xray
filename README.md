@@ -80,6 +80,13 @@ Scan MCP server configurations for security issues:
 # Scan a specific MCP config file (uses token analyzer by default)
 ./mcpxray config-scan /path/to/mcp/config.json
 
+# Scan all known MCP config paths automatically for Cursor, Claude and Windsurf.
+# Known config locations (relative to home directory):
+#   ~/.cursor/mcp.json (Cursor)
+#   ~/Library/Application Support/Claude/claude_desktop_config.json (Claude Desktop)
+#   ~/.codeium/windsurf/mcp_config.json (Windsurf)
+./mcpxray config-scan --scan-known-configs
+
 # Use LLM analyzer for more extensive and deepr analysis
 ./mcpxray config-scan /path/to/mcp/config.json --analyzer-type llm --llm-model claude-3-5-sonnet-20241022
 
