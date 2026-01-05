@@ -6,6 +6,8 @@ A comprehensive open-source security scanning and penetration testing solution f
 
 MCP X-Ray is a unified security scanning and penetration testing solution for MCP servers. It analyzes configurations, detects exposed secrets, identifies unsafe tool definitions, and performs active penetration testing to uncover exploitable vulnerabilities. Scan results can be uploaded to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management and tracking. Atlas has rated hundreds of MCPs in its registry, providing a comprehensive security assessment database for the MCP ecosystem.
 
+![Atlas Registry](images/registry.png)
+
 ## Features
 
 ### Configuration Scanning (`config-scan`)
