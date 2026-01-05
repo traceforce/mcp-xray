@@ -1,9 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +20,7 @@ import (
 	"mcpxray/proto"
 
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 var rootCmd = &cobra.Command{
@@ -101,6 +108,23 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 
 			toolsOutputFile, _ := cmd.Flags().GetString("tools-output")
+			// Track if tools-output was user-specified before setting default
+			toolsOutputUserSpecified := toolsOutputFile != ""
+			// Set default tools output file if not provided
+			if toolsOutputFile == "" {
+				timestamp := time.Now().Format(time.RFC3339)
+				toolsOutputFile = fmt.Sprintf("tools_summary_%s.json", strings.ReplaceAll(timestamp, ":", "-"))
+			}
+
+			// Validate environment variables if upload is requested (before scanning)
+			upload, _ := cmd.Flags().GetBool("upload")
+			shouldUpload := upload && !scanKnownConfigs
+			if shouldUpload {
+				if err := validateTraceforceEnv(); err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+			}
 
 			// Scan all config paths and combine findings
 			var allFindings []proto.Finding
@@ -122,9 +146,34 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 
 			outputPath, _ := cmd.Flags().GetString("output")
-			if err := writeFindings(allFindings, outputPath, "config-scan"); err != nil {
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+			// Track if output was user-specified
+			outputUserSpecified := outputPath != ""
+			// Use the actual config path as source name (when uploading, configPaths has exactly one element)
+			sourceName := configPaths[0]
+			actualOutputPath, err := writeFindings(allFindings, outputPath, "config-scan", shouldUpload, sourceName, toolsOutputFile, "")
+			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
+			}
+			// Cleanup generated files if requested and upload was successful
+			if cleanup && shouldUpload {
+				// Only clean up files that were auto-generated
+				outputPathToClean := ""
+				if !outputUserSpecified {
+					outputPathToClean = actualOutputPath
+				}
+				toolsPathToClean := ""
+				if !toolsOutputUserSpecified {
+					toolsPathToClean = toolsOutputFile
+				}
+				if err := cleanupGeneratedFiles(outputPathToClean, toolsPathToClean, "", ""); err != nil {
+					fmt.Printf("Error cleaning up files: %v\n", err)
+					os.Exit(1)
+				}
+				if outputPathToClean != "" || toolsPathToClean != "" {
+					fmt.Printf("Generated files cleaned up\n")
+				}
 			}
 		},
 	}
@@ -133,6 +182,8 @@ func NewConfigScanCommand() *cobra.Command {
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd
 }
 
@@ -184,6 +235,15 @@ func NewRepoScanCommand() *cobra.Command {
 			runSecrets := runAll || enableSecrets
 			runSAST := runAll || enableSAST
 
+			// Validate environment variables if upload is requested (before scanning)
+			upload, _ := cmd.Flags().GetBool("upload")
+			if upload {
+				if err := validateTraceforceEnv(); err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+			}
+
 			var allFindings []proto.Finding
 			ctx := context.Background()
 
@@ -221,9 +281,24 @@ func NewRepoScanCommand() *cobra.Command {
 			}
 
 			outputPath, _ := cmd.Flags().GetString("output")
-			if err := writeFindings(allFindings, outputPath, "repo-scan"); err != nil {
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+			// For repo-scan, use repo path basename or default to "repo-scan"
+			sourceName := "repo-scan"
+			if repoPath != "." {
+				sourceName = filepath.Base(repoPath)
+			}
+			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, sourceName, "", "")
+			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
+			}
+			// Cleanup generated files if requested and upload was successful
+			if cleanup && upload {
+				if err := cleanupGeneratedFiles(actualOutputPath, "", "", ""); err != nil {
+					fmt.Printf("Error cleaning up files: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Generated files cleaned up\n")
 			}
 		},
 	}
@@ -234,6 +309,8 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("cve", false, "Run CVE/SCA scan (software composition analysis)")
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd
 }
 
@@ -246,6 +323,9 @@ func NewPentestCommand() *cobra.Command {
 			configPath := args[0]
 			llmModel, _ := cmd.Flags().GetString("llm-model")
 			testPlanFile, _ := cmd.Flags().GetString("test-plan")
+			testPlanDir, _ := cmd.Flags().GetString("test-directory")
+			// Track if test-directory was user-specified before setting default
+			testPlanDirUserSpecified := testPlanDir != ""
 
 			// Validate that configPath is a file, not a directory
 			fileInfo, err := os.Stat(configPath)
@@ -263,7 +343,14 @@ func NewPentestCommand() *cobra.Command {
 			}
 
 			// Validate test plan file if provided
+			var testPlanPath string
+			var isDirectory bool
+			var testFilePath string
+			// Track if test plan file was user-specified (via --test-plan)
+			testPlanFileUserSpecified := testPlanFile != ""
+
 			if testPlanFile != "" {
+				// --test-plan: must be a file that exists
 				testPlanInfo, err := os.Stat(testPlanFile)
 				if err != nil {
 					if os.IsNotExist(err) {
@@ -274,14 +361,56 @@ func NewPentestCommand() *cobra.Command {
 					os.Exit(1)
 				}
 				if testPlanInfo.IsDir() {
-					fmt.Printf("Error: test plan path must be a file, not a directory: %s\n", testPlanFile)
+					fmt.Printf("Error: --test-plan must be a file, not a directory: %s\n", testPlanFile)
 					os.Exit(1)
 				}
+				isDirectory = false
+				testPlanPath = testPlanFile
+				testFilePath = testPlanFile
+			} else {
+				// --test-directory: use provided directory or default
+				if testPlanDir == "" {
+					// Use default directory - create it
+					timestamp := time.Now().Format(time.RFC3339)
+					timestamp = strings.ReplaceAll(timestamp, ":", "-")
+					testPlanDir = fmt.Sprintf("pentest_plans_%s", timestamp)
+					if err := os.MkdirAll(testPlanDir, 0755); err != nil {
+						fmt.Printf("Error: failed to create default test plan directory: %v\n", err)
+						os.Exit(1)
+					}
+				} else {
+					// Directory was specified - validate that it exists
+					testPlanInfo, err := os.Stat(testPlanDir)
+					if err != nil {
+						if os.IsNotExist(err) {
+							fmt.Printf("Error: test plan directory does not exist: %s\n", testPlanDir)
+							os.Exit(1)
+						} else {
+							fmt.Printf("Error: cannot access test plan directory: %s\n", err)
+							os.Exit(1)
+						}
+					}
+					if !testPlanInfo.IsDir() {
+						fmt.Printf("Error: --test-directory must be a directory, not a file: %s\n", testPlanDir)
+						os.Exit(1)
+					}
+				}
+				isDirectory = true
+				testPlanPath = testPlanDir
 			}
 
 			if llmModel == "" {
 				fmt.Println("Error: llm-model is required for pentest.")
 				os.Exit(1)
+			}
+
+			// Validate environment variables if upload is requested (before running pentest)
+			upload, _ := cmd.Flags().GetBool("upload")
+			if upload {
+				if err := validateTraceforceEnv(); err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
 			}
 
 			// Create pentest tool
@@ -293,23 +422,73 @@ func NewPentestCommand() *cobra.Command {
 
 			// Run pentest
 			ctx := context.Background()
-			findings, err := pentestTool.Pentest(ctx, testPlanFile)
+			findings, err := pentestTool.Pentest(ctx, testPlanPath)
 			if err != nil {
 				fmt.Printf("Error running pentest: %v\n", err)
 				os.Exit(1)
 			}
 
+			// If using directory mode and uploading, merge all test plans
+			if isDirectory && upload {
+				mergedTestPlan, err := mergeTestPlansFromDir(testPlanPath)
+				if err != nil {
+					fmt.Printf("Warning: failed to merge test plans: %v\n", err)
+				} else if mergedTestPlan != "" {
+					// Write merged test plan to a temporary file
+					mergedFilePath := filepath.Join(testPlanPath, "merged_test_plan.yaml")
+					if err := os.WriteFile(mergedFilePath, []byte(mergedTestPlan), 0644); err != nil {
+						fmt.Printf("Warning: failed to write merged test plan: %v\n", err)
+					} else {
+						testFilePath = mergedFilePath
+					}
+				}
+			}
+
 			// Write findings to output file
 			outputPath, _ := cmd.Flags().GetString("output")
-			if err := writeFindings(findings, outputPath, "pentest"); err != nil {
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+			// Track if output was user-specified
+			outputUserSpecified := outputPath != ""
+			sourceName := configPath
+			// Track test plan directory for cleanup (only if in directory mode and not user-specified)
+			var testPlanDirPath string
+			if isDirectory && !testPlanDirUserSpecified {
+				testPlanDirPath = testPlanPath
+			}
+			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath)
+			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
+			}
+			// Cleanup generated files if requested and upload was successful
+			if cleanup && upload {
+				// Only clean up files that were auto-generated
+				outputPathToClean := ""
+				if !outputUserSpecified {
+					outputPathToClean = actualOutputPath
+				}
+				// Only clean up testFilePath if it was auto-generated (merged test plan), not if user-specified via --test-plan
+				testFilePathToClean := ""
+				if !testPlanFileUserSpecified && testFilePath != "" {
+					testFilePathToClean = testFilePath
+				}
+				// testPlanDirPath is only set if directory was auto-generated
+				if err := cleanupGeneratedFiles(outputPathToClean, "", testFilePathToClean, testPlanDirPath); err != nil {
+					fmt.Printf("Error cleaning up files: %v\n", err)
+					os.Exit(1)
+				}
+				if outputPathToClean != "" || testFilePathToClean != "" || testPlanDirPath != "" {
+					fmt.Printf("Generated files cleaned up\n")
+				}
 			}
 		},
 	}
 	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
-	cmd.Flags().String("test-plan", "", "Optional input test YAML file to use instead of generating a plan")
+	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
+	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 
 	return cmd
 }
@@ -327,10 +506,10 @@ func main() {
 	}
 }
 
-func writeFindings(findings []proto.Finding, outputPath string, commandName string) error {
+func writeFindings(findings []proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
 	sarifBytes, err := report.GenerateSarif(findings)
 	if err != nil {
-		return fmt.Errorf("error generating SARIF report: %w", err)
+		return "", fmt.Errorf("error generating SARIF report: %w", err)
 	}
 
 	if outputPath == "" {
@@ -342,9 +521,313 @@ func writeFindings(findings []proto.Finding, outputPath string, commandName stri
 
 	err = os.WriteFile(outputPath, sarifBytes, 0644)
 	if err != nil {
-		return fmt.Errorf("error writing to output file %s: %w", outputPath, err)
+		return "", fmt.Errorf("error writing to output file %s: %w", outputPath, err)
 	}
 
 	fmt.Printf("SARIF report written to %s\n", outputPath)
+
+	// Upload to Traceforce if requested
+	if upload {
+		if err := uploadToTraceforceAtlas(outputPath, sarifBytes, sourceName, toolsFilePath, testFilePath); err != nil {
+			return "", fmt.Errorf("error uploading to Traceforce: %w", err)
+		}
+		fmt.Printf("SARIF report uploaded to Traceforce Atlas\n")
+	}
+
+	return outputPath, nil
+}
+
+func cleanupGeneratedFiles(outputPath string, toolsFilePath string, testFilePath string, testPlanDirPath string) error {
+	// Delete SARIF output file
+	if err := os.Remove(outputPath); err != nil {
+		return fmt.Errorf("error deleting output file %s: %w", outputPath, err)
+	}
+
+	// Delete tools file if it exists
+	if toolsFilePath != "" {
+		if err := os.Remove(toolsFilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("error deleting tools file %s: %w", toolsFilePath, err)
+		}
+	}
+
+	// Delete test file if it exists
+	if testFilePath != "" {
+		if err := os.Remove(testFilePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("error deleting test file %s: %w", testFilePath, err)
+		}
+	}
+
+	// Delete test plan directory if it exists
+	if testPlanDirPath != "" {
+		if err := os.RemoveAll(testPlanDirPath); err != nil {
+			return fmt.Errorf("error deleting test plan directory %s: %w", testPlanDirPath, err)
+		}
+	}
+
 	return nil
+}
+
+func validateTraceforceEnv() error {
+	clientID := os.Getenv("TRACEFORCE_CLIENT_ID")
+	if clientID == "" {
+		return fmt.Errorf("TRACEFORCE_CLIENT_ID environment variable is required for upload")
+	}
+
+	clientSecret := os.Getenv("TRACEFORCE_CLIENT_SECRET")
+	if clientSecret == "" {
+		return fmt.Errorf("TRACEFORCE_CLIENT_SECRET environment variable is required for upload")
+	}
+
+	return nil
+}
+
+func getBearerToken(apiURL string) (string, error) {
+	clientID := os.Getenv("TRACEFORCE_CLIENT_ID")
+	clientSecret := os.Getenv("TRACEFORCE_CLIENT_SECRET")
+
+	// Prepare request body
+	requestBody := map[string]string{
+		"client_id":     clientID,
+		"client_secret": clientSecret,
+	}
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("error marshaling request body: %w", err)
+	}
+
+	// Create HTTP request
+	url := strings.TrimSuffix(apiURL, "/") + "/api/v1/api-keys"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return "", fmt.Errorf("error creating HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+
+	// Send request
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error sending HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response body: %w", err)
+	}
+
+	// Check status code
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Parse response to get bearer token
+	var response struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(bodyBytes, &response); err != nil {
+		return "", fmt.Errorf("error parsing response: %w", err)
+	}
+
+	if response.AccessToken == "" {
+		return "", fmt.Errorf("access_token not found in response")
+	}
+
+	return response.AccessToken, nil
+}
+
+func uploadToTraceforceAtlas(filePath string, sarifBytes []byte, sourceName string, toolsFilePath string, testFilePath string) error {
+	// Get API URL from environment variable or use default
+	apiURL := os.Getenv("TRACEFORCE_API_URL")
+	if apiURL == "" {
+		apiURL = DefaultTraceforceAPIURL
+	}
+
+	// Exchange client credentials for bearer token
+	token, err := getBearerToken(apiURL)
+	if err != nil {
+		return fmt.Errorf("error getting bearer token: %w", err)
+	}
+
+	// Create multipart form
+	var requestBody bytes.Buffer
+	writer := multipart.NewWriter(&requestBody)
+
+	// Add file field (main SARIF report)
+	fileName := filepath.Base(filePath)
+	fileWriter, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return fmt.Errorf("error creating form file field: %w", err)
+	}
+	if _, err := io.Copy(fileWriter, bytes.NewReader(sarifBytes)); err != nil {
+		return fmt.Errorf("error writing file to form: %w", err)
+	}
+
+	// Add tools_file if provided (upload as regular file, like in the test)
+	if toolsFilePath != "" {
+		toolsFile, err := os.Open(toolsFilePath)
+		if err != nil {
+			return fmt.Errorf("error opening tools file %s: %w", toolsFilePath, err)
+		}
+		defer toolsFile.Close()
+
+		toolsFileName := filepath.Base(toolsFilePath)
+		toolsFileWriter, err := writer.CreateFormFile("tools_file", toolsFileName)
+		if err != nil {
+			return fmt.Errorf("error creating tools_file form field: %w", err)
+		}
+		if _, err := io.Copy(toolsFileWriter, toolsFile); err != nil {
+			return fmt.Errorf("error writing tools_file to form: %w", err)
+		}
+	}
+
+	// Add test_file if provided (upload as regular file, backend will handle base64 encoding)
+	if testFilePath != "" {
+		testFile, err := os.Open(testFilePath)
+		if err != nil {
+			return fmt.Errorf("error opening test file %s: %w", testFilePath, err)
+		}
+		defer testFile.Close()
+
+		testFileName := filepath.Base(testFilePath)
+		testFileWriter, err := writer.CreateFormFile("test_file", testFileName)
+		if err != nil {
+			return fmt.Errorf("error creating test_file form field: %w", err)
+		}
+		if _, err := io.Copy(testFileWriter, testFile); err != nil {
+			return fmt.Errorf("error writing test_file to form: %w", err)
+		}
+	}
+
+	// Add source_name field
+	if err := writer.WriteField("source_name", sourceName); err != nil {
+		return fmt.Errorf("error writing source_name field: %w", err)
+	}
+
+	// Close the multipart writer
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("error closing multipart writer: %w", err)
+	}
+
+	// Create HTTP request
+	url := strings.TrimSuffix(apiURL, "/") + "/api/v1/scan-reports"
+	req, err := http.NewRequest("POST", url, &requestBody)
+	if err != nil {
+		return fmt.Errorf("error creating HTTP request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	// Send request
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending HTTP request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Read response body
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("error reading response body: %w", err)
+	}
+
+	// Check status code
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return nil
+}
+
+// mergeTestPlansFromDir reads all YAML test plan files from a directory and merges them into a single test plan
+func mergeTestPlansFromDir(dirPath string) (string, error) {
+	// Read all YAML files from the directory
+	files, err := os.ReadDir(dirPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read directory: %w", err)
+	}
+
+	// Define types locally to match pentest package structure
+	type TestPlan struct {
+		Metadata struct {
+			Version string `yaml:"version"`
+			Target  string `yaml:"target"`
+			Focus   string `yaml:"focus"`
+		} `yaml:"metadata"`
+		Tests []map[string]interface{} `yaml:"tests"`
+	}
+
+	var allTests []map[string]interface{}
+	var serverNames []string
+
+	// Process each YAML file
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+
+		// Only process .yaml and .yml files, skip merged file
+		fileName := file.Name()
+		if !strings.HasSuffix(strings.ToLower(fileName), ".yaml") && !strings.HasSuffix(strings.ToLower(fileName), ".yml") {
+			continue
+		}
+		if fileName == "merged_test_plan.yaml" {
+			continue
+		}
+
+		filePath := filepath.Join(dirPath, fileName)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Printf("Warning: failed to read test plan file %s: %v\n", fileName, err)
+			continue
+		}
+
+		var testPlan TestPlan
+		if err := yaml.Unmarshal(data, &testPlan); err != nil {
+			fmt.Printf("Warning: failed to parse YAML in file %s: %v\n", fileName, err)
+			continue
+		}
+
+		// Collect all tests and server names
+		allTests = append(allTests, testPlan.Tests...)
+		if testPlan.Metadata.Target != "" {
+			serverNames = append(serverNames, testPlan.Metadata.Target)
+		}
+	}
+
+	if len(allTests) == 0 {
+		return "", fmt.Errorf("no test plans found in directory")
+	}
+
+	// Create merged plan with single metadata header
+	mergedPlan := map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"version": "1.0",
+			"target": func() string {
+				if len(serverNames) > 0 {
+					return strings.Join(serverNames, ", ")
+				}
+				return "Multiple MCP Servers"
+			}(),
+			"focus": "Critical security vulnerabilities",
+		},
+		"tests": allTests,
+	}
+
+	mergedYAML, err := yaml.Marshal(&mergedPlan)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal merged YAML: %w", err)
+	}
+
+	return string(mergedYAML), nil
 }
