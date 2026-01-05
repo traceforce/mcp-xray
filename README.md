@@ -34,6 +34,8 @@ Performs comprehensive security analysis of MCP server codebases before adding t
 
 Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. See the [Uploading Results to Traceforce](#uploading-results-to-traceforce) section for usage details.
 
+![Atlas Report History](images/atlas-report-history.png)
+
 ## Installation
 
 ### Prerequisites

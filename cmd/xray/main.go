@@ -182,7 +182,7 @@ func NewConfigScanCommand() *cobra.Command {
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
-	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd
 }
@@ -309,7 +309,7 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("cve", false, "Run CVE/SCA scan (software composition analysis)")
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
-	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd
 }
@@ -487,7 +487,7 @@ func NewPentestCommand() *cobra.Command {
 	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
 	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
-	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_API_URL, TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 
 	return cmd
@@ -643,7 +643,7 @@ func getBearerToken(apiURL string) (string, error) {
 
 func uploadToTraceforceAtlas(filePath string, sarifBytes []byte, sourceName string, toolsFilePath string, testFilePath string) error {
 	// Get API URL from environment variable or use default
-	apiURL := os.Getenv("TRACEFORCE_API_URL")
+	apiURL := os.Getenv("TRACEFORCE_API_ENDPOINT")
 	if apiURL == "" {
 		apiURL = DefaultTraceforceAPIURL
 	}
