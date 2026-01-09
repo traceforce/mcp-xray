@@ -135,16 +135,20 @@ MCP X-Ray generates reports in [SARIF (Static Analysis Results Interchange Forma
 
 ## Uploading Results to Traceforce
 
-Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. Add the `--upload` flag to any scan command. Use `--clean-up` to remove generated files after successful upload. Environment variables required:
+Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. Add the `--upload` flag to any scan command. Use `--clean-up` to remove generated files after successful upload.
+
+Environment variables required:
 - `TRACEFORCE_CLIENT_ID`
 - `TRACEFORCE_CLIENT_SECRET`
+
+These credentials can be downloaded from the settings page on the Atlas UI.
 
 ```bash
 # Upload config scan results
 ./mcpxray config-scan /path/to/mcp/config.json --upload
 
 # Upload with cleanup
-./mcpxray config-scan /path/to/mcp/config.json --upload --clean-up
+./mcpxray config-scan /path/xia-add-registry-imageto/mcp/config.json --upload --clean-up
 
 # Upload pentest results
 ./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
