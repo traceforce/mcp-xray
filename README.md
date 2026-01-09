@@ -161,7 +161,7 @@ Example scan outputs are available in `examples/findings/`.
 Example MCP configuration files are available in the `examples/mcp_configs/` directory.
 
 An example MCP Server is available in the `examples/mcp_server/` directory:
-- `mcp_server.py`: FastMCP server using streamable-http transport
+- `mcp_server.py`: [FastMCP](https://github.com/jlowin/fastmcp) server using streamable-http transport
 - `mcp.json`: Configuration file for connecting to the server
 - `README.md`: Instructions for setting up and scanning the server
 
