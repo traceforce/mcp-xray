@@ -137,16 +137,20 @@ MCP X-Ray generates reports in [SARIF (Static Analysis Results Interchange Forma
 
 ## Uploading Results to Traceforce
 
-Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. Add the `--upload` flag to any scan command. Use `--clean-up` to remove generated files after successful upload. Environment variables required:
+Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. Add the `--upload` flag to any scan command. Use `--clean-up` to remove generated files after successful upload.
+
+Environment variables required:
 - `TRACEFORCE_CLIENT_ID`
 - `TRACEFORCE_CLIENT_SECRET`
+
+These credentials can be downloaded from the settings page on the Atlas UI.
 
 ```bash
 # Upload config scan results
 ./mcpxray config-scan /path/to/mcp/config.json --upload
 
 # Upload with cleanup
-./mcpxray config-scan /path/to/mcp/config.json --upload --clean-up
+./mcpxray config-scan /path/xia-add-registry-imageto/mcp/config.json --upload --clean-up
 
 # Upload pentest results
 ./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
@@ -159,7 +163,7 @@ Example scan outputs are available in `examples/findings/`.
 Example MCP configuration files are available in the `examples/mcp_configs/` directory.
 
 An example MCP Server is available in the `examples/mcp_server/` directory:
-- `mcp_server.py`: FastMCP server using streamable-http transport
+- `mcp_server.py`: [FastMCP](https://github.com/jlowin/fastmcp) server using streamable-http transport
 - `mcp.json`: Configuration file for connecting to the server
 - `README.md`: Instructions for setting up and scanning the server
 
