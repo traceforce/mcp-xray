@@ -5,7 +5,7 @@
         "args": [
           "@playwright/mcp@latest",
           "--isolated",
-          "--storage-state=/tmp/storage.json"
+          "--storage-state=examples/mcp_configs/playwright_storage.json"
         ]
       }
     }
