@@ -140,7 +140,21 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, error) {
 
 // Close closes the session
 func (s *SDKSession) Close() error {
-	return s.Session.Close()
+	// Add timeout to prevent hanging when MCP server is stuck
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Session.Close()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		// Timeout after 30 seconds - the MCP server might be stuck
+		// For stdio transport, we can't force kill the process from here,
+		// but at least we won't hang forever
+		return fmt.Errorf("session close timed out after 30 seconds")
+	}
 }
 
 // headerTransport wraps an http.RoundTripper and adds headers to all requests

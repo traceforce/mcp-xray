@@ -4,7 +4,7 @@
       "type": "http",
       "url": "https://mcp.asana.com/mcp",
       "headers": {
-        "Authorization": "Bearer 1212449093048364:qznICNkXrbemfsPl:ueTi00emOC30DkA7ZBbv4BZwxDmYtfFz"
+        "Authorization": "Bearer $ASANA_TOKEN"
       }
     }
   }

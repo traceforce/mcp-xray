@@ -168,27 +168,6 @@
             "tool": "connection-scanner",
             "type": "CONNECTION"
           }
-        },
-        {
-          "ruleId": "401_unauthorized",
-          "level": "warning",
-          "message": {
-            "text": "Authorization issue: Failed to get tools from MCP server 'github test server' due to 401 Unauthorized error. This may indicate missing or invalid authentication credentials, or insufficient OAuth scopes. Error: direct tools/list failed: HTTP error 401: bad request: missing required Authorization header\n"
-          },
-          "locations": [
-            {
-              "physicalLocation": {
-                "artifactLocation": {
-                  "uri": "examples/mcp_configs/remote_mcp_oauth.json"
-                }
-              }
-            }
-          ],
-          "properties": {
-            "mcpServerName": "github test server",
-            "tool": "tools-scanner",
-            "type": "CONNECTION"
-          }
         }
       ]
     }
