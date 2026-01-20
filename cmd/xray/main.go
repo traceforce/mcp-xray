@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -604,6 +605,9 @@ func getBearerToken(apiURL string) (string, error) {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
+	if bypassToken := os.Getenv("TRACEFORCE_VERCEL_BYPASS_TOKEN"); bypassToken != "" {
+		req.Header.Set("x-vercel-protection-bypass", bypassToken)
+	}
 
 	// Send request
 	client := &http.Client{
@@ -636,6 +640,44 @@ func getBearerToken(apiURL string) (string, error) {
 
 	if response.AccessToken == "" {
 		return "", fmt.Errorf("access_token not found in response")
+	}
+
+	// Parse JWT to check expiry
+	parts := strings.Split(response.AccessToken, ".")
+	if len(parts) != 3 {
+		return "", fmt.Errorf("invalid JWT token format")
+	}
+
+	// Decode payload (second part) - JWT uses base64url encoding
+	payload := parts[1]
+	// Add padding if needed for base64 decoding
+	if len(payload)%4 != 0 {
+		payload += strings.Repeat("=", 4-len(payload)%4)
+	}
+
+	decoded, err := base64.URLEncoding.DecodeString(payload)
+	if err != nil {
+		// Try without padding (base64url doesn't require padding)
+		decoded, err = base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return "", fmt.Errorf("error decoding JWT payload: %w", err)
+		}
+	}
+
+	// Parse JSON payload
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return "", fmt.Errorf("error parsing JWT claims: %w", err)
+	}
+
+	// Check if token is expired
+	if claims.Exp > 0 {
+		expiryTime := time.Unix(claims.Exp, 0)
+		if time.Now().After(expiryTime) {
+			return "", fmt.Errorf("Access token expired at %s. Please generate a new one.", expiryTime.Format(time.RFC3339))
+		}
 	}
 
 	return response.AccessToken, nil
@@ -724,6 +766,9 @@ func uploadToTraceforceAtlas(filePath string, sarifBytes []byte, sourceName stri
 	// Set headers
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if bypassToken := os.Getenv("TRACEFORCE_VERCEL_BYPASS_TOKEN"); bypassToken != "" {
+		req.Header.Set("x-vercel-protection-bypass", bypassToken)
+	}
 
 	// Send request
 	client := &http.Client{
