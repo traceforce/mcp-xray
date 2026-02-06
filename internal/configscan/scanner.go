@@ -27,8 +27,8 @@ func NewConfigScanner(configPath string, analyzerType string, model string, tool
 	}, nil
 }
 
-func (s *ConfigScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
-	findings := []proto.Finding{}
+func (s *ConfigScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
+	findings := []*proto.Finding{}
 
 	connectionFindings, err := s.connectionScanner.Scan(ctx)
 	if err != nil {

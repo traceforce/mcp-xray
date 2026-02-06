@@ -277,10 +277,10 @@ func parseSeverity(severity string) proto.RiskSeverity {
 	}
 }
 
-func ToFindings(matches []UnsafeCommandMatch) []proto.Finding {
-	out := make([]proto.Finding, 0, len(matches))
+func ToFindings(matches []UnsafeCommandMatch) []*proto.Finding {
+	out := make([]*proto.Finding, 0, len(matches))
 	for _, match := range matches {
-		out = append(out, proto.Finding{
+		out = append(out, &proto.Finding{
 			Tool:     "sast",
 			Type:     proto.FindingType_FINDING_TYPE_SAST,
 			Severity: match.Severity,

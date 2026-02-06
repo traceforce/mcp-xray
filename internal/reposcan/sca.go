@@ -26,7 +26,7 @@ func NewSCAScanner(repoPath string, config *Config) *SCAScanner {
 	}
 }
 
-func (s *SCAScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *SCAScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	actions := osvscanner.ScannerActions{
 		// Scan this directory as "project source"
 		DirectoryPaths: []string{s.repoPath},
@@ -138,8 +138,8 @@ func getDatabaseSpecificString(v *osvschema.Vulnerability, key string) (string, 
 }
 
 // FromOSV converts osv-scanner results into unified Finding objects.
-func FromOSV(results models.VulnerabilityResults) []proto.Finding {
-	out := []proto.Finding{}
+func FromOSV(results models.VulnerabilityResults) []*proto.Finding {
+	out := []*proto.Finding{}
 
 	for _, r := range results.Results {
 		for _, pkg := range r.Packages {
@@ -152,7 +152,7 @@ func FromOSV(results models.VulnerabilityResults) []proto.Finding {
 				// Get file path from result source
 				filePath := r.Source.Path
 
-				out = append(out, proto.Finding{
+				out = append(out, &proto.Finding{
 					Tool:     "osv",
 					Type:     proto.FindingType_FINDING_TYPE_SCA,
 					Severity: sev,

@@ -29,7 +29,7 @@ func NewConnectionScanner(configPath string) *ConnectionScanner {
 
 // For HTTP MCP servers, scan for authentication vulnerabilities.
 // For STDIO MCP servers, this part will be skipped.
-func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	// Parse configPath
 	servers, err := libmcp.NewConfigParser(s.MCPconfigPath).Parse()
 	if err != nil {
@@ -38,7 +38,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 
 	fmt.Printf("Connection scanner scanning %d MCP servers\n", len(servers))
 
-	findings := []proto.Finding{}
+	findings := []*proto.Finding{}
 	for _, server := range servers {
 		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
 		classification := libmcp.ClassifyTransport(server)
@@ -50,7 +50,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			}
 			findings = append(findings, results...)
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO:
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -113,7 +113,7 @@ func isCertificateError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	// Check for x509 certificate errors (remote cert problems, not local system issues)
 	var x509UnknownAuthErr x509.UnknownAuthorityError
 	var x509CertInvalidErr x509.CertificateInvalidError
@@ -121,7 +121,7 @@ func isCertificateError(err error) bool {
 	var x509InsecureAlgErr x509.InsecureAlgorithmError
 	var x509ConstraintErr x509.ConstraintViolationError
 	var x509UnhandledExtErr x509.UnhandledCriticalExtension
-	
+
 	return errors.As(err, &x509UnknownAuthErr) ||
 		errors.As(err, &x509CertInvalidErr) ||
 		errors.As(err, &x509HostnameErr) ||
@@ -136,14 +136,14 @@ func isTLSProtocolError(err error) bool {
 	if err == nil {
 		return false
 	}
-	
+
 	var opErr *net.OpError
 	if errors.As(err, &opErr) {
 		// Server sends TLS alert (e.g., handshake failure, protocol version not supported)
 		if opErr.Op == remoteErrorOp {
 			return true
 		}
-		
+
 		// Connection reset during handshake - common when server rejects old TLS versions
 		// Modern servers (nginx/OpenSSL) often send TCP RST instead of TLS alert
 		if opErr.Op == readOp {
@@ -153,16 +153,16 @@ func isTLSProtocolError(err error) bool {
 			}
 		}
 	}
-	
+
 	// Client-side rejection when server selects unsupported protocol version
 	if strings.Contains(err.Error(), unsupportedVersionErrorMsg) {
 		return true
 	}
-	
+
 	return false
 }
 
-func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
 	}
@@ -170,7 +170,7 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPSe
 
 	// Report localhost/loopback addresses as medium risk
 	if isLocalhostOrLoopback(urlStr) {
-		return []proto.Finding{
+		return []*proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -184,7 +184,7 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPSe
 		}, nil
 	}
 
-	var allFindings []proto.Finding
+	var allFindings []*proto.Finding
 
 	// Perform certificate checks. All errors found are critical findings.
 	findings, err := s.checkCertificate(cfg)
@@ -218,8 +218,8 @@ func (s *ConnectionScanner) ScanConnection(ctx context.Context, cfg libmcp.MCPSe
 	return allFindings, nil
 }
 
-func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
-	var findings []proto.Finding
+func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
+	var findings []*proto.Finding
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
 	}
@@ -242,7 +242,7 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]prot
 	if err != nil {
 		fmt.Printf("Http error: %s, response: %+v\n", err.Error(), resp)
 		if isCertificateError(err) {
-			return []proto.Finding{
+			return []*proto.Finding{
 				{
 					Tool:          "connection-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -255,7 +255,7 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]prot
 				},
 			}, nil
 		} else if resp == nil {
-			return []proto.Finding{
+			return []*proto.Finding{
 				{
 					Tool:          "connection-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -279,7 +279,7 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]prot
 		// Log the TLS version as we'll perform further checks on the TLS version later.
 		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
 	} else {
-		findings = append(findings, proto.Finding{
+		findings = append(findings, &proto.Finding{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 			Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
@@ -296,8 +296,8 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]prot
 
 // checkTLSVersion checks if the server supports the specified TLS version.
 // For highest security, the MCP server should only support the highest version available and never anything below 1.2.
-func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
-	var findings []proto.Finding
+func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
+	var findings []*proto.Finding
 	if cfg.URL == nil {
 		return nil, fmt.Errorf("URL is not set")
 	}
@@ -323,7 +323,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 		// Check if this is NOT a TLS protocol error (version not supported)
 		if !isTLSProtocolError(err) {
 			// Connection error - report as finding and stop checking other TLS versions
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
@@ -343,7 +343,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 		// For tls version 1.1 and 1.2, we will not return a finding if the server does not support the version
 		// as it's recommended to only support the highest version available.
 		if tlsVersion == tls.VersionTLS13 {
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
@@ -363,7 +363,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 	if resp.TLS != nil {
 		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
 		if resp.TLS.Version == tls.VersionTLS12 {
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -374,7 +374,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 				Message:       fmt.Sprintf("The MCP server '%s' at %s accepts TLS version 1.2. While TLS 1.2 is still secure, TLS 1.3 provides improved security and performance. Consider disabling TLS 1.2 support and only accepting TLS 1.3.", cfg.Name, urlStr),
 			})
 		} else if resp.TLS.Version == tls.VersionTLS11 {
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
@@ -385,7 +385,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 				Message:       fmt.Sprintf("The MCP server '%s' at %s accepts TLS version 1.1. This version is vulnerable to various attacks and has been deprecated. Disable TLS 1.1 support immediately and only accept TLS 1.3.", cfg.Name, urlStr),
 			})
 		} else if resp.TLS.Version == tls.VersionTLS10 {
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_CRITICAL,
@@ -402,7 +402,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 }
 
 // Detect the authentication method used by the MCP server.
-func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
 	// Directly check HTTP authentication
 	client := &http.Client{
 		Timeout: 30 * time.Second,
@@ -424,7 +424,7 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 		}
 		return findings, nil
 	case http.StatusOK:
-		return []proto.Finding{
+		return []*proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -438,7 +438,7 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 		}, nil
 	default:
 		// Do not report findings if we cannot find anything definitive.
-		return []proto.Finding{
+		return []*proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -453,13 +453,13 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 	}
 }
 
-func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.Finding, error) {
+func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
 	oauthConfig := libmcp.NewOAuthConfig(*cfg.URL)
 
 	fmt.Println("1) Checking Protected Resource Metadata (PRM) is properly configured")
 	prm, err := oauthConfig.DiscoverPRM()
 	if err != nil {
-		return []proto.Finding{
+		return []*proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -476,7 +476,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 	fmt.Println("2) Discovering Authorization Server Metadata…")
 	asmd, err := oauthConfig.DiscoverASMetadata(prm)
 	if err != nil {
-		return []proto.Finding{
+		return []*proto.Finding{
 			{
 				Tool:          "connection-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -494,9 +494,9 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 	fmt.Printf("PRM OAuth scopes for %s: scope count %d\n", cfg.Name, len(prm.ScopesSupported))
 	fmt.Printf("ASMD OAuth scopes for %s: scope count %d\n", cfg.Name, len(asmd.ScopesSupported))
 
-	allFindings := []proto.Finding{}
+	allFindings := []*proto.Finding{}
 	if len(prm.ScopesSupported) == 0 {
-		allFindings = append(allFindings, proto.Finding{
+		allFindings = append(allFindings, &proto.Finding{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 			Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
@@ -507,7 +507,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 			Message:       fmt.Sprintf("The MCP server's protected resource metadata (RPM) '%s' is not using OAuth scopes for authentication. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides.", cfg.Name),
 		})
 	} else if len(prm.ScopesSupported) == 1 && strings.Contains(strings.ToLower(prm.ScopesSupported[0]), "default") {
-		allFindings = append(allFindings, proto.Finding{
+		allFindings = append(allFindings, &proto.Finding{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 			Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
@@ -520,7 +520,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 	}
 
 	if len(asmd.ScopesSupported) == 0 {
-		allFindings = append(allFindings, proto.Finding{
+		allFindings = append(allFindings, &proto.Finding{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 			Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
@@ -531,7 +531,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 			Message:       fmt.Sprintf("The MCP server's authorization server metadata (ASMD) '%s' is not using OAuth scopes. Without scopes, the MCP server cannot provide fine-grained access control to the resources it provides.", cfg.Name),
 		})
 	} else if len(asmd.ScopesSupported) == 1 && strings.Contains(strings.ToLower(asmd.ScopesSupported[0]), "default") {
-		allFindings = append(allFindings, proto.Finding{
+		allFindings = append(allFindings, &proto.Finding{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 			Severity:      proto.RiskSeverity_RISK_SEVERITY_HIGH,
@@ -565,7 +565,7 @@ func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]proto.
 
 	// If no high severity findings, report a low severity finding to warn user that they must
 	// apply least privilege to the scopes.
-	return []proto.Finding{
+	return []*proto.Finding{
 		{
 			Tool:          "connection-scanner",
 			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -598,11 +598,11 @@ func checkStringSliceForKeywords(keywords []string, scope string) bool {
 
 // checkOauthScopes checks if the scopes contain any delete, write, or read scopes. To reduce the amount of findings for
 // a given MCP server, we will only report the most critical finding found.
-func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServerConfig, scopeType string) ([]proto.Finding, error) {
+func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServerConfig, scopeType string) ([]*proto.Finding, error) {
 	for _, scope := range scopes {
 		normalizedScope := strings.ToLower(scope)
 		if checkStringSliceForKeywords(deleteKeywords, normalizedScope) {
-			return []proto.Finding{
+			return []*proto.Finding{
 				{
 					Tool:          "connection-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -620,7 +620,7 @@ func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServ
 	for _, scope := range scopes {
 		normalizedScope := strings.ToLower(scope)
 		if checkStringSliceForKeywords(writeKeywords, normalizedScope) {
-			return []proto.Finding{
+			return []*proto.Finding{
 				{
 					Tool:          "connection-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -638,7 +638,7 @@ func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServ
 	for _, scope := range scopes {
 		normalizedScope := strings.ToLower(scope)
 		if checkStringSliceForKeywords(readKeywords, normalizedScope) {
-			return []proto.Finding{
+			return []*proto.Finding{
 				{
 					Tool:          "connection-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -652,5 +652,5 @@ func (s *ConnectionScanner) checkOauthScopes(scopes []string, cfg libmcp.MCPServ
 			}, nil
 		}
 	}
-	return []proto.Finding{}, nil
+	return []*proto.Finding{}, nil
 }

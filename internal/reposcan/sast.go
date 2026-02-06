@@ -70,7 +70,7 @@ func DetectUnsafeCommands(ctx context.Context, filePath string, content string) 
 }
 
 // PopulateUnsafeCommands detects unsafe commands and populates the unsafe_commands_result field in proto.MCPServer
-func (s *SASTScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	var allMatches []yararules.UnsafeCommandMatch
 
 	err := filepath.Walk(s.repoPath, func(filePath string, info os.FileInfo, err error) error {

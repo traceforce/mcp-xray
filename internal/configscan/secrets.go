@@ -22,7 +22,7 @@ func NewSecretsScanner(configPath string) *SecretsScanner {
 	}
 }
 
-func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *SecretsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	servers, err := libmcp.NewConfigParser(s.configPath).Parse()
 	if err != nil {
 		return nil, err
@@ -30,7 +30,7 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 
 	fmt.Printf("Secrets scanner scanning %d MCP servers\n", len(servers))
 
-	findings := []proto.Finding{}
+	findings := []*proto.Finding{}
 	for _, server := range servers {
 		findings = append(findings, DetectSecrets(server, s.configPath)...)
 	}
@@ -38,11 +38,11 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	return findings, nil
 }
 
-func DetectSecrets(cfg libmcp.MCPServerConfig, configPath string) []proto.Finding {
+func DetectSecrets(cfg libmcp.MCPServerConfig, configPath string) []*proto.Finding {
 	fmt.Printf("Scanning secrets for server %s\n", cfg.Name)
 
 	if strings.TrimSpace(cfg.RawJSON) == "" {
-		return []proto.Finding{}
+		return []*proto.Finding{}
 	}
 
 	detector, err := detect.NewDetectorDefaultConfig()
@@ -55,8 +55,8 @@ func DetectSecrets(cfg libmcp.MCPServerConfig, configPath string) []proto.Findin
 	return FromGitleaks(cfg, results, configPath)
 }
 
-func FromGitleaks(cfg libmcp.MCPServerConfig, findings []report.Finding, configPath string) []proto.Finding {
-	out := make([]proto.Finding, 0, len(findings))
+func FromGitleaks(cfg libmcp.MCPServerConfig, findings []report.Finding, configPath string) []*proto.Finding {
+	out := make([]*proto.Finding, 0, len(findings))
 
 	for _, f := range findings {
 		message := f.Description
@@ -64,7 +64,7 @@ func FromGitleaks(cfg libmcp.MCPServerConfig, findings []report.Finding, configP
 			message = fmt.Sprintf("A potential secret was detected in the MCP server configuration '%s' using rule '%s'. Secrets in configuration files pose a security risk and should be removed or stored securely.", cfg.Name, f.RuleID)
 		}
 
-		out = append(out, proto.Finding{
+		out = append(out, &proto.Finding{
 			Tool:          "gitleaks",
 			McpServerName: cfg.Name,
 			Type:          proto.FindingType_FINDING_TYPE_SECRETS,

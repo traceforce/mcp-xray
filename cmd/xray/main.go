@@ -128,7 +128,7 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 
 			// Scan all config paths and combine findings
-			var allFindings []proto.Finding
+			var allFindings []*proto.Finding
 			ctx := context.Background()
 
 			for _, configPath := range configPaths {
@@ -245,7 +245,7 @@ func NewRepoScanCommand() *cobra.Command {
 				}
 			}
 
-			var allFindings []proto.Finding
+			var allFindings []*proto.Finding
 			ctx := context.Background()
 
 			// Run CVE/SCA scan if enabled
@@ -507,7 +507,7 @@ func main() {
 	}
 }
 
-func writeFindings(findings []proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
+func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
 	sarifBytes, err := report.GenerateSarif(findings)
 	if err != nil {
 		return "", fmt.Errorf("error generating SARIF report: %w", err)

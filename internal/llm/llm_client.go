@@ -184,32 +184,50 @@ func (c *LLMClient) stripYAMLCodeFences(content string) string {
 
 // stripJSONCodeFences removes markdown code fences from JSON content
 // Handles various formats: ```json, ```, with or without newlines
+// Handles both JSON objects {} and JSON arrays []
 func (c *LLMClient) stripJSONCodeFences(content string) string {
 	content = strings.TrimSpace(content)
 
-	// Try to find JSON content by looking for the first { and last }
-	// This handles cases where there might be text or backticks before/after
+	// First, try to find JSON array content by looking for [ and ]
+	// This handles arrays like [{...}] which are common in API responses
+	firstBracket := strings.Index(content, "[")
+	lastBracket := strings.LastIndex(content, "]")
+
+	// Also check for JSON objects
 	firstBrace := strings.Index(content, "{")
 	lastBrace := strings.LastIndex(content, "}")
 
-	if firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace {
-		// Extract just the JSON portion
-		content = content[firstBrace : lastBrace+1]
-	} else {
-		// Fallback to string manipulation if JSON braces not found
-		// Remove opening code fences (with or without language specifier)
-		content = strings.TrimPrefix(content, "```json")
-		content = strings.TrimPrefix(content, "```")
-		content = strings.TrimSpace(content)
-
-		// Remove closing code fences (handle multiple cases)
-		content = strings.TrimSuffix(content, "```")
-		content = strings.TrimSpace(content)
-
-		// Remove any remaining standalone backticks
-		content = strings.ReplaceAll(content, "```", "")
-		content = strings.TrimSpace(content)
+	// Prefer arrays if both are present and array brackets are outermost
+	// or if array starts before object
+	if firstBracket != -1 && lastBracket != -1 && lastBracket > firstBracket {
+		// Check if array brackets encompass the object braces (or if no object braces)
+		if firstBrace == -1 || (firstBracket <= firstBrace && lastBracket >= lastBrace) {
+			// Extract the array portion
+			content = content[firstBracket : lastBracket+1]
+			return content
+		}
 	}
+
+	// Fall back to object extraction if array not found or object is outermost
+	if firstBrace != -1 && lastBrace != -1 && lastBrace > firstBrace {
+		// Extract just the JSON object portion
+		content = content[firstBrace : lastBrace+1]
+		return content
+	}
+
+	// Fallback to string manipulation if JSON braces/brackets not found
+	// Remove opening code fences (with or without language specifier)
+	content = strings.TrimPrefix(content, "```json")
+	content = strings.TrimPrefix(content, "```")
+	content = strings.TrimSpace(content)
+
+	// Remove closing code fences (handle multiple cases)
+	content = strings.TrimSuffix(content, "```")
+	content = strings.TrimSpace(content)
+
+	// Remove any remaining standalone backticks
+	content = strings.ReplaceAll(content, "```", "")
+	content = strings.TrimSpace(content)
 
 	return content
 }
