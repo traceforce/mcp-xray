@@ -1,21 +1,14 @@
-package pentest
+package verify
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"os"
-	"path/filepath"
-	"testing"
-	"time"
 
-	"mcpxray/internal/llm"
-	"mcpxray/internal/report"
 	"mcpxray/proto"
 )
 
-// parseSarifToFindings parses a SARIF file and converts it to proto.Finding slice
-func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
+// ParseSarifToFindings parses a SARIF file and returns a slice of proto.Finding.
+func ParseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 	data, err := os.ReadFile(sarifPath)
 	if err != nil {
 		return nil, err
@@ -58,7 +51,6 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 		return nil, err
 	}
 
-	// Build rule map for titles
 	ruleMap := make(map[string]string)
 	if len(report.Runs) > 0 {
 		for _, rule := range report.Runs[0].Tool.Driver.Rules {
@@ -77,7 +69,6 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 				Message: result.Message.Text,
 			}
 
-			// Map severity from level
 			switch result.Level {
 			case "error":
 				finding.Severity = proto.RiskSeverity_RISK_SEVERITY_CRITICAL
@@ -89,7 +80,6 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 				finding.Severity = proto.RiskSeverity_RISK_SEVERITY_UNKNOWN
 			}
 
-			// Extract file and line from locations
 			if len(result.Locations) > 0 {
 				loc := result.Locations[0]
 				finding.File = loc.PhysicalLocation.ArtifactLocation.URI
@@ -98,7 +88,6 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 				}
 			}
 
-			// Extract properties
 			if props := result.Properties; props != nil {
 				if tool, ok := props["tool"].(string); ok {
 					finding.Tool = tool
@@ -109,7 +98,6 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 				if mcpTool, ok := props["mcpToolName"].(string); ok {
 					finding.McpToolName = mcpTool
 				}
-				// Set type from properties if available
 				if typeStr, ok := props["type"].(string); ok {
 					switch typeStr {
 					case "PENTEST":
@@ -128,15 +116,12 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 						finding.Type = proto.FindingType_FINDING_TYPE_UNKNOWN
 					}
 				} else {
-					// Default to PENTEST if not specified (since we're testing pentest findings)
 					finding.Type = proto.FindingType_FINDING_TYPE_PENTEST
 				}
 			} else {
-				// Default to PENTEST if no properties
 				finding.Type = proto.FindingType_FINDING_TYPE_PENTEST
 			}
 
-			// Set default title if missing
 			if finding.Title == "" {
 				finding.Title = result.Message.Text
 			}
@@ -146,80 +131,4 @@ func parseSarifToFindings(sarifPath string) ([]*proto.Finding, error) {
 	}
 
 	return findings, nil
-}
-
-func TestVerifyFindings(t *testing.T) {
-	// Skip if no LLM client configured
-	model := os.Getenv("TEST_LLM_MODEL")
-	if model == "" {
-		t.Skip("Skipping test: TEST_LLM_MODEL environment variable not set")
-	}
-
-	// Load SARIF file
-	sarifPath := os.Getenv("TEST_SARIF_FILE")
-	if sarifPath == "" {
-		// Default to an example file if available
-		sarifPath = "../../findings-pentest-2026-02-01T22-35-24-08-00.sarif.json"
-		if _, err := os.Stat(sarifPath); os.IsNotExist(err) {
-			t.Skipf("Skipping test: SARIF file not found at %s (set TEST_SARIF_FILE to specify a different file)", sarifPath)
-		}
-	}
-
-	findings, err := parseSarifToFindings(sarifPath)
-	if err != nil {
-		t.Fatalf("Failed to parse SARIF file: %v", err)
-	}
-
-	if len(findings) == 0 {
-		t.Skip("Skipping test: No findings found in SARIF file")
-	}
-
-	t.Logf("Loaded %d findings from SARIF file", len(findings))
-
-	// Create PentestTool with LLM client
-	llmClient, err := llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to create LLM client: %v", err)
-	}
-
-	tool := &PentestTool{
-		llmClient: llmClient,
-	}
-
-	// Verify findings
-	ctx := context.Background()
-	verifiedFindings, err := tool.VerifyFindings(ctx, findings)
-	if err != nil {
-		t.Fatalf("Failed to verify findings: %v", err)
-	}
-
-	t.Logf("Verification complete: %d findings verified, %d filtered out", len(verifiedFindings), len(findings)-len(verifiedFindings))
-
-	// Basic assertions
-	if len(verifiedFindings) > len(findings) {
-		t.Errorf("Verified findings (%d) should not exceed original findings (%d)", len(verifiedFindings), len(findings))
-	}
-
-	// Log verified findings
-	for _, finding := range verifiedFindings {
-		t.Logf("Verified finding: %s - %s (Severity: %s)", finding.McpToolName, finding.Title, finding.Severity.String())
-	}
-
-	// Generate SARIF report from verified findings
-	sarifBytes, err := report.GenerateSarif(verifiedFindings)
-	if err != nil {
-		t.Fatalf("Failed to generate SARIF report: %v", err)
-	}
-
-	// Generate output filename with timestamp
-	timestamp := time.Now().Format("2006-01-02T15-04-05-07-00")
-	outputPath := fmt.Sprintf("findings-verified-%s.sarif.json", timestamp)
-
-	// Write SARIF report to file
-	if err := os.WriteFile(outputPath, sarifBytes, 0644); err != nil {
-		t.Fatalf("Failed to write SARIF report: %v", err)
-	}
-
-	absPath, _ := filepath.Abs(outputPath)
-	t.Logf("Generated SARIF report: %s", absPath)
 }

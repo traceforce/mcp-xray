@@ -18,6 +18,7 @@ import (
 	"mcpxray/internal/pentest"
 	"mcpxray/internal/report"
 	reposcan "mcpxray/internal/reposcan"
+	"mcpxray/internal/verify"
 	"mcpxray/proto"
 
 	"github.com/spf13/cobra"
@@ -494,10 +495,89 @@ func NewPentestCommand() *cobra.Command {
 	return cmd
 }
 
+func NewVerifyCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "verify",
+		Short: "Verify findings from a SARIF file using an LLM to filter false positives",
+		Long:  "Load findings from a SARIF file, run LLM-based verification, and write the verified findings to a new SARIF report. Requires --sarif and --llm-model.",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			sarifPath, _ := cmd.Flags().GetString("sarif")
+			llmModel, _ := cmd.Flags().GetString("llm-model")
+
+			if sarifPath == "" {
+				fmt.Println("Error: --sarif is required.")
+				os.Exit(1)
+			}
+			if llmModel == "" {
+				fmt.Println("Error: --llm-model is required.")
+				os.Exit(1)
+			}
+
+			fileInfo, err := os.Stat(sarifPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					fmt.Printf("Error: SARIF file does not exist: %s\n", sarifPath)
+				} else {
+					fmt.Printf("Error: cannot access SARIF file: %s\n", err)
+				}
+				os.Exit(1)
+			}
+			if fileInfo.IsDir() {
+				fmt.Printf("Error: --sarif must be a file, not a directory: %s\n", sarifPath)
+				os.Exit(1)
+			}
+
+			findings, err := verify.ParseSarifToFindings(sarifPath)
+			if err != nil {
+				fmt.Printf("Error parsing SARIF file: %v\n", err)
+				os.Exit(1)
+			}
+
+			verifyTool, err := verify.NewVerifyTool("", llmModel)
+			if err != nil {
+				fmt.Printf("Error creating verify tool: %v\n", err)
+				os.Exit(1)
+			}
+
+			ctx := context.Background()
+			verifiedFindings, err := verifyTool.VerifyFindings(ctx, findings)
+			if err != nil {
+				fmt.Printf("Error verifying findings: %v\n", err)
+				os.Exit(1)
+			}
+
+			outputPath, _ := cmd.Flags().GetString("output")
+			upload, _ := cmd.Flags().GetBool("upload")
+			if upload {
+				if err := validateTraceforceEnv(); err != nil {
+					fmt.Println(err)
+					os.Exit(1)
+				}
+			}
+
+			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "")
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			fmt.Printf("Verified findings written to %s\n", actualOutputPath)
+		},
+	}
+	cmd.Flags().String("sarif", "", "Path to SARIF file (required)")
+	cmd.MarkFlagRequired("sarif")
+	cmd.Flags().String("llm-model", "", "LLM model to use for verification (required)")
+	cmd.MarkFlagRequired("llm-model")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_verify_<timestamp>.sarif.json)")
+	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	return cmd
+}
+
 func init() {
 	rootCmd.AddCommand(NewConfigScanCommand())
 	rootCmd.AddCommand(NewRepoScanCommand())
 	rootCmd.AddCommand(NewPentestCommand())
+	rootCmd.AddCommand(NewVerifyCommand())
 }
 
 func main() {

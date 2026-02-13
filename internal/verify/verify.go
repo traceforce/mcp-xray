@@ -1,4 +1,4 @@
-package pentest
+package verify
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"mcpxray/internal/llm"
 	"mcpxray/proto"
@@ -13,6 +14,26 @@ import (
 
 //go:embed verifyfindingsprompt.md
 var verifyFindingsPromptTemplate string
+
+type VerifyTool struct {
+	configPath string
+	llmClient  *llm.LLMClient
+}
+
+func NewVerifyTool(configPath string, model string) (*VerifyTool, error) {
+	var llmClient *llm.LLMClient
+	var err error
+	if model != "" {
+		llmClient, err = llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &VerifyTool{
+		configPath: configPath,
+		llmClient:  llmClient,
+	}, nil
+}
 
 // VerificationResult represents the LLM's verification of a finding
 type VerificationResult struct {
@@ -22,24 +43,24 @@ type VerificationResult struct {
 	Reason    string `json:"reason"`
 }
 
-// VerifyFindings uses an LLM to verify findings and filter out false positives
-func (t *PentestTool) VerifyFindings(ctx context.Context, findings []*proto.Finding) ([]*proto.Finding, error) {
+// VerifyFindings uses an LLM to verify findings and filter out false positives.
+func (v *VerifyTool) VerifyFindings(ctx context.Context, findings []*proto.Finding) ([]*proto.Finding, error) {
 	if len(findings) == 0 {
 		return findings, nil
 	}
 
-	if t.llmClient == nil {
+	if v.llmClient == nil {
 		// If no LLM client, return findings as-is
 		fmt.Printf("No LLM client available, skipping verification\n")
 		return findings, nil
 	}
 
 	// Generate prompt with findings
-	prompt := t.GenerateVerifyFindingsPrompt(findings)
+	prompt := generateVerifyFindingsPrompt(findings)
 	fmt.Printf("Verification prompt generated with length %v\n", len(prompt))
 
 	// Call LLM for verification
-	response, err := t.llmClient.CallLLM(ctx, prompt, llm.OutputFormatJSON)
+	response, err := v.llmClient.CallLLM(ctx, prompt, llm.OutputFormatJSON)
 	if err != nil {
 		return nil, fmt.Errorf("failed to call LLM for verification: %w", err)
 	}
@@ -109,8 +130,8 @@ func (t *PentestTool) VerifyFindings(ctx context.Context, findings []*proto.Find
 	return verifiedFindings, nil
 }
 
-// GenerateVerifyFindingsPrompt creates a prompt for verifying findings
-func (t *PentestTool) GenerateVerifyFindingsPrompt(findings []*proto.Finding) string {
+// generateVerifyFindingsPrompt creates a prompt for verifying findings
+func generateVerifyFindingsPrompt(findings []*proto.Finding) string {
 	var findingsList strings.Builder
 
 	for i, finding := range findings {
