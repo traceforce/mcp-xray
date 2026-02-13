@@ -1,42 +1,10 @@
 # MCP X-Ray
 
-A comprehensive open-source security scanning and penetration testing solution for Model Context Protocol (MCP) servers. Generates production-ready [SARIF reports](https://sarifweb.azurewebsites.net/) for seamless integration with security tooling and CI/CD pipelines.
-
 ## Overview
 
-MCP X-Ray is a unified security scanning and penetration testing solution for MCP servers. It analyzes configurations, detects exposed secrets, identifies unsafe tool definitions, and performs active penetration testing to uncover exploitable vulnerabilities. Scan results can be uploaded to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management and tracking. Atlas has rated hundreds of MCPs in its registry, providing a comprehensive security assessment database for the MCP ecosystem.
+MCP X-Ray is a unified open-source security scanning and penetration testing solution for Model Context Protocol (MCP) servers. It generates production-ready [SARIF reports](https://sarifweb.azurewebsites.net/) for seamless integration with security tooling and CI/CD pipelines. Scan results can be optionally uploaded to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management and tracking. Atlas has over 600 MCPs in its registry, providing a comprehensive security assessment database for the MCP ecosystem.
 
 ![Atlas Registry](images/registry.png)
-
-## Features
-
-### Configuration Scanning (`config-scan`)
-
-Analyzes MCP server configurations for security issues before deployment.
-
-- **Connection Security**: Validates TLS certificates, detects unsafe localhost/loopback exposure, and validates OAuth 2.0 configuration (PRM/ASMD)
-- **Secrets Detection**: Scans for exposed credentials, API keys, and sensitive information
-- **Tool Analysis**: Analyzes tool descriptions using Token Analyzer (default) or LLM Analyzer for risks including arbitrary execution, injection vulnerabilities, authorization bypass, and information disclosure
-
-### Pentest (`pentest`)
-
-Executes security test plans by making actual tool calls against MCP servers. Test plans are LLM-generated based on tool definitions.
-
-**Detection Capabilities:** Code execution, SSRF, path traversal, authorization bypass, input injection, information disclosure, and DoS vulnerabilities
-
-### Repository Scanning (`repo-scan`)
-
-Performs comprehensive security analysis of MCP server codebases before adding to configurations.
-
-- **SCA**: Detects vulnerable dependencies using OSV API
-- **SAST**: Identifies unsafe command patterns and security anti-patterns
-- **Secrets Detection**: Scans for hardcoded secrets and credentials
-
-### Traceforce Atlas Integration
-
-Upload scan results to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management, reporting, and tracking over time. See the [Uploading Results to Traceforce](#uploading-results-to-traceforce) section for usage details.
-
-![Atlas Report History](images/atlas-report-history.png)
 
 ## Installation
 
@@ -64,7 +32,7 @@ make all
 
 ### Configuration Scan
 
-Scan MCP server configurations for security issues:
+Scan MCP configs for security issues; run before pentest to baseline your setup.
 
 ```bash
 # Scan a specific MCP config file (uses token analyzer by default)
@@ -84,16 +52,15 @@ Scan MCP server configurations for security issues:
 ./mcpxray config-scan /path/to/mcp/config.json --output custom-report.sarif.json
 ```
 
-The configuration scanner will:
+**Detection Capabilities:**
 
-1. Connect to MCP servers defined in the configuration file
-2. Analyze connection security and exposed secrets in the configuration
-2. Discover and analyze available tools from MCP servers
-3. Generate SARIF reports with findings for exploitable vulnerabilities
+- **Connection Security**: Validates TLS certificates, detects unsafe localhost/loopback exposure, and validates OAuth 2.0 configuration (PRM/ASMD)
+- **Secrets Detection**: Scans for exposed credentials, API keys, and sensitive information
+- **Tool Analysis**: Analyzes tool descriptions using Token Analyzer (default) or LLM Analyzer for risks including arbitrary execution, injection vulnerabilities, authorization bypass, and information disclosure
 
 ### Pentest
 
-Execute security test plans by making actual tool calls against MCP servers. LLMs are required to run the pentest.
+Execute security test plans by making actual tool calls against MCP servers. LLMs are required to run the pentest. Run this before actual deployment in production.
 
 ```bash
 # Run pentest with auto-generated test plan (requires LLM model)
@@ -103,17 +70,11 @@ Execute security test plans by making actual tool calls against MCP servers. LLM
 ./mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test-plan.yaml --llm-model claude-sonnet-4-5
 
 ```
-
-The pentest tool will:
-1. Connect to MCP servers defined in the configuration file
-2. Generate test plans using LLM (if test-plan is not provided) or load from YAML file
-3. Execute test cases by making actual tool calls against the MCP servers
-4. Validate responses against expected outputs and detect security vulnerabilities
-5. Generate SARIF reports with findings for exploitable vulnerabilities
+**Detection Capabilities:** Code execution, SSRF, path traversal, authorization bypass, input injection, information disclosure, and DoS vulnerabilities
 
 ### Repository Scan
 
-Scan the codebase for security vulnerabilities:
+Scan the codebase for vulnerabilities; use when you own or can change the code.
 
 ```bash
 # Scan current directory
@@ -125,11 +86,11 @@ Scan the codebase for security vulnerabilities:
 # Specify custom output file
 ./mcpxray repo-scan --output custom-report.sarif.json
 ```
+**Detection Capabilities:**
+- **SCA**: Detects vulnerable dependencies using OSV API
+- **SAST**: Identifies unsafe command patterns and security anti-patterns
+- **Secrets Detection**: Scans for hardcoded secrets and credentials
 
-The repository scanner will:
-1. Perform SCA analysis to detect vulnerable dependencies
-2. Run SAST analysis to identify unsafe code patterns using YARA rules
-3. Scan for hardcoded secrets and credentials in source code
 
 ## Output Format
 
@@ -155,6 +116,7 @@ These credentials can be downloaded from the settings page on the Atlas UI.
 # Upload pentest results
 ./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
 ```
+![Atlas Report History](images/atlas-report-history.png)
 
 ## Examples
 
@@ -166,6 +128,7 @@ An example MCP Server is available in the `examples/mcp_server/` directory:
 - `mcp_server.py`: [FastMCP](https://github.com/jlowin/fastmcp) server using streamable-http transport
 - `mcp.json`: Configuration file for connecting to the server
 - `README.md`: Instructions for setting up and scanning the server
+
 
 ## Configuration
 

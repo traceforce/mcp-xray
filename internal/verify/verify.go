@@ -1,0 +1,185 @@
+package verify
+
+import (
+	"context"
+	_ "embed"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"mcpxray/internal/llm"
+	"mcpxray/proto"
+)
+
+//go:embed verifyfindingsprompt.md
+var verifyFindingsPromptTemplate string
+
+type VerifyTool struct {
+	configPath string
+	llmClient  *llm.LLMClient
+}
+
+func NewVerifyTool(configPath string, model string) (*VerifyTool, error) {
+	var llmClient *llm.LLMClient
+	var err error
+	if model != "" {
+		llmClient, err = llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &VerifyTool{
+		configPath: configPath,
+		llmClient:  llmClient,
+	}, nil
+}
+
+// VerificationResult represents the LLM's verification of a finding
+type VerificationResult struct {
+	FindingID string `json:"finding_id"`
+	IsValid   bool   `json:"is_valid"`
+	Severity  string `json:"severity"`
+	Reason    string `json:"reason"`
+}
+
+// VerifyFindings uses an LLM to verify findings and filter out false positives.
+func (v *VerifyTool) VerifyFindings(ctx context.Context, findings []*proto.Finding) ([]*proto.Finding, error) {
+	if len(findings) == 0 {
+		return findings, nil
+	}
+
+	if v.llmClient == nil {
+		// If no LLM client, return findings as-is
+		fmt.Printf("No LLM client available, skipping verification\n")
+		return findings, nil
+	}
+
+	// Generate prompt with findings
+	prompt := generateVerifyFindingsPrompt(findings)
+	fmt.Printf("Verification prompt generated with length %v\n", len(prompt))
+
+	// Call LLM for verification
+	response, err := v.llmClient.CallLLM(ctx, prompt, llm.OutputFormatJSON)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call LLM for verification: %w", err)
+	}
+
+	// Parse verification results
+	var verificationResults []VerificationResult
+	if err := json.Unmarshal([]byte(response), &verificationResults); err != nil {
+		return nil, fmt.Errorf("failed to parse verification response: %w", err)
+	}
+
+	// Create a map of finding ID to verification result
+	verificationMap := make(map[string]VerificationResult)
+	for _, result := range verificationResults {
+		verificationMap[result.FindingID] = result
+	}
+
+	// Filter and update findings based on verification results
+	var verifiedFindings []*proto.Finding
+	for _, finding := range findings {
+		// Use tool_name + case_id as the unique identifier to avoid collisions
+		// when the same test case is run with different tools
+		toolName := finding.McpToolName
+		caseID := finding.RuleId
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		if caseID == "" {
+			caseID = finding.Title
+		}
+		findingID := fmt.Sprintf("%s:%s", toolName, caseID)
+
+		verification, exists := verificationMap[findingID]
+		if !exists {
+			// If verification result not found, keep the finding but log a warning
+			fmt.Printf("Warning: No verification result found for finding ID: %s\n", findingID)
+			verifiedFindings = append(verifiedFindings, finding)
+			continue
+		}
+
+		// Only include findings marked as valid
+		if verification.IsValid {
+			// Update severity if it was adjusted
+			if verification.Severity != "" {
+				severity := parseSeverity(verification.Severity)
+				if severity != proto.RiskSeverity_RISK_SEVERITY_UNKNOWN {
+					finding.Severity = severity
+				}
+			}
+
+			// Append reason to message if provided
+			if verification.Reason != "" {
+				if finding.Message != "" {
+					finding.Message = fmt.Sprintf("%s [Verified: %s]", finding.Message, verification.Reason)
+				} else {
+					finding.Message = fmt.Sprintf("[Verified: %s]", verification.Reason)
+				}
+			}
+
+			verifiedFindings = append(verifiedFindings, finding)
+			fmt.Printf("✓ Verified finding: %s (Severity: %s) - %s\n", findingID, verification.Severity, verification.Reason)
+		} else {
+			fmt.Printf("✗ Filtered out false positive: %s - %s\n", findingID, verification.Reason)
+		}
+	}
+
+	fmt.Printf("Verification complete: %d findings verified, %d filtered out\n", len(verifiedFindings), len(findings)-len(verifiedFindings))
+	return verifiedFindings, nil
+}
+
+// generateVerifyFindingsPrompt creates a prompt for verifying findings
+func generateVerifyFindingsPrompt(findings []*proto.Finding) string {
+	var findingsList strings.Builder
+
+	for i, finding := range findings {
+		// Create composite ID: tool_name:case_id
+		toolName := finding.McpToolName
+		caseID := finding.RuleId
+		if toolName == "" {
+			toolName = "unknown"
+		}
+		if caseID == "" {
+			caseID = finding.Title
+		}
+		findingID := fmt.Sprintf("%s:%s", toolName, caseID)
+
+		findingsList.WriteString(fmt.Sprintf("## Finding %d\n\n", i+1))
+		findingsList.WriteString(fmt.Sprintf("**ID:** %s\n\n", findingID))
+		findingsList.WriteString(fmt.Sprintf("**Tool:** %s\n\n", toolName))
+		findingsList.WriteString(fmt.Sprintf("**Case ID:** %s\n\n", caseID))
+		findingsList.WriteString(fmt.Sprintf("**Title:** %s\n\n", finding.Title))
+		findingsList.WriteString(fmt.Sprintf("**Severity:** %s\n\n", finding.Severity.String()))
+		findingsList.WriteString(fmt.Sprintf("**MCP Server:** %s\n\n", finding.McpServerName))
+		if finding.Message != "" {
+			findingsList.WriteString(fmt.Sprintf("**Message:** %s\n\n", finding.Message))
+		}
+		if finding.File != "" {
+			findingsList.WriteString(fmt.Sprintf("**File:** %s\n\n", finding.File))
+		}
+		findingsList.WriteString("\n")
+	}
+
+	// Replace placeholder with actual findings list
+	prompt := strings.ReplaceAll(verifyFindingsPromptTemplate, "{{FINDINGS_LIST}}", findingsList.String())
+	return prompt
+}
+
+// parseSeverity converts a string severity to proto.RiskSeverity
+func parseSeverity(severityStr string) proto.RiskSeverity {
+	severityStr = strings.ToUpper(strings.TrimSpace(severityStr))
+	switch severityStr {
+	case "CRITICAL":
+		return proto.RiskSeverity_RISK_SEVERITY_CRITICAL
+	case "HIGH":
+		return proto.RiskSeverity_RISK_SEVERITY_HIGH
+	case "MEDIUM":
+		return proto.RiskSeverity_RISK_SEVERITY_MEDIUM
+	case "LOW":
+		return proto.RiskSeverity_RISK_SEVERITY_LOW
+	default:
+		return proto.RiskSeverity_RISK_SEVERITY_UNKNOWN
+	}
+}

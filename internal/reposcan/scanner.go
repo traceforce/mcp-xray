@@ -29,8 +29,8 @@ func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
 	}
 }
 
-func (s *RepoScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
-	findings := []proto.Finding{}
+func (s *RepoScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
+	findings := []*proto.Finding{}
 	scaFindings, err := s.scaScanner.Scan(ctx)
 	if err != nil {
 		return nil, err

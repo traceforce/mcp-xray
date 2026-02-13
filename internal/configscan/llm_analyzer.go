@@ -51,12 +51,12 @@ type SecurityFinding struct {
 }
 
 // AnalyzeTools analyzes multiple tools for security risks in a single LLM call
-func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+func (a *LLMAnalyzer) AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]*proto.Finding, error) {
 	if len(tools) == 0 {
-		return []proto.Finding{}, nil
+		return []*proto.Finding{}, nil
 	}
 
-	var allFindings []proto.Finding
+	var allFindings []*proto.Finding
 
 	// Get max batch size bytes based on LLM type
 	llmType := a.llmClient.GetType()
@@ -143,7 +143,7 @@ JSON Response:`, toolsList.String())
 }
 
 // parseBatchLLMResponse parses the batch LLM response and converts it to proto.Finding
-func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
+func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, mcpServerName string, configPath string) ([]*proto.Finding, error) {
 	// Validate response is not empty
 	if response == "" {
 		return nil, fmt.Errorf("LLM response is empty, cannot parse JSON")
@@ -155,11 +155,11 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 		toolMap[tool.Name] = tool
 	}
 
-	var findings []SecurityFinding
+	var findings []*SecurityFinding
 
 	// Try to parse as wrapped object with "results" field (expected format for batch)
 	var wrapped struct {
-		Results []SecurityFinding `json:"results"`
+		Results []*SecurityFinding `json:"results"`
 	}
 	if err := json.Unmarshal([]byte(response), &wrapped); err == nil && len(wrapped.Results) > 0 {
 		findings = wrapped.Results
@@ -176,7 +176,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 	}
 
 	// Convert to proto.Finding, mapping findings to their respective tools
-	protoFindings := make([]proto.Finding, 0, len(findings))
+	protoFindings := make([]*proto.Finding, 0, len(findings))
 	for _, f := range findings {
 		// Determine which tool this finding belongs to
 		var targetTool *mcp.Tool
@@ -209,7 +209,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 			truncDesc = truncDesc[:1000]
 		}
 
-		protoFindings = append(protoFindings, proto.Finding{
+		protoFindings = append(protoFindings, &proto.Finding{
 			Tool:          "llm_analyzer",
 			Type:          proto.FindingType_FINDING_TYPE_SAST,
 			Severity:      severity,

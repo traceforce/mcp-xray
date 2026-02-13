@@ -16,7 +16,7 @@ import (
 )
 
 type ToolsAnalyzer interface {
-	AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error)
+	AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]*proto.Finding, error)
 }
 
 type ToolsScanner struct {
@@ -52,7 +52,7 @@ func NewToolsScanner(configPath string, analyzerType string, model string, tools
 	}
 }
 
-func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	// Parse configPath
 	servers, err := libmcp.NewConfigParser(s.MCPconfigPath).Parse()
 	if err != nil {
@@ -61,7 +61,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 
 	fmt.Printf("Tools scanner scanning %d MCP servers\n", len(servers))
 
-	var allFindings []proto.Finding
+	var allFindings []*proto.Finding
 	var serverToolsData []libmcp.ServerToolsData
 
 	// Add 60 seconds context timeout
@@ -74,7 +74,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			// Handle connection errors gracefully - continue with other servers
 			fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
 			// Optionally add a finding about the connection failure
-			allFindings = append(allFindings, proto.Finding{
+			allFindings = append(allFindings, &proto.Finding{
 				Tool:          "tools-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -95,7 +95,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			// If the error is a 401 Unauthorized error, report a medium severity finding
 			// and suggest the user to check the OAuth scopes.
 			if strings.Contains(err.Error(), "401") {
-				allFindings = append(allFindings, proto.Finding{
+				allFindings = append(allFindings, &proto.Finding{
 					Tool:          "tools-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 					Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -109,7 +109,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 			}
 			// Handle other errors gracefully too
 			fmt.Printf("Warning: Failed to list tools for MCP server '%s': %v\n", server.Name, err)
-			allFindings = append(allFindings, proto.Finding{
+			allFindings = append(allFindings, &proto.Finding{
 				Tool:          "tools-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,

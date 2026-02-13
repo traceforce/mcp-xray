@@ -24,7 +24,7 @@ func NewSecretsScanner(repoPath string, config *Config) *SecretsScanner {
 	}
 }
 
-func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
+func (s *SecretsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	// 1) Load default config (same rules as CLI when no custom config is provided)
 	// NewDetectorDefaultConfig creates a detector with the default ruleset.
 	detector, err := detect.NewDetectorDefaultConfig()
@@ -76,11 +76,11 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]proto.Finding, error) {
 	return FromGitleaks(allFindings), nil
 }
 
-func FromGitleaks(findings []report.Finding) []proto.Finding {
-	out := make([]proto.Finding, 0, len(findings))
+func FromGitleaks(findings []report.Finding) []*proto.Finding {
+	out := make([]*proto.Finding, 0, len(findings))
 
 	for _, f := range findings {
-		out = append(out, proto.Finding{
+		out = append(out, &proto.Finding{
 			Tool:     "gitleaks",
 			Type:     proto.FindingType_FINDING_TYPE_SECRETS,
 			Severity: proto.RiskSeverity_RISK_SEVERITY_HIGH, // treat all secrets as high/error

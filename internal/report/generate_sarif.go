@@ -67,11 +67,11 @@ type Message struct {
 	Text string `json:"text"`
 }
 
-func GenerateSarif(findings []proto.Finding) ([]byte, error) {
+func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
-		finding := &findings[i]
+		finding := findings[i]
 		if finding.RuleId == "" {
 			continue
 		}
@@ -100,7 +100,7 @@ func GenerateSarif(findings []proto.Finding) ([]byte, error) {
 	// Convert findings to results
 	results := make([]Result, 0, len(findings))
 	for i := range findings {
-		finding := &findings[i]
+		finding := findings[i]
 
 		result := Result{
 			RuleID: finding.RuleId,

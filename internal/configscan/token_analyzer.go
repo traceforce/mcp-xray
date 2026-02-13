@@ -41,8 +41,8 @@ func mapSeverity(s string) proto.RiskSeverity {
 	}
 }
 
-func (a *TokenAnalyzer) AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]proto.Finding, error) {
-	allFindings := []proto.Finding{}
+func (a *TokenAnalyzer) AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcpServerName string, configPath string) ([]*proto.Finding, error) {
+	allFindings := []*proto.Finding{}
 	for _, tool := range tools {
 		findings, err := a.AnalyzeTool(ctx, tool.Description, tool.Name, mcpServerName, configPath)
 		if err != nil {
@@ -54,7 +54,7 @@ func (a *TokenAnalyzer) AnalyzeTools(ctx context.Context, tools []*mcp.Tool, mcp
 }
 
 func (a *TokenAnalyzer) AnalyzeTool(ctx context.Context, description string, name string,
-	mcpServerName string, configPath string) ([]proto.Finding, error) {
+	mcpServerName string, configPath string) ([]*proto.Finding, error) {
 	internalFindings := tokenanalyzer.Analyze(description, a.rules)
 
 	// Truncate description to first 1000 characters
@@ -63,9 +63,9 @@ func (a *TokenAnalyzer) AnalyzeTool(ctx context.Context, description string, nam
 		truncDesc = truncDesc[:1000]
 	}
 
-	findings := []proto.Finding{}
+	findings := []*proto.Finding{}
 	for _, finding := range internalFindings {
-		findings = append(findings, proto.Finding{
+		findings = append(findings, &proto.Finding{
 			Tool:          "token_analyzer",
 			Type:          proto.FindingType_FINDING_TYPE_TOOL_ANALYSIS,
 			Severity:      mapSeverity(finding.Severity),
@@ -87,11 +87,11 @@ func (a *TokenAnalyzer) AnalyzeTool(ctx context.Context, description string, nam
 
 // analyzeWithYaraRules runs the description against YARA rules and returns findings
 func (a *TokenAnalyzer) analyzeWithYaraRules(_ context.Context, description string, name string,
-	mcpServerName string, configPath string) []proto.Finding {
+	mcpServerName string, configPath string) []*proto.Finding {
 	normalizedDesc := yararules.NormalizeForPatternMatching(description)
 	patterns := yararules.GetUnsafeSystemPatterns()
 
-	var findings []proto.Finding
+	var findings []*proto.Finding
 	for _, pattern := range patterns {
 		if pattern.Pattern.MatchString(normalizedDesc) {
 			// Find the actual match in the original description
@@ -103,7 +103,7 @@ func (a *TokenAnalyzer) analyzeWithYaraRules(_ context.Context, description stri
 				match = "unsafe pattern detected"
 			}
 
-			findings = append(findings, proto.Finding{
+			findings = append(findings, &proto.Finding{
 				Tool:          "yara_analyzer",
 				Type:          proto.FindingType_FINDING_TYPE_TOOL_ANALYSIS,
 				Severity:      pattern.Severity,
