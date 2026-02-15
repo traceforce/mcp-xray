@@ -18,7 +18,6 @@ import (
 	"mcpxray/internal/pentest"
 	"mcpxray/internal/report"
 	reposcan "mcpxray/internal/reposcan"
-	"mcpxray/internal/verify"
 	"mcpxray/proto"
 
 	"github.com/spf13/cobra"
@@ -528,13 +527,13 @@ func NewVerifyCommand() *cobra.Command {
 				os.Exit(1)
 			}
 
-			findings, err := verify.ParseSarifToFindings(sarifPath)
+			findings, err := pentest.ParseSarifToFindings(sarifPath)
 			if err != nil {
 				fmt.Printf("Error parsing SARIF file: %v\n", err)
 				os.Exit(1)
 			}
 
-			verifyTool, err := verify.NewVerifyTool("", llmModel)
+			verifyTool, err := pentest.NewVerifyTool("", llmModel)
 			if err != nil {
 				fmt.Printf("Error creating verify tool: %v\n", err)
 				os.Exit(1)
