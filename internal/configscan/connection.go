@@ -418,6 +418,10 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
+		fallthrough
+	case http.StatusForbidden:
+		fallthrough
+	case http.StatusMethodNotAllowed:
 		findings, err := s.checkOauthFlow(cfg)
 		if err != nil {
 			return nil, err
@@ -454,7 +458,7 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 }
 
 func (s *ConnectionScanner) checkOauthFlow(cfg libmcp.MCPServerConfig) ([]*proto.Finding, error) {
-	oauthConfig := libmcp.NewOAuthConfig(*cfg.URL)
+	oauthConfig := libmcp.NewOAuthConfig(*cfg.URL, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 
 	fmt.Println("1) Checking Protected Resource Metadata (PRM) is properly configured")
 	prm, err := oauthConfig.DiscoverPRM()

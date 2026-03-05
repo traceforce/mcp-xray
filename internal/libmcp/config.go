@@ -12,12 +12,16 @@ type RawConfig struct {
 }
 
 type RawServerConfig struct {
-	Command string            `json:"command,omitempty"`
-	Args    []string          `json:"args,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Env     map[string]string `json:"env,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Type    string            `json:"type,omitempty"`
+	Command            string            `json:"command,omitempty"`
+	Args               []string          `json:"args,omitempty"`
+	URL                string            `json:"url,omitempty"`
+	Env                map[string]string `json:"env,omitempty"`
+	Headers            map[string]string `json:"headers,omitempty"`
+	Type               string            `json:"type,omitempty"`
+	OAuthClientID      string            `json:"oauth_client_id,omitempty"`
+	OAuthClientSecret  string            `json:"oauth_client_secret,omitempty"`
+	Auth               map[string]string `json:"auth,omitempty"`
+	RedirectURI        string            `json:"redirect_uri,omitempty"`
 }
 
 type ConfigParser struct {
@@ -78,15 +82,22 @@ func ParseConfig(data []byte) ([]MCPServerConfig, error) {
 			}
 		}
 
+		oauthClientID := serverConfig.OAuthClientID
+		if oauthClientID == "" && serverConfig.Auth != nil {
+			oauthClientID = serverConfig.Auth["CLIENT_ID"]
+		}
 		server := MCPServerConfig{
-			Name:    serverName,
-			Command: command,
-			Args:    serverConfig.Args,
-			URL:     url,
-			Env:     serverConfig.Env,
-			Headers: serverConfig.Headers,
-			Type:    transportType,
-			RawJSON: string(rawJSON),
+			Name:              serverName,
+			Command:           command,
+			Args:              serverConfig.Args,
+			URL:               url,
+			Env:               serverConfig.Env,
+			Headers:           serverConfig.Headers,
+			Type:              transportType,
+			RawJSON:           string(rawJSON),
+			OAuthClientID:     oauthClientID,
+			OAuthClientSecret: serverConfig.OAuthClientSecret,
+			RedirectURI:       serverConfig.RedirectURI,
 		}
 		servers = append(servers, server)
 	}

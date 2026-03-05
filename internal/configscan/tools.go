@@ -3,6 +3,7 @@ package configscan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -73,7 +74,11 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 		if err != nil {
 			// Handle connection errors gracefully - continue with other servers
 			fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
-			// Optionally add a finding about the connection failure
+			var dcrErr *libmcp.DCRUnauthorizedError
+			msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err)
+			if errors.As(err, &dcrErr) {
+				msg = dcrErr.Error()
+			}
 			allFindings = append(allFindings, &proto.Finding{
 				Tool:          "tools-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
@@ -82,7 +87,7 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 				Title:         "Failed to connect to MCP server",
 				McpServerName: server.Name,
 				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err),
+				Message:       msg,
 			})
 			continue
 		}

@@ -4,15 +4,18 @@ import "github.com/modelcontextprotocol/go-sdk/mcp"
 
 // MCPServerConfig is the normalized representation returned by all parsers
 type MCPServerConfig struct {
-	Name        string
-	Command     *string
-	Args        []string
-	URL         *string
-	Env         map[string]string
-	Headers     map[string]string
-	Type        *string // Transport type from config (e.g., "stdio", "http", "sse")
-	ProjectPath *string // Project path for project-scoped servers (e.g., "/Users/user1/src")
-	RawJSON     string
+	Name              string
+	Command           *string
+	Args              []string
+	URL               *string
+	Env               map[string]string
+	Headers           map[string]string
+	Type              *string
+	ProjectPath       *string
+	RawJSON           string
+	OAuthClientID     string
+	OAuthClientSecret string
+	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
 }
 
 // ServerToolsData represents tools data for a single server
