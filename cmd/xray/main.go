@@ -429,13 +429,12 @@ func NewPentestCommand() *cobra.Command {
 				os.Exit(1)
 			}
 
-			// If using directory mode and uploading, merge all test plans
-			if isDirectory && upload {
+			// If using directory mode, always merge all per-tool test plans and write merged file
+			if isDirectory {
 				mergedTestPlan, err := mergeTestPlansFromDir(testPlanPath)
 				if err != nil {
 					fmt.Printf("Warning: failed to merge test plans: %v\n", err)
 				} else if mergedTestPlan != "" {
-					// Write merged test plan to a temporary file
 					mergedFilePath := filepath.Join(testPlanPath, "merged_test_plan.yaml")
 					if err := os.WriteFile(mergedFilePath, []byte(mergedTestPlan), 0644); err != nil {
 						fmt.Printf("Warning: failed to write merged test plan: %v\n", err)

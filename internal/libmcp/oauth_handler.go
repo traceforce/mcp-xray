@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,28 +20,50 @@ import (
 	"time"
 )
 
+// ErrDCRForbidden is returned when the server rejects Dynamic Client Registration with 403.
+// Servers like Figma use pre-registered clients and do not support DCR.
+var ErrDCRForbidden = errors.New("DCR not supported: 403 Forbidden")
+
 const (
 	ApplicationName    = "Traceforce-mcpxray"
 	ApplicationVersion = "1.0.2"
 	ProtocolVersion    = "2025-06-18"
 
-	RedirectHost = "127.0.0.1"
-	RedirectPort = 8765
-	RedirectPath = "/callback"
+	defaultRedirectHost = "127.0.0.1"
+	defaultRedirectPort = 8765
+	RedirectPath        = "/callback"
 )
 
-var RedirectURI = fmt.Sprintf("http://%s:%d%s", RedirectHost, RedirectPort, RedirectPath)
-
 type OAuthConfig struct {
-	MCPUrl     string
-	httpClient *http.Client
+	MCPUrl       string
+	httpClient   *http.Client
+	ClientID     string // pre-registered client when server does not support DCR (e.g. Figma)
+	ClientSecret string
+	RedirectURI  string // from config; when set, used as redirect_uri (e.g. cursor://...); when empty, default http://127.0.0.1:8765/callback
 }
 
-func NewOAuthConfig(mcpUrl string) *OAuthConfig {
+func NewOAuthConfig(mcpUrl string, clientID, clientSecret string, redirectURI string) *OAuthConfig {
 	return &OAuthConfig{
-		MCPUrl:     mcpUrl,
-		httpClient: &http.Client{Timeout: 60 * time.Second},
+		MCPUrl:       mcpUrl,
+		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURI:  redirectURI,
 	}
+}
+
+func (o *OAuthConfig) redirectURI() string {
+	if o.RedirectURI != "" {
+		return o.RedirectURI
+	}
+	return fmt.Sprintf("http://%s:%d%s", defaultRedirectHost, defaultRedirectPort, RedirectPath)
+}
+
+// useLocalRedirectServer returns true if we can receive the OAuth callback on a local HTTP server.
+// When redirect_uri is a custom scheme (e.g. cursor://), the callback goes to the OS/IDE, not to us.
+func (o *OAuthConfig) useLocalRedirectServer() bool {
+	uri := o.redirectURI()
+	return strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://")
 }
 
 type PRM struct {
@@ -48,6 +71,8 @@ type PRM struct {
 	AuthorizationServers   []string `json:"authorization_servers"`
 	ScopesSupported        []string `json:"scopes_supported"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported"`
+	ClientID               string   `json:"client_id,omitempty"`
+	ClientSecret           string   `json:"client_secret,omitempty"`
 }
 
 type ASMetadata struct {
@@ -94,26 +119,49 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	}
 	scopeStr := strings.Join(scopes, " ")
 
+	var clientID, clientSecret string
 	fmt.Println("3) Dynamic Client Registration (public client)…")
 	dcr, err := o.DynamicClientRegister(asmd)
 	if err != nil {
-		return "", err
+		if !errors.Is(err, ErrDCRForbidden) {
+			return "", err
+		}
+		// DCR returned 403 (e.g. Figma); use pre-registered client from config or PRM
+		if o.ClientID != "" {
+			fmt.Println("   Using pre-registered client_id from config")
+			clientID, clientSecret = o.ClientID, o.ClientSecret
+		} else if prm.ClientID != "" {
+			fmt.Println("   Using client_id from Protected Resource Metadata")
+			clientID, clientSecret = prm.ClientID, prm.ClientSecret
+		} else {
+			return "", err
+		}
+	} else {
+		clientID, clientSecret = dcr.ClientID, dcr.ClientSecret
+		if clientID == "" {
+			log.Fatal("DCR failed: empty client_id")
+		}
+		fmt.Println("   client_id =", clientID)
 	}
-	if dcr.ClientID == "" {
-		log.Fatal("DCR failed: empty client_id")
+
+	verifier, challenge := makePKCE()
+	state := randB64URL(16)
+	authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, clientID, scopeStr, challenge, state)
+
+	if !o.useLocalRedirectServer() {
+		fmt.Println("4) Redirect URI is a custom scheme (e.g. cursor://); callback will go to Cursor.")
+		fmt.Println("5) Opening browser for login/consent…")
+		fmt.Println("   If it doesn't open, paste this URL into your browser:")
+		fmt.Println(authURL)
+		openBrowser(authURL)
+		return "", fmt.Errorf("redirect_uri is set to %s; complete authorization in Cursor, then Cursor will store the token", o.redirectURI())
 	}
-	fmt.Println("   client_id =", dcr.ClientID)
 
 	fmt.Println("4) Starting local redirect server…")
 	codeCh := make(chan string, 1)
 	errCh := make(chan string, 1)
-	shutdownServer := startRedirectServer(codeCh, errCh)
+	shutdownServer := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort)
 	defer shutdownServer() // Ensure server is shut down when function returns
-
-	verifier, challenge := makePKCE()
-	state := randB64URL(16)
-
-	authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, dcr.ClientID, scopeStr, challenge, state)
 
 	fmt.Println("5) Opening browser for login/consent…")
 	fmt.Println("   If it doesn't open, paste this URL into your browser:")
@@ -134,7 +182,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok := o.exchangeCode(asmd.TokenEndpoint, dcr.ClientID, dcr.ClientSecret, code, verifier)
+	tok := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
@@ -241,7 +289,7 @@ func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, err
 
 	payload := map[string]any{
 		"client_name":                ApplicationName,
-		"redirect_uris":              []string{RedirectURI},
+		"redirect_uris":              []string{o.redirectURI()},
 		"response_types":             []string{"code"},
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"token_endpoint_auth_method": "none", // public client
@@ -256,6 +304,10 @@ func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, err
 
 	if resp.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusNotFound {
+			// 403 = server rejects DCR; 404 = registration endpoint does not exist (e.g. Slack)
+			return nil, ErrDCRForbidden
+		}
 		return nil, fmt.Errorf("DCR failed: %s %s", resp.Status, string(body))
 	}
 
@@ -281,7 +333,7 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	q := u.Query()
 	q.Set("response_type", "code")
 	q.Set("client_id", clientID)
-	q.Set("redirect_uri", RedirectURI)
+	q.Set("redirect_uri", o.redirectURI())
 	q.Set("scope", scope)
 	q.Set("code_challenge", codeChallenge)
 	q.Set("code_challenge_method", "S256")
@@ -299,7 +351,7 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	data.Set("client_id", clientID)
 	data.Set("client_secret", clientSecret)
 	data.Set("code", code)
-	data.Set("redirect_uri", RedirectURI)
+	data.Set("redirect_uri", o.redirectURI())
 	data.Set("code_verifier", codeVerifier)
 	data.Set("resource", o.MCPUrl)
 
@@ -324,7 +376,7 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	return tr
 }
 
-func startRedirectServer(codeCh chan<- string, errCh chan<- string) func() {
+func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int) func() {
 	mux := http.NewServeMux()
 	mux.HandleFunc(RedirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -343,7 +395,7 @@ func startRedirectServer(codeCh chan<- string, errCh chan<- string) func() {
 		codeCh <- code
 	})
 
-	addr := fmt.Sprintf("%s:%d", RedirectHost, RedirectPort)
+	addr := fmt.Sprintf("%s:%d", host, port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		errCh <- fmt.Sprintf("redirect_listen_failed: %v", err)

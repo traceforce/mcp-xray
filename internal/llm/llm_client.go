@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,12 +122,26 @@ Return ONLY valid YAML, no markdown formatting, no code fences.`
 	// Strip markdown code fences if present - use the specified format
 	content = c.stripMarkdownCodeFences(content, outputFormat)
 
+	if outputFormat == OutputFormatYAML {
+		content = sanitizeYAMLUnicodeEscapes(content)
+	}
+
 	// Check again after trimming
 	if content == "" {
 		return "", fmt.Errorf("LLM response is empty after trimming markdown")
 	}
 
 	return content, nil
+}
+
+// invalidUnicodeEscape matches YAML \uXXXX escapes for surrogate code points (U+D800–U+DFFF),
+// which are invalid in UTF-8 and cause gopkg.in/yaml to fail with "invalid Unicode character escape code".
+var invalidUnicodeEscape = regexp.MustCompile(`\\uD[89A-Fa-f][0-9A-Fa-f]{2}|\\uD[C-Fc-f][0-9A-Fa-f]{2}`)
+
+// sanitizeYAMLUnicodeEscapes replaces invalid Unicode escape sequences (unpaired surrogates
+// U+D800–U+DFFF) with the replacement character U+FFFD so YAML parsers can decode the content.
+func sanitizeYAMLUnicodeEscapes(yamlContent string) string {
+	return invalidUnicodeEscape.ReplaceAllString(yamlContent, `\uFFFD`)
 }
 
 // stripMarkdownCodeFences removes markdown code fences from the content
