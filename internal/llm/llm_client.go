@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/joho/godotenv"
+	openai "github.com/openai/openai-go/v3"
 )
 
 const (
@@ -29,6 +32,8 @@ type LLMClient struct {
 	ChatClient ChatClient
 	llmType    int
 	timeout    time.Duration
+	maxRetries int
+	sleepFn    func(time.Duration) // injectable for testing; defaults to time.Sleep
 }
 
 const (
@@ -38,7 +43,7 @@ const (
 )
 
 // NewLLMClientFromEnvWithModel creates a new LLM client from environment variables
-func NewLLMClientFromEnvWithModel(model string, timeout time.Duration) (*LLMClient, error) {
+func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetries int) (*LLMClient, error) {
 	if model == "" {
 		return nil, errors.New("model is required")
 	}
@@ -79,12 +84,31 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration) (*LLMClie
 		ChatClient: chatClient,
 		llmType:    llmType,
 		timeout:    timeout,
+		maxRetries: maxRetries,
+		sleepFn:    time.Sleep,
 	}, nil
 }
 
 // GetType returns the LLM type
 func (c *LLMClient) GetType() int {
 	return c.llmType
+}
+
+// isRateLimitError returns true if err is a 429 rate-limit response from
+// the Anthropic or OpenAI SDKs. Bedrock errors are not matched.
+func isRateLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var anthropicErr *anthropic.Error
+	if errors.As(err, &anthropicErr) {
+		return anthropicErr.StatusCode == 429
+	}
+	var openaiErr *openai.Error
+	if errors.As(err, &openaiErr) {
+		return openaiErr.StatusCode == 429
+	}
+	return false
 }
 
 // callLLM calls the LLM API
@@ -100,9 +124,29 @@ Each finding must have: severity, rule_id, title, message, and optionally catego
 Return ONLY valid YAML, no markdown formatting, no code fences.`
 	}
 
-	content, err := c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
-		{Role: "user", Content: userPrompt},
-	})
+	var content string
+	var err error
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		content, err = c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
+			{Role: "user", Content: userPrompt},
+		})
+		if err == nil {
+			break
+		}
+		if !isRateLimitError(err) || attempt == c.maxRetries {
+			return "", err
+		}
+		base := time.Duration(1<<uint(attempt)) * time.Second
+		if base > 60*time.Second {
+			base = 60 * time.Second
+		}
+		// ±10% jitter: rand gives [0, base/5), subtract base/10 → [-base/10, ~+base/10)
+		jitter := time.Duration(rand.Int64N(int64(base/5))) - base/10
+		delay := base + jitter
+		fmt.Printf("Rate limited by LLM, retrying in %s (attempt %d/%d)\n",
+			delay.Round(time.Millisecond), attempt+1, c.maxRetries)
+		c.sleepFn(delay)
+	}
 	if err != nil {
 		return "", err
 	}

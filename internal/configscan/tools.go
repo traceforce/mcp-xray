@@ -26,7 +26,7 @@ type ToolsScanner struct {
 	toolsOutputFile string
 }
 
-func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string) (*ToolsScanner, error) {
+func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string, maxRetries int) (*ToolsScanner, error) {
 	switch analyzerType {
 	case "token":
 		tokenAnalyzer, err := NewTokenAnalyzer()
@@ -39,7 +39,7 @@ func NewToolsScanner(configPath string, analyzerType string, model string, tools
 			toolsOutputFile: toolsOutputFile,
 		}, nil
 	case "llm":
-		llmClient, err := llm.NewLLMClientFromEnvWithModel(model, 30*time.Second)
+		llmClient, err := llm.NewLLMClientFromEnvWithModel(model, 30*time.Second, maxRetries)
 		if err != nil {
 			return nil, err
 		}
