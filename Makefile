@@ -28,7 +28,7 @@ proto:
 	buf generate proto
 
 # Install the binary
-install:
+install: build
 	install -m 0755 $(BINARY) $(DESTDIR)
 
 # Clean generated files
