@@ -182,7 +182,7 @@ func NewConfigScanCommand() *cobra.Command {
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
 	cmd.Flags().String("analyzer-type", "token", "Analyzer type to use: 'token' or 'llm' (default: token)")
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
-	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on LLM rate limit errors (HTTP 429), 0 = no retries")
+	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on transient LLM errors (rate limits, timeouts, 5xx), 0 = no retries")
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
@@ -487,7 +487,7 @@ func NewPentestCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
-	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on LLM rate limit errors (HTTP 429), 0 = no retries")
+	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on transient LLM errors (rate limits, timeouts, 5xx), 0 = no retries")
 	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
 	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
@@ -571,7 +571,7 @@ func NewVerifyCommand() *cobra.Command {
 	cmd.MarkFlagRequired("sarif")
 	cmd.Flags().String("llm-model", "", "LLM model to use for verification (required)")
 	cmd.MarkFlagRequired("llm-model")
-	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on LLM rate limit errors (HTTP 429), 0 = no retries")
+	cmd.Flags().Int("llm-max-retries", 0, "Maximum number of retries on transient LLM errors (rate limits, timeouts, 5xx), 0 = no retries")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_verify_<timestamp>.sarif.json)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	return cmd

@@ -15,10 +15,13 @@ type AnthropicClient struct {
 
 var _ ChatClient = (*AnthropicClient)(nil)
 
-func NewAnthropicClient(apiKey, model string) *AnthropicClient {
+func NewAnthropicClient(apiKey, model string, maxRetries int) *AnthropicClient {
 	return &AnthropicClient{
-		client: anthropic.NewClient(option.WithAPIKey(apiKey)),
-		model:  model,
+		client: anthropic.NewClient(
+			option.WithAPIKey(apiKey),
+			option.WithMaxRetries(maxRetries),
+		),
+		model: model,
 	}
 }
 

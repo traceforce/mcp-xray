@@ -4,16 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
-	anthropic "github.com/anthropics/anthropic-sdk-go"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/joho/godotenv"
-	openai "github.com/openai/openai-go/v3"
 )
 
 const (
@@ -32,8 +29,6 @@ type LLMClient struct {
 	ChatClient ChatClient
 	llmType    int
 	timeout    time.Duration
-	maxRetries int
-	sleepFn    func(time.Duration) // injectable for testing; defaults to time.Sleep
 }
 
 const (
@@ -48,8 +43,8 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetrie
 		return nil, errors.New("model is required")
 	}
 
-	// Try to load environment variables from .env file.Ignores error if .env doesn't exist as we
-	// will try to load from the enviornment variables directly
+	// Try to load environment variables from .env file. Ignores error if .env doesn't exist as we
+	// will try to load from the environment variables directly
 	_ = godotenv.Load()
 
 	llmType := LLM_TYPE_UNKNOWN
@@ -60,21 +55,21 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetrie
 		if apiKey == "" {
 			return nil, errors.New("To use Anthropic models, the Environment variable ANTHROPIC_API_KEY is required")
 		}
-		chatClient = NewAnthropicClient(apiKey, model)
+		chatClient = NewAnthropicClient(apiKey, model, maxRetries)
 	} else if strings.HasPrefix(strings.ToLower(model), "gpt-") {
 		llmType = LLM_TYPE_OPENAI
 		apiKey := os.Getenv("OPENAI_API_KEY")
 		if apiKey == "" {
 			return nil, errors.New("To use OpenAI models, the Environment variable OPENAI_API_KEY is required")
 		}
-		chatClient = NewOpenAIClient(apiKey, model)
+		chatClient = NewOpenAIClient(apiKey, model, maxRetries)
 	} else if strings.HasPrefix(strings.ToLower(model), "arn:aws:bedrock:") && strings.Contains(strings.ToLower(model), "llama") {
 		llmType = LLM_TYPE_AWS
 		cfg, err := config.LoadDefaultConfig(context.Background())
 		if err != nil {
 			return nil, fmt.Errorf("To use AWS models, the AWS config must be loaded: %w", err)
 		}
-		chatClient = NewBedrockLlamaClient(cfg, model)
+		chatClient = NewBedrockLlamaClient(cfg, model, maxRetries)
 	} else {
 		example := "arn:aws:bedrock:us-east-2:522814721969:inference-profile/us.meta.llama3-2-1b-instruct-v1:0"
 		return nil, fmt.Errorf("Unsupported LLM model: %v. If you are using an AWS model, it must be an Meta Llama inference profile ARN starting with 'arn:aws:bedrock:' (e.g. %v)", model, example)
@@ -84,8 +79,6 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetrie
 		ChatClient: chatClient,
 		llmType:    llmType,
 		timeout:    timeout,
-		maxRetries: maxRetries,
-		sleepFn:    time.Sleep,
 	}, nil
 }
 
@@ -94,59 +87,22 @@ func (c *LLMClient) GetType() int {
 	return c.llmType
 }
 
-// isRateLimitError returns true if err is a 429 rate-limit response from
-// the Anthropic or OpenAI SDKs. Bedrock errors are not matched.
-func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var anthropicErr *anthropic.Error
-	if errors.As(err, &anthropicErr) {
-		return anthropicErr.StatusCode == 429
-	}
-	var openaiErr *openai.Error
-	if errors.As(err, &openaiErr) {
-		return openaiErr.StatusCode == 429
-	}
-	return false
-}
-
-// callLLM calls the LLM API
+// CallLLM calls the LLM API
 func (c *LLMClient) CallLLM(ctx context.Context, userPrompt string, outputFormat int) (string, error) {
-	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities. 
+	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
 Analyze the provided tool information and return a JSON array of security findings.
 Each finding must have: severity, rule_id, title, message, and optionally category.
 Return ONLY valid JSON, no markdown formatting, no code fences.`
 	if outputFormat == OutputFormatYAML {
-		systemPrompt = `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities. 
+		systemPrompt = `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
 Analyze the provided tool information and return a YAML object of security findings.
 Each finding must have: severity, rule_id, title, message, and optionally category.
 Return ONLY valid YAML, no markdown formatting, no code fences.`
 	}
 
-	var content string
-	var err error
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
-		content, err = c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
-			{Role: "user", Content: userPrompt},
-		})
-		if err == nil {
-			break
-		}
-		if !isRateLimitError(err) || attempt == c.maxRetries {
-			return "", err
-		}
-		base := time.Duration(1<<uint(attempt)) * time.Second
-		if base > 60*time.Second {
-			base = 60 * time.Second
-		}
-		// ±10% jitter: rand gives [0, base/5), subtract base/10 → [-base/10, ~+base/10)
-		jitter := time.Duration(rand.Int64N(int64(base/5))) - base/10
-		delay := base + jitter
-		fmt.Printf("Rate limited by LLM, retrying in %s (attempt %d/%d)\n",
-			delay.Round(time.Millisecond), attempt+1, c.maxRetries)
-		c.sleepFn(delay)
-	}
+	content, err := c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
+		{Role: "user", Content: userPrompt},
+	})
 	if err != nil {
 		return "", err
 	}
