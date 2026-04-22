@@ -174,6 +174,7 @@ Post-process step to verify results from a previous scan.
 | `--llm-max-retries` | `int` | `3` | Max retries on transient LLM errors |
 | `--output` / `-o` | `string` | `findings-verify-<timestamp>.sarif.json` | SARIF report output path |
 | `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
+| `--clean-up` | `bool` | `false` | Remove files after upload |
 | `--output-dir` | `string` | N/A | Directory for all output files (default: current working directory) |
 
 **Example Usage**

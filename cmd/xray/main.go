@@ -574,6 +574,8 @@ func NewVerifyCommand() *cobra.Command {
 			}
 
 			outputPath, _ := cmd.Flags().GetString("output")
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+			outputUserSpecified := outputPath != ""
 			upload, _ := cmd.Flags().GetBool("upload")
 			if upload {
 				if err := validateTraceforceEnv(); err != nil {
@@ -596,6 +598,19 @@ func NewVerifyCommand() *cobra.Command {
 				os.Exit(1)
 			}
 			fmt.Printf("Verified findings written to %s\n", actualOutputPath)
+			if cleanup && upload {
+				outputPathToClean := ""
+				if !outputUserSpecified {
+					outputPathToClean = actualOutputPath
+				}
+				if err := cleanupGeneratedFiles(outputPathToClean, "", "", ""); err != nil {
+					fmt.Printf("Error cleaning up files: %v\n", err)
+					os.Exit(1)
+				}
+				if outputPathToClean != "" {
+					fmt.Printf("Generated files cleaned up\n")
+				}
+			}
 		},
 	}
 	cmd.Flags().String("sarif", "", "Path to SARIF file (required)")
@@ -604,6 +619,7 @@ func NewVerifyCommand() *cobra.Command {
 	cmd.MarkFlagRequired("llm-model")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings-verify-<timestamp>.sarif.json)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	cmd.Flags().String("output-dir", "", "Directory for all output files (default: current working directory)")
 	return cmd
 }
@@ -655,8 +671,10 @@ func writeFindings(findings []*proto.Finding, outputPath string, outputDir strin
 
 func cleanupGeneratedFiles(outputPath string, toolsFilePath string, testFilePath string, testPlanDirPath string) error {
 	// Delete SARIF output file
-	if err := os.Remove(outputPath); err != nil {
-		return fmt.Errorf("error deleting output file %s: %w", outputPath, err)
+	if outputPath != "" {
+		if err := os.Remove(outputPath); err != nil {
+			return fmt.Errorf("error deleting output file %s: %w", outputPath, err)
+		}
 	}
 
 	// Delete tools file if it exists
