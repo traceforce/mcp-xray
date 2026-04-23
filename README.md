@@ -54,7 +54,7 @@ Scan MCP configs for security issues. Run before `pentest` to baseline your setu
 | `--scan-known-configs` | `bool` | `false` | Scan all known MCP config paths |
 | `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
 | `--clean-up` | `bool` | `false` | Remove generated files after upload |
-| `--output-dir` | `string` | N/A | Directory for all output files (default: current working directory) |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
 
 **Example Usage**
 
@@ -106,7 +106,7 @@ Execute security test plans by making actual tool calls against MCP servers. LLM
 | `--output` / `-o` | `string` | `findings-pentest-<timestamp>.sarif.json` | SARIF report output path |
 | `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
 | `--clean-up` | `bool` | `false` | Remove files after upload |
-| `--output-dir` | `string` | N/A | Directory for all output files (default: current working directory) |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
 
 **Example Usage**
 
@@ -117,7 +117,7 @@ mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5
 
 2. Use a custom test plan YAML file
 ```bash
-mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test-plan.yaml --llm-model claude-sonnet-4-5
+mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test/plan.yaml --llm-model claude-sonnet-4-5
 ```
 
 ### Repository Scan (`repo-scan`)
@@ -134,7 +134,7 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 | Flag | Type | Default Value | Description |
 | :--- | :--- | :--- | :--- |
 | `--output` / `-o` | `string` | `findings-repo-scan-<timestamp>.sarif.json` | SARIF report output path |
-| `--max-file-size` | `int64` | `0 (→10MB)` | Max file size to scan |
+| `--max-file-size` | `int64` | `0` | Maximum file size in bytes to scan (NOTE: `0` represents 10MB, positive integer varlue is treated as absolute byte count) |
 | `--exclude-paths` / `-e` | `string[]` | N/A | Path patterns to exclude |
 | `--use-default-excludes` | `bool` | `true` | Exclude `node_modules`, `.git`, etc. |
 | `--cve` | `bool` | `false` | Run CVE/SCA scan |
@@ -142,7 +142,7 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 | `--sast` | `bool` | `false` | Run SAST scan |
 | `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
 | `--clean-up` | `bool` | `false` | Remove files after upload |
-| `--output-dir` | `string` | N/A | Directory for all output files (default: current working directory) |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
 
 **Example Usage**
 
@@ -175,7 +175,7 @@ Post-process step to verify results from a previous scan.
 | `--output` / `-o` | `string` | `findings-verify-<timestamp>.sarif.json` | SARIF report output path |
 | `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
 | `--clean-up` | `bool` | `false` | Remove files after upload |
-| `--output-dir` | `string` | N/A | Directory for all output files (default: current working directory) |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
 
 **Example Usage**
 
@@ -203,7 +203,7 @@ These credentials can be downloaded from the settings page on the Atlas UI.
 mcpxray config-scan /path/to/mcp/config.json --upload
 
 # Upload with cleanup
-mcpxray config-scan /path/xia-add-registry-imageto/mcp/config.json --upload --clean-up
+mcpxray config-scan /path/to/mcp/config.json --upload --clean-up
 
 # Upload pentest results
 mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
