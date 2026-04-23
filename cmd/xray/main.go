@@ -111,11 +111,6 @@ func NewConfigScanCommand() *cobra.Command {
 			toolsOutputFile, _ := cmd.Flags().GetString("tools-output")
 			// Track if tools-output was user-specified before setting default
 			toolsOutputUserSpecified := toolsOutputFile != ""
-			// Set default tools output file if not provided
-			if toolsOutputFile == "" {
-				timestamp := time.Now().Format(time.RFC3339)
-				toolsOutputFile = fmt.Sprintf("tools_summary_%s.json", strings.ReplaceAll(timestamp, ":", "-"))
-			}
 
 			// Validate environment variables if upload is requested (before scanning)
 			upload, _ := cmd.Flags().GetBool("upload")
@@ -125,6 +120,20 @@ func NewConfigScanCommand() *cobra.Command {
 					fmt.Println(err)
 					os.Exit(1)
 				}
+			}
+
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					fmt.Printf("Error: failed to create output directory %s: %v\n", outputDir, err)
+					os.Exit(1)
+				}
+			}
+
+			// Set default tools output file if not provided
+			if toolsOutputFile == "" {
+				timestamp := time.Now().Format(time.RFC3339)
+				toolsOutputFile = filepath.Join(outputDir, fmt.Sprintf("tools_summary_%s.json", strings.ReplaceAll(timestamp, ":", "-")))
 			}
 
 			// Scan all config paths and combine findings
@@ -152,7 +161,7 @@ func NewConfigScanCommand() *cobra.Command {
 			outputUserSpecified := outputPath != ""
 			// Use the actual config path as source name (when uploading, configPaths has exactly one element)
 			sourceName := configPaths[0]
-			actualOutputPath, err := writeFindings(allFindings, outputPath, "config-scan", shouldUpload, sourceName, toolsOutputFile, "")
+			actualOutputPath, err := writeFindings(allFindings, outputPath, outputDir, "config-scan", shouldUpload, sourceName, toolsOutputFile, "")
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -178,13 +187,14 @@ func NewConfigScanCommand() *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings-config-scan-<timestamp>.sarif.json)")
 	cmd.Flags().String("analyzer-type", "token", "Analyzer type to use: 'token' or 'llm' (default: token)")
 	cmd.Flags().String("llm-model", "", "LLM model to use for analysis (required when analyzer-type is 'llm')")
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().String("output-dir", "", "Directory for all output files (default: current working directory)")
 	return cmd
 }
 
@@ -245,6 +255,14 @@ func NewRepoScanCommand() *cobra.Command {
 				}
 			}
 
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					fmt.Printf("Error: failed to create output directory %s: %v\n", outputDir, err)
+					os.Exit(1)
+				}
+			}
+
 			var allFindings []*proto.Finding
 			ctx := context.Background()
 
@@ -288,7 +306,7 @@ func NewRepoScanCommand() *cobra.Command {
 			if repoPath != "." {
 				sourceName = filepath.Base(repoPath)
 			}
-			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, sourceName, "", "")
+			actualOutputPath, err := writeFindings(allFindings, outputPath, outputDir, "repo-scan", upload, sourceName, "", "")
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -303,7 +321,7 @@ func NewRepoScanCommand() *cobra.Command {
 			}
 		},
 	}
-	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings.sarif.json)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings-repo-scan-<timestamp>.sarif.json)")
 	cmd.Flags().Int64("max-file-size", 0, "Maximum file size in bytes to scan (0 uses default: 10MB)")
 	cmd.Flags().StringArrayP("exclude-paths", "e", []string{}, "Path pattern to exclude from scanning (can be specified multiple times)")
 	cmd.Flags().Bool("use-default-excludes", true, "Use default exclude paths (e.g., node_modules, .git, etc.). By default, certain files and directories are excluded from scanning.")
@@ -312,6 +330,7 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().String("output-dir", "", "Directory for all output files (default: current working directory)")
 	return cmd
 }
 
@@ -327,6 +346,14 @@ func NewPentestCommand() *cobra.Command {
 			testPlanDir, _ := cmd.Flags().GetString("test-directory")
 			// Track if test-directory was user-specified before setting default
 			testPlanDirUserSpecified := testPlanDir != ""
+
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					fmt.Printf("Error: failed to create output directory %s: %v\n", outputDir, err)
+					os.Exit(1)
+				}
+			}
 
 			// Validate that configPath is a file, not a directory
 			fileInfo, err := os.Stat(configPath)
@@ -374,7 +401,7 @@ func NewPentestCommand() *cobra.Command {
 					// Use default directory - create it
 					timestamp := time.Now().Format(time.RFC3339)
 					timestamp = strings.ReplaceAll(timestamp, ":", "-")
-					testPlanDir = fmt.Sprintf("pentest_plans_%s", timestamp)
+					testPlanDir = filepath.Join(outputDir, fmt.Sprintf("pentest_plans_%s", timestamp))
 					if err := os.MkdirAll(testPlanDir, 0755); err != nil {
 						fmt.Printf("Error: failed to create default test plan directory: %v\n", err)
 						os.Exit(1)
@@ -415,7 +442,7 @@ func NewPentestCommand() *cobra.Command {
 			}
 
 			// Create pentest tool
-			pentestTool, err := pentest.NewPentestTool(configPath, llmModel)
+			pentestTool, err := pentest.NewPentestTool(configPath, llmModel, outputDir)
 			if err != nil {
 				fmt.Printf("Error creating pentest tool: %v\n", err)
 				os.Exit(1)
@@ -455,7 +482,7 @@ func NewPentestCommand() *cobra.Command {
 			if isDirectory && !testPlanDirUserSpecified {
 				testPlanDirPath = testPlanPath
 			}
-			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath)
+			actualOutputPath, err := writeFindings(findings, outputPath, outputDir, "pentest", upload, sourceName, "", testFilePath)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -486,9 +513,10 @@ func NewPentestCommand() *cobra.Command {
 	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
 	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
 	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
-	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings-pentest-<timestamp>.sarif.json)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().String("output-dir", "", "Directory for all output files (default: current working directory)")
 
 	return cmd
 }
@@ -546,6 +574,8 @@ func NewVerifyCommand() *cobra.Command {
 			}
 
 			outputPath, _ := cmd.Flags().GetString("output")
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+			outputUserSpecified := outputPath != ""
 			upload, _ := cmd.Flags().GetBool("upload")
 			if upload {
 				if err := validateTraceforceEnv(); err != nil {
@@ -554,20 +584,43 @@ func NewVerifyCommand() *cobra.Command {
 				}
 			}
 
-			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "")
+			outputDir, _ := cmd.Flags().GetString("output-dir")
+			if outputDir != "" {
+				if err := os.MkdirAll(outputDir, 0755); err != nil {
+					fmt.Printf("Error: failed to create output directory %s: %v\n", outputDir, err)
+					os.Exit(1)
+				}
+			}
+
+			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, outputDir, "verify", upload, sarifPath, "", "")
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 			}
 			fmt.Printf("Verified findings written to %s\n", actualOutputPath)
+			if cleanup && upload {
+				outputPathToClean := ""
+				if !outputUserSpecified {
+					outputPathToClean = actualOutputPath
+				}
+				if err := cleanupGeneratedFiles(outputPathToClean, "", "", ""); err != nil {
+					fmt.Printf("Error cleaning up files: %v\n", err)
+					os.Exit(1)
+				}
+				if outputPathToClean != "" {
+					fmt.Printf("Generated files cleaned up\n")
+				}
+			}
 		},
 	}
 	cmd.Flags().String("sarif", "", "Path to SARIF file (required)")
 	cmd.MarkFlagRequired("sarif")
 	cmd.Flags().String("llm-model", "", "LLM model to use for verification (required)")
 	cmd.MarkFlagRequired("llm-model")
-	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_verify_<timestamp>.sarif.json)")
+	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings-verify-<timestamp>.sarif.json)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
+	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().String("output-dir", "", "Directory for all output files (default: current working directory)")
 	return cmd
 }
 
@@ -585,7 +638,7 @@ func main() {
 	}
 }
 
-func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
+func writeFindings(findings []*proto.Finding, outputPath string, outputDir string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
 	sarifBytes, err := report.GenerateSarif(findings)
 	if err != nil {
 		return "", fmt.Errorf("error generating SARIF report: %w", err)
@@ -595,7 +648,7 @@ func writeFindings(findings []*proto.Finding, outputPath string, commandName str
 		timestamp := time.Now().Format(time.RFC3339)
 		// Make RFC3339 filename-safe by replacing colons with hyphens
 		timestamp = strings.ReplaceAll(timestamp, ":", "-")
-		outputPath = fmt.Sprintf("findings-%s-%s.sarif.json", commandName, timestamp)
+		outputPath = filepath.Join(outputDir, fmt.Sprintf("findings-%s-%s.sarif.json", commandName, timestamp))
 	}
 
 	err = os.WriteFile(outputPath, sarifBytes, 0644)
@@ -618,8 +671,10 @@ func writeFindings(findings []*proto.Finding, outputPath string, commandName str
 
 func cleanupGeneratedFiles(outputPath string, toolsFilePath string, testFilePath string, testPlanDirPath string) error {
 	// Delete SARIF output file
-	if err := os.Remove(outputPath); err != nil {
-		return fmt.Errorf("error deleting output file %s: %w", outputPath, err)
+	if outputPath != "" {
+		if err := os.Remove(outputPath); err != nil {
+			return fmt.Errorf("error deleting output file %s: %w", outputPath, err)
+		}
 	}
 
 	// Delete tools file if it exists

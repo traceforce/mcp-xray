@@ -26,31 +26,15 @@ make install-dependencies
 # The binary will be created as `mcpxray` in the current directory
 make all
 
+# Install to /usr/local/bin
+sudo make install
 ```
 
 ## Usage
 
-### Configuration Scan
+### Configuration Scan (`config-scan`)
 
-Scan MCP configs for security issues; run before pentest to baseline your setup.
-
-```bash
-# Scan a specific MCP config file (uses token analyzer by default)
-./mcpxray config-scan /path/to/mcp/config.json
-
-# Scan all known MCP config paths automatically for Cursor, Claude and Windsurf.
-# Known config locations (relative to home directory):
-#   ~/.cursor/mcp.json (Cursor)
-#   ~/Library/Application Support/Claude/claude_desktop_config.json (Claude Desktop)
-#   ~/.codeium/windsurf/mcp_config.json (Windsurf)
-./mcpxray config-scan --scan-known-configs
-
-# Use LLM analyzer for more extensive and deepr analysis
-./mcpxray config-scan /path/to/mcp/config.json --analyzer-type llm --llm-model claude-3-5-sonnet-20241022
-
-# Specify custom output file
-./mcpxray config-scan /path/to/mcp/config.json --output custom-report.sarif.json
-```
+Scan MCP configs for security issues. Run before `pentest` to baseline your setup.
 
 **Detection Capabilities:**
 
@@ -58,39 +42,147 @@ Scan MCP configs for security issues; run before pentest to baseline your setup.
 - **Secrets Detection**: Scans for exposed credentials, API keys, and sensitive information
 - **Tool Analysis**: Analyzes tool descriptions using Token Analyzer (default) or LLM Analyzer for risks including arbitrary execution, injection vulnerabilities, authorization bypass, and information disclosure
 
-### Pentest
+**Supported Command Line Arguments**
+
+| Flag | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- |
+| `--output` / `-o` | `string` | `findings-config-scan-<timestamp>.sarif.json` | SARIF report output path |
+| `--tools-output` | `string` | `tools_summary_<ts>.json` | Tools JSON output path |
+| `--analyzer-type` | `string` | `token` | Supported types are `token` or `llm` |
+| `--llm-model` | `string` | N/A | LLM model (required if analyzer is `llm`) |
+| `--llm-max-retries` | `int` | `3` | Max retries on transient LLM errors |
+| `--scan-known-configs` | `bool` | `false` | Scan all known MCP config paths |
+| `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
+| `--clean-up` | `bool` | `false` | Remove generated files after upload |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
+
+**Example Usage**
+
+1. Scan a specific MCP config file (uses token analyzer by default):
+```bash
+mcpxray config-scan /path/to/mcp/config.json
+```
+
+2. Scan all known MCP config paths automatically for Cursor, Claude and Windsurf.
+Known config locations (relative to home directory):
+* `~/.cursor/mcp.json` (Cursor)
+* `~/Library/Application Support/Claude/claude_desktop_config.json` (Claude Desktop)
+* `~/.codeium/windsurf/mcp_config.json` (Windsurf)
+```bash
+mcpxray config-scan --scan-known-configs
+```
+
+3. Use LLM analyzer for more extensive and deeper analysis
+```bash
+mcpxray config-scan /path/to/mcp/config.json --analyzer-type llm --llm-model claude-3-5-sonnet-20241022
+```
+
+4. Specify custom output file
+```bash
+mcpxray config-scan /path/to/mcp/config.json --output custom-report.sarif.json
+```
+
+### Penetration Testing (`pentest`)
 
 Execute security test plans by making actual tool calls against MCP servers. LLMs are required to run the pentest. Run this before actual deployment in production.
 
+**Detection Capabilities:**
+- Code execution
+- SSRF
+- Path Traversal
+- Authorization Bypass
+- Input Injection
+- Information Disclosure
+- DoS Vulnerabilities
+
+**Supported Command Line Arguments**
+
+| Flag | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- |
+| `--llm-model` | `string` | N/A | LLM model (required) |
+| `--llm-max-retries` | `int` | `3` | Max retries on transient LLM errors |
+| `--test-plan` | `string` | N/A | Path to test plan YAML |
+| `--test-directory` | `string` | `pentest_plans_<ts>` | Directory for generated test plans |
+| `--output` / `-o` | `string` | `findings-pentest-<timestamp>.sarif.json` | SARIF report output path |
+| `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
+| `--clean-up` | `bool` | `false` | Remove files after upload |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
+
+**Example Usage**
+
+1. Run pentest with auto-generated test plan (requires LLM model)
 ```bash
-# Run pentest with auto-generated test plan (requires LLM model)
-./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5
-
-# Use a custom test plan YAML file
-./mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test-plan.yaml --llm-model claude-sonnet-4-5
-
+mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5
 ```
-**Detection Capabilities:** Code execution, SSRF, path traversal, authorization bypass, input injection, information disclosure, and DoS vulnerabilities
 
-### Repository Scan
+2. Use a custom test plan YAML file
+```bash
+mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test/plan.yaml --llm-model claude-sonnet-4-5
+```
+
+### Repository Scan (`repo-scan`)
 
 Scan the codebase for vulnerabilities; use when you own or can change the code.
 
-```bash
-# Scan current directory
-./mcpxray repo-scan
-
-# Scan a specific repository
-./mcpxray repo-scan /path/to/repository
-
-# Specify custom output file
-./mcpxray repo-scan --output custom-report.sarif.json
-```
 **Detection Capabilities:**
 - **SCA**: Detects vulnerable dependencies using OSV API
 - **SAST**: Identifies unsafe command patterns and security anti-patterns
 - **Secrets Detection**: Scans for hardcoded secrets and credentials
 
+**Supported Command Line Arguments**
+
+| Flag | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- |
+| `--output` / `-o` | `string` | `findings-repo-scan-<timestamp>.sarif.json` | SARIF report output path |
+| `--max-file-size` | `int64` | `0` | Maximum file size in bytes to scan (NOTE: `0` represents 10MB, positive integer varlue is treated as absolute byte count) |
+| `--exclude-paths` / `-e` | `string[]` | N/A | Path patterns to exclude |
+| `--use-default-excludes` | `bool` | `true` | Exclude `node_modules`, `.git`, etc. |
+| `--cve` | `bool` | `false` | Run CVE/SCA scan |
+| `--secrets` | `bool` | `false` | Run secrets scan |
+| `--sast` | `bool` | `false` | Run SAST scan |
+| `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
+| `--clean-up` | `bool` | `false` | Remove files after upload |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
+
+**Example Usage**
+
+1. Scan current directory
+```bash
+mcpxray repo-scan
+```
+
+2. Scan a specific repository
+```bash
+mcpxray repo-scan /path/to/repository
+```
+
+3. Specify custom output file
+```bash
+mcpxray repo-scan --output custom-report.sarif.json
+```
+
+### Verification (`verify`)
+
+Post-process step to verify results from a previous scan.
+
+**Supported Command Line Arguments**
+
+| Flag | Type | Default Value | Description |
+| :--- | :--- | :--- | :--- |
+| `--sarif` | `string` | N/A | Path to SARIF file (required) |
+| `--llm-model` | `string` | N/A | LLM model (required) |
+| `--llm-max-retries` | `int` | `3` | Max retries on transient LLM errors |
+| `--output` / `-o` | `string` | `findings-verify-<timestamp>.sarif.json` | SARIF report output path |
+| `--upload` | `bool` | `false` | Upload SARIF to Traceforce Atlas |
+| `--clean-up` | `bool` | `false` | Remove files after upload |
+| `--output-dir` | `string` | *Current Working Directory* | Directory for all output files (NOTE: This flag is ignored if the `-o` flag is used) |
+
+**Example Usage**
+
+1. Verify the findings of previously run test
+```bash
+mcpxray verify --sarif custom-report.sarif.json --llm-model claude-3-5-sonnet-20241022
+```
 
 ## Output Format
 
@@ -108,13 +200,13 @@ These credentials can be downloaded from the settings page on the Atlas UI.
 
 ```bash
 # Upload config scan results
-./mcpxray config-scan /path/to/mcp/config.json --upload
+mcpxray config-scan /path/to/mcp/config.json --upload
 
 # Upload with cleanup
-./mcpxray config-scan /path/xia-add-registry-imageto/mcp/config.json --upload --clean-up
+mcpxray config-scan /path/to/mcp/config.json --upload --clean-up
 
 # Upload pentest results
-./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
+mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5 --upload
 ```
 ![Atlas Report History](images/atlas-report-history.png)
 
@@ -165,12 +257,12 @@ By default, the pentest tool uses an LLM to automatically generate test plans ba
 
 **Default behavior (LLM-generated test plan):**
 ```bash
-./mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5
+mcpxray pentest /path/to/mcp/config.json --llm-model claude-sonnet-4-5
 ```
 
 **Custom test plan:**
 ```bash
-./mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test-plan.yaml --llm-model claude-sonnet-4-5
+mcpxray pentest /path/to/mcp/config.json --test-plan /path/to/test-plan.yaml --llm-model claude-sonnet-4-5
 ```
 
 ### Supported Models
