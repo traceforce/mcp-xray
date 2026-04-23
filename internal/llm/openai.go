@@ -16,10 +16,13 @@ type OpenAIClient struct {
 
 var _ ChatClient = (*OpenAIClient)(nil)
 
-func NewOpenAIClient(apiKey, model string) *OpenAIClient {
+func NewOpenAIClient(apiKey, model string, maxRetries int) *OpenAIClient {
 	return &OpenAIClient{
-		client: openai.NewClient(option.WithAPIKey(apiKey)),
-		model:  model,
+		client: openai.NewClient(
+			option.WithAPIKey(apiKey),
+			option.WithMaxRetries(maxRetries),
+		),
+		model: model,
 	}
 }
 

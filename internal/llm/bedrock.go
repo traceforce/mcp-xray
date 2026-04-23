@@ -28,10 +28,12 @@ type BedrockLlamaResponse struct {
 	StopReason           string `json:"stop_reason"`
 }
 
-func NewBedrockLlamaClient(cfg aws.Config, inferenceProfileArn string) *BedrockLlamaClient {
-	// For Bedrock, we use the inference profile ID to identify the model
+func NewBedrockLlamaClient(cfg aws.Config, inferenceProfileArn string, maxRetries int) *BedrockLlamaClient {
 	return &BedrockLlamaClient{
-		client:              bedrockruntime.NewFromConfig(cfg),
+		client: bedrockruntime.NewFromConfig(cfg, func(o *bedrockruntime.Options) {
+			// RetryMaxAttempts is total attempts (1 = no retry); the CLI flag counts retries, so add 1.
+			o.RetryMaxAttempts = maxRetries + 1
+		}),
 		inferenceProfileArn: inferenceProfileArn,
 	}
 }

@@ -38,13 +38,13 @@ const (
 )
 
 // NewLLMClientFromEnvWithModel creates a new LLM client from environment variables
-func NewLLMClientFromEnvWithModel(model string, timeout time.Duration) (*LLMClient, error) {
+func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetries int) (*LLMClient, error) {
 	if model == "" {
 		return nil, errors.New("model is required")
 	}
 
-	// Try to load environment variables from .env file.Ignores error if .env doesn't exist as we
-	// will try to load from the enviornment variables directly
+	// Try to load environment variables from .env file. Ignores error if .env doesn't exist as we
+	// will try to load from the environment variables directly
 	_ = godotenv.Load()
 
 	llmType := LLM_TYPE_UNKNOWN
@@ -55,21 +55,21 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration) (*LLMClie
 		if apiKey == "" {
 			return nil, errors.New("To use Anthropic models, the Environment variable ANTHROPIC_API_KEY is required")
 		}
-		chatClient = NewAnthropicClient(apiKey, model)
+		chatClient = NewAnthropicClient(apiKey, model, maxRetries)
 	} else if strings.HasPrefix(strings.ToLower(model), "gpt-") {
 		llmType = LLM_TYPE_OPENAI
 		apiKey := os.Getenv("OPENAI_API_KEY")
 		if apiKey == "" {
 			return nil, errors.New("To use OpenAI models, the Environment variable OPENAI_API_KEY is required")
 		}
-		chatClient = NewOpenAIClient(apiKey, model)
+		chatClient = NewOpenAIClient(apiKey, model, maxRetries)
 	} else if strings.HasPrefix(strings.ToLower(model), "arn:aws:bedrock:") && strings.Contains(strings.ToLower(model), "llama") {
 		llmType = LLM_TYPE_AWS
 		cfg, err := config.LoadDefaultConfig(context.Background())
 		if err != nil {
 			return nil, fmt.Errorf("To use AWS models, the AWS config must be loaded: %w", err)
 		}
-		chatClient = NewBedrockLlamaClient(cfg, model)
+		chatClient = NewBedrockLlamaClient(cfg, model, maxRetries)
 	} else {
 		example := "arn:aws:bedrock:us-east-2:522814721969:inference-profile/us.meta.llama3-2-1b-instruct-v1:0"
 		return nil, fmt.Errorf("Unsupported LLM model: %v. If you are using an AWS model, it must be an Meta Llama inference profile ARN starting with 'arn:aws:bedrock:' (e.g. %v)", model, example)
@@ -87,14 +87,14 @@ func (c *LLMClient) GetType() int {
 	return c.llmType
 }
 
-// callLLM calls the LLM API
+// CallLLM calls the LLM API
 func (c *LLMClient) CallLLM(ctx context.Context, userPrompt string, outputFormat int) (string, error) {
-	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities. 
+	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
 Analyze the provided tool information and return a JSON array of security findings.
 Each finding must have: severity, rule_id, title, message, and optionally category.
 Return ONLY valid JSON, no markdown formatting, no code fences.`
 	if outputFormat == OutputFormatYAML {
-		systemPrompt = `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities. 
+		systemPrompt = `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
 Analyze the provided tool information and return a YAML object of security findings.
 Each finding must have: severity, rule_id, title, message, and optionally category.
 Return ONLY valid YAML, no markdown formatting, no code fences.`
