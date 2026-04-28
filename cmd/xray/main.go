@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -652,6 +653,40 @@ func cleanupGeneratedFiles(outputPath string, toolsFilePath string, testFilePath
 	return nil
 }
 
+func loadOrCreateDeviceID() string {
+	if id := strings.TrimSpace(os.Getenv("TRACEFORCE_DEVICE_ID")); id != "" {
+		return id
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return newDeviceID()
+	}
+	dir := filepath.Join(home, ".mcpxray")
+	path := filepath.Join(dir, "device_id")
+	if data, err := os.ReadFile(path); err == nil {
+		if id := strings.TrimSpace(string(data)); id != "" {
+			return id
+		}
+	}
+	id := newDeviceID()
+	_ = os.MkdirAll(dir, 0700)
+	_ = os.WriteFile(path, []byte(id), 0600)
+	return id
+}
+
+func newDeviceID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is exceedingly rare; fall back so token
+		// exchange still attempts rather than aborting.
+		return fmt.Sprintf("fallback-%d", time.Now().UnixNano())
+	}
+	// RFC 4122 §4.4 — set version (4) and variant (10xxxxxx) bits.
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
 func validateTraceforceEnv() error {
 	clientID := os.Getenv("TRACEFORCE_CLIENT_ID")
 	if clientID == "" {
@@ -670,10 +705,10 @@ func getBearerToken(apiURL string) (string, error) {
 	clientID := os.Getenv("TRACEFORCE_CLIENT_ID")
 	clientSecret := os.Getenv("TRACEFORCE_CLIENT_SECRET")
 
-	// Prepare request body
 	requestBody := map[string]string{
 		"client_id":     clientID,
 		"client_secret": clientSecret,
+		"device_id":     loadOrCreateDeviceID(),
 	}
 	jsonBody, err := json.Marshal(requestBody)
 	if err != nil {
