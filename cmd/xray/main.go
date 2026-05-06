@@ -681,7 +681,7 @@ func getBearerToken(apiURL string) (string, error) {
 	}
 
 	// Create HTTP request
-	url := strings.TrimSuffix(apiURL, "/") + "/api/v1/api-keys"
+	url := strings.TrimSuffix(apiURL, "/") + "/api/v1/auth/token"
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBody))
 	if err != nil {
 		return "", fmt.Errorf("error creating HTTP request: %w", err)
