@@ -40,7 +40,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) 
 
 	findings := []*proto.Finding{}
 	for _, server := range servers {
-		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
+		fmt.Printf("Scanning MCP Server %s\n", server.Name)
 		classification := libmcp.ClassifyTransport(server)
 		switch classification {
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
@@ -240,7 +240,8 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]*pro
 	// Make request to check Connection
 	resp, err := client.Get(urlStr)
 	if err != nil {
-		fmt.Printf("Http error: %s, response: %+v\n", err.Error(), resp)
+		// Log the error but not the full response, which may contain sensitive headers.
+		fmt.Printf("Connection error: %s\n", err.Error())
 		if isCertificateError(err) {
 			return []*proto.Finding{
 				{
@@ -274,10 +275,8 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]*pro
 	defer resp.Body.Close()
 
 	// Check TLS version
-	fmt.Printf("Response authentication header: %+v\n", resp.Header.Get("WWW-Authenticate"))
 	if resp.TLS != nil {
-		// Log the TLS version as we'll perform further checks on the TLS version later.
-		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
+		// TLS present; version will be checked in checkTLSVersion.
 	} else {
 		findings = append(findings, &proto.Finding{
 			Tool:          "connection-scanner",
@@ -319,7 +318,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 	// Make request to check Connection
 	resp, err := client.Get(urlStr)
 	if err != nil {
-		fmt.Printf("Http error: %s\n", err.Error())
+		// TLS version probe error — expected for unsupported versions.
 		// Check if this is NOT a TLS protocol error (version not supported)
 		if !isTLSProtocolError(err) {
 			// Connection error - report as finding and stop checking other TLS versions
@@ -359,9 +358,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 	defer resp.Body.Close()
 
 	// Check TLS version
-	fmt.Printf("Response authentication header: %+v\n", resp.Header.Get("WWW-Authenticate"))
 	if resp.TLS != nil {
-		fmt.Printf("resp.TLS type: %T, value: %+v\n", resp.TLS, resp.TLS.Version)
 		if resp.TLS.Version == tls.VersionTLS12 {
 			findings = append(findings, &proto.Finding{
 				Tool:          "connection-scanner",
@@ -413,8 +410,6 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	fmt.Printf("Response status code: %d\n", resp.StatusCode)
 
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
@@ -593,7 +588,6 @@ func checkStringSliceForKeywords(keywords []string, scope string) bool {
 	normalizedScope := strings.ToLower(scope)
 	for _, keyword := range keywords {
 		if strings.Contains(normalizedScope, keyword) {
-			fmt.Printf("Keyword %s found in scope %s\n", keyword, normalizedScope)
 			return true
 		}
 	}

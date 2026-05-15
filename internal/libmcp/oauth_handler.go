@@ -186,7 +186,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
-	fmt.Printf(" Access token acquired %+v\n\n", tok)
+	fmt.Printf("  Access token acquired (token_type=%s, expires_in=%d, scope=%s)\n\n", tok.TokenType, tok.ExpiresIn, tok.Scope)
 
 	return tok.AccessToken, nil
 }
@@ -315,7 +315,7 @@ func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, err
 	if err := json.NewDecoder(resp.Body).Decode(&dcr); err != nil {
 		return nil, err
 	}
-	fmt.Printf("DCR response: %+v\n", dcr)
+	fmt.Printf("DCR response: client_id=%s, client_secret=%s\n", dcr.ClientID, redactSecret(dcr.ClientSecret))
 	return &dcr, nil
 }
 
@@ -365,8 +365,8 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(resp.Body)
-		log.Fatalf("Token exchange failed: %s %s", resp.Status, string(body))
+		// Do not log the response body — it may contain tokens or secrets.
+		log.Fatalf("Token exchange failed: %s", resp.Status)
 	}
 
 	var tr TokenResponse
@@ -444,6 +444,15 @@ func (o *OAuthConfig) parseWWWAuthenticate(h string) map[string]string {
 	return res
 }
 
+// redactSecret masks a secret string, showing only the first 4 characters followed by "***".
+// Returns "***" for secrets shorter than 5 characters.
+func redactSecret(s string) string {
+	if len(s) <= 4 {
+		return "***"
+	}
+	return s[:4] + "***"
+}
+
 func origin(raw string) string {
 	u, _ := url.Parse(raw)
 	return u.Scheme + "://" + u.Host
@@ -473,5 +482,4 @@ func openBrowser(u string) {
 	_ = cmd.Start()
 	// don't wait; manual open already supported by printed URL
 	_ = cmd.Process.Release()
-	_ = context.Background()
 }

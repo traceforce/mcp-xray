@@ -112,12 +112,8 @@ Return ONLY valid YAML, no markdown formatting, no code fences.`
 		return "", fmt.Errorf("LLM returned empty response")
 	}
 
-	// Print first 200 bytes for debugging
-	preview := content
-	if len(preview) > 1000 {
-		preview = preview[:1000] + "..."
-	}
-	fmt.Printf("LLM response (first 1000 bytes): \n%s\n", preview)
+	// Log response size for debugging, but not content (may include sensitive context).
+	fmt.Printf("LLM response received (%d bytes)\n", len(content))
 
 	// Strip markdown code fences if present - use the specified format
 	content = c.stripMarkdownCodeFences(content, outputFormat)
@@ -151,11 +147,9 @@ func (c *LLMClient) stripMarkdownCodeFences(content string, outputFormat int) st
 
 	// Use the specified format instead of auto-detection
 	if outputFormat == OutputFormatYAML {
-		fmt.Printf("Content is YAML\n")
 		return c.stripYAMLCodeFences(content)
 	}
 
-	fmt.Printf("Content is JSON\n")
 	return c.stripJSONCodeFences(content)
 }
 
