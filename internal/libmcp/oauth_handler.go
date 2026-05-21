@@ -470,8 +470,12 @@ func openBrowser(u string) {
 	default: // linux, etc.
 		cmd = exec.Command("xdg-open", u)
 	}
-	_ = cmd.Start()
-	// don't wait; manual open already supported by printed URL
-	_ = cmd.Process.Release()
-	_ = context.Background()
+	if err := cmd.Start(); err != nil {
+		fmt.Println("   ⚠ Could not open browser automatically.")
+		fmt.Println("   Please click the link above or paste it into your browser.")
+		return
+	}
+	if cmd.Process != nil {
+		_ = cmd.Process.Release()
+	}
 }

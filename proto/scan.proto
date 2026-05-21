@@ -41,4 +41,7 @@ message Finding {
   string package = 11;   // Optional
   string version = 12;  // Optional
   string fixed = 13;    // Optional
+
+  // Set when finding was reclassified during verification
+  string original_rule_id = 14; // Optional: original rule_id before reclassification
 }

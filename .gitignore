@@ -16,6 +16,7 @@
 coverage.*
 *.coverprofile
 profile.cov
+*_test.go
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
@@ -30,3 +31,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Debug / vulnerable test server
+debug/
+tests/
