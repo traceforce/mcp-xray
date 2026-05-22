@@ -123,7 +123,7 @@ Return ONLY valid YAML, no markdown formatting, no code fences.`
 	content = c.stripMarkdownCodeFences(content, outputFormat)
 
 	if outputFormat == OutputFormatYAML {
-		content = sanitizeYAMLUnicodeEscapes(content)
+		content = SanitizeYAMLUnicodeEscapes(content)
 	}
 
 	// Check again after trimming
@@ -134,13 +134,49 @@ Return ONLY valid YAML, no markdown formatting, no code fences.`
 	return content, nil
 }
 
+// CallLLMWithSystemPrompt calls the LLM API with a custom system prompt instead of the default
+// security analyst prompt. Use this when the caller needs the LLM to act in a different role
+// (e.g., a tool-selection assistant for fulfilling prerequisites).
+func (c *LLMClient) CallLLMWithSystemPrompt(ctx context.Context, systemPrompt string, userPrompt string, outputFormat int) (string, error) {
+	content, err := c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
+		{Role: "user", Content: userPrompt},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	if content == "" {
+		return "", fmt.Errorf("LLM returned empty response")
+	}
+
+	preview := content
+	if len(preview) > 1000 {
+		preview = preview[:1000] + "..."
+	}
+	fmt.Printf("LLM response (first 1000 bytes): \n%s\n", preview)
+
+	content = c.stripMarkdownCodeFences(content, outputFormat)
+
+	if outputFormat == OutputFormatYAML {
+		content = SanitizeYAMLUnicodeEscapes(content)
+	}
+
+	if content == "" {
+		return "", fmt.Errorf("LLM response is empty after trimming markdown")
+	}
+
+	return content, nil
+}
+
+
 // invalidUnicodeEscape matches YAML \uXXXX escapes for surrogate code points (U+D800–U+DFFF),
 // which are invalid in UTF-8 and cause gopkg.in/yaml to fail with "invalid Unicode character escape code".
-var invalidUnicodeEscape = regexp.MustCompile(`\\uD[89A-Fa-f][0-9A-Fa-f]{2}|\\uD[C-Fc-f][0-9A-Fa-f]{2}`)
+// The (?i) flag ensures we catch both \uD800 (uppercase) and \ud800 (lowercase) variants that LLMs produce.
+var invalidUnicodeEscape = regexp.MustCompile(`(?i)\\u[Dd][89A-Fa-f][0-9A-Fa-f]{2}`)
 
-// sanitizeYAMLUnicodeEscapes replaces invalid Unicode escape sequences (unpaired surrogates
+// SanitizeYAMLUnicodeEscapes replaces invalid Unicode escape sequences (unpaired surrogates
 // U+D800–U+DFFF) with the replacement character U+FFFD so YAML parsers can decode the content.
-func sanitizeYAMLUnicodeEscapes(yamlContent string) string {
+func SanitizeYAMLUnicodeEscapes(yamlContent string) string {
 	return invalidUnicodeEscape.ReplaceAllString(yamlContent, `\uFFFD`)
 }
 
