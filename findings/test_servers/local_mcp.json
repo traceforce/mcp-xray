@@ -1,8 +1,9 @@
 {
     "mcpServers": {
-        "supabase": {
-            "type": "http",
-            "url": "https://mcp.supabase.com/mcp"
+        "vulnerable-test-server": {
+            "transport": "http",
+            "url": "http://localhost:8000/mcp/",
+            "env": {}
         }
     }
 }
