@@ -34,5 +34,5 @@ go.work.sum
 
 # Debug / vulnerable test server
 debug/
-tests/
+# tests/
 pentest_plans_**
