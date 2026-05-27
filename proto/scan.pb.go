@@ -153,11 +153,13 @@ type Finding struct {
 	Line          int32                  `protobuf:"varint,9,opt,name=line,proto3" json:"line,omitempty"`                                         // Optional
 	Message       string                 `protobuf:"bytes,10,opt,name=message,proto3" json:"message,omitempty"`                                   // Optional
 	// SCA-specific (optional but useful)
-	Package       string `protobuf:"bytes,11,opt,name=package,proto3" json:"package,omitempty"` // Optional
-	Version       string `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"` // Optional
-	Fixed         string `protobuf:"bytes,13,opt,name=fixed,proto3" json:"fixed,omitempty"`     // Optional
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Package string `protobuf:"bytes,11,opt,name=package,proto3" json:"package,omitempty"` // Optional
+	Version string `protobuf:"bytes,12,opt,name=version,proto3" json:"version,omitempty"` // Optional
+	Fixed   string `protobuf:"bytes,13,opt,name=fixed,proto3" json:"fixed,omitempty"`     // Optional
+	// Set when finding was reclassified during verification
+	OriginalRuleId string `protobuf:"bytes,14,opt,name=original_rule_id,json=originalRuleId,proto3" json:"original_rule_id,omitempty"` // Optional: original rule_id before reclassification
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Finding) Reset() {
@@ -281,12 +283,19 @@ func (x *Finding) GetFixed() string {
 	return ""
 }
 
+func (x *Finding) GetOriginalRuleId() string {
+	if x != nil {
+		return x.OriginalRuleId
+	}
+	return ""
+}
+
 var File_scan_proto protoreflect.FileDescriptor
 
 const file_scan_proto_rawDesc = "" +
 	"\n" +
 	"\n" +
-	"scan.proto\x12\x05proto\"\xfd\x02\n" +
+	"scan.proto\x12\x05proto\"\xa7\x03\n" +
 	"\aFinding\x12\x12\n" +
 	"\x04tool\x18\x01 \x01(\tR\x04tool\x12&\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x12.proto.FindingTypeR\x04type\x12/\n" +
@@ -301,7 +310,8 @@ const file_scan_proto_rawDesc = "" +
 	" \x01(\tR\amessage\x12\x18\n" +
 	"\apackage\x18\v \x01(\tR\apackage\x12\x18\n" +
 	"\aversion\x18\f \x01(\tR\aversion\x12\x14\n" +
-	"\x05fixed\x18\r \x01(\tR\x05fixed*\x8e\x01\n" +
+	"\x05fixed\x18\r \x01(\tR\x05fixed\x12(\n" +
+	"\x10original_rule_id\x18\x0e \x01(\tR\x0eoriginalRuleId*\x8e\x01\n" +
 	"\fRiskSeverity\x12\x19\n" +
 	"\x15RISK_SEVERITY_UNKNOWN\x10\x00\x12\x15\n" +
 	"\x11RISK_SEVERITY_LOW\x10\x01\x12\x18\n" +
