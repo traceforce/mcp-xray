@@ -62,7 +62,7 @@ func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetrie
 		if apiKey == "" {
 			return nil, errors.New("To use OpenAI models, the Environment variable OPENAI_API_KEY is required")
 		}
-		chatClient = NewOpenAIClient(apiKey, model, maxRetries)
+		chatClient = NewOpenAIResponseClient(apiKey, model, maxRetries) // Changed the client from ChatCompletionClient to OpenAIResponseClient
 	} else if strings.HasPrefix(strings.ToLower(model), "arn:aws:bedrock:") && strings.Contains(strings.ToLower(model), "llama") {
 		llmType = LLM_TYPE_AWS
 		cfg, err := config.LoadDefaultConfig(context.Background())
