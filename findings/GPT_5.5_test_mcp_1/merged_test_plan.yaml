@@ -1,0 +1,359 @@
+metadata:
+    focus: Critical security vulnerabilities
+    target: Multiple MCP Servers
+    version: "1.0"
+tests:
+    - mcp_server_name: vulnerable-test-server
+      name: SQL injection and unsafe dynamic field selection in user search
+      purpose: |
+        Verifies that search_users uses parameterized queries and a strict allowlist for searchable fields.
+        Because this tool searches the user database, SQL or NoSQL injection could allow mass user enumeration,
+        authentication bypass, or extraction of sensitive columns such as password hashes, tokens, and emails.
+      severity: CRITICAL
+      test_cases:
+        - case_id: INJECTION-SQL
+          description: Boolean-based injection in query should not return all users or bypass filtering.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - 404
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - (?i)(SQLSTATE|syntax error|sqlite|postgres|mysql|mongodb|stack trace|Traceback)
+                - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+            result: null
+            success: false
+          input:
+            arguments:
+                field: username
+                query: ''' OR ''1''=''1'
+            tool: search_users
+        - case_id: INJECTION-SQL
+          description: UNION-based injection should not expose sensitive user table columns.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - 404
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - (?i)(SQLSTATE|syntax error|sqlite|postgres|mysql|mongodb|stack trace|Traceback)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: email
+                query: ''' UNION SELECT id,email,password_hash,api_key FROM users--'
+            tool: search_users
+        - case_id: INJECTION-SQL
+          description: Field-name injection should be rejected because only username and email are valid searchable fields.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - 404
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - (?i)(SQLSTATE|syntax error|sqlite|postgres|mysql|mongodb|stack trace|Traceback)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: username) OR 1=1--
+                query: alice
+            tool: search_users
+        - case_id: INJECTION-SQL
+          description: Sensitive column probing via field parameter should be blocked by field allowlisting.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - 404
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|bcrypt|argon2|pbkdf2|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - (?i)(SQLSTATE|syntax error|sqlite|postgres|mysql|mongodb|stack trace|Traceback)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: password_hash
+                query: anything
+            tool: search_users
+      test_id: INJECTION
+    - mcp_server_name: vulnerable-test-server
+      name: Authorization enforcement for user database search
+      prerequisites:
+        - description: An MCP session without valid authentication credentials.
+          variable: UNAUTHENTICATED_SESSION
+        - description: A valid low-privilege session scoped to tenant A.
+          variable: TENANT_A_LOW_PRIVILEGE_SESSION
+        - description: Known user email that belongs to tenant B and should not be visible to tenant A.
+          variable: TENANT_B_VICTIM_EMAIL
+      purpose: |
+        Verifies that search_users cannot be used as an unauthenticated or cross-tenant user directory.
+        Unauthorized search by email or broad username queries can expose account existence and personal data,
+        enabling targeted phishing, account takeover attempts, and tenant data leakage.
+      severity: CRITICAL
+      test_cases:
+        - case_id: AUTH-MISSING
+          description: Unauthenticated caller should not be able to search the user database.
+          expected_output:
+            error_code_one_of:
+                - 401
+                - 403
+                - -32001
+                - -32603
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+            result: null
+            success: false
+          input:
+            arguments:
+                field: email
+                query: admin@example.com
+            context:
+                session: ${UNAUTHENTICATED_SESSION}
+            tool: search_users
+        - case_id: AUTH-CROSS-TENANT
+          description: Low-privilege tenant A caller should not retrieve tenant B user records by email.
+          expected_output:
+            error_code_one_of:
+                - 403
+                - 404
+                - -32001
+                - -32603
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: email
+                query: ${TENANT_B_VICTIM_EMAIL}
+            context:
+                session: ${TENANT_A_LOW_PRIVILEGE_SESSION}
+            tool: search_users
+        - case_id: AUTH-PRIVILEGE
+          description: Low-privilege caller should not use broad wildcard-style search to enumerate privileged accounts.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - -32602
+                - -32603
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(admin|root|superuser|owner)
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+                - '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+            result: null
+            success: false
+          input:
+            arguments:
+                field: username
+                query: '%'
+            context:
+                session: ${TENANT_A_LOW_PRIVILEGE_SESSION}
+            tool: search_users
+      test_id: AUTH
+    - mcp_server_name: vulnerable-test-server
+      name: Sensitive data leakage in successful and failed user searches
+      prerequisites:
+        - description: A valid authorized session allowed to search users in its own tenant.
+          variable: AUTHORIZED_SESSION
+      purpose: |
+        Verifies that search_users returns only the minimum authorized user attributes and that errors do not leak
+        implementation details. User search responses must not expose credentials, password hashes, session tokens,
+        internal database details, stack traces, or excessive PII.
+      severity: HIGH
+      test_cases:
+        - case_id: INFO-PII-LEAK
+          description: Legitimate username search should not return excessive PII beyond explicitly authorized fields.
+          expected_output:
+            error_present: false
+            error_response_must_not_match_regex:
+                - \b\d{3}-\d{2}-\d{4}\b
+                - \b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b
+                - (?i)(date_of_birth|dob|home_address|billing_address|ssn|national_id)
+                - (?i)(password_hash|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|secret)
+            result: Only authorized, minimal user profile fields should be returned.
+            success: true
+          input:
+            arguments:
+                field: username
+                query: alice
+            context:
+                session: ${AUTHORIZED_SESSION}
+            tool: search_users
+        - case_id: INFO-STACK
+          description: Invalid field should fail without exposing stack traces, source paths, or database internals.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(Traceback|stack trace|File "|line \d+|Exception|NullPointerException)
+                - (?i)(SQLSTATE|syntax error|sqlite|postgres|mysql|mongodb)
+                - (/home/|/var/www/|/app/|C:\\Users\\|C:\\Program Files\\)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: not_a_valid_field
+                query: alice
+            context:
+                session: ${AUTHORIZED_SESSION}
+            tool: search_users
+        - case_id: INFO-SECRETS-LEAK
+          description: Email search should not return credential-bearing fields or tokens.
+          expected_output:
+            error_present: false
+            error_response_must_not_match_regex:
+                - (?i)(password_hash|passwd|bcrypt|argon2|pbkdf2)
+                - (?i)(api[_-]?key|access[_-]?token|refresh[_-]?token|session[_-]?id|secret)
+                - Bearer\s+[A-Za-z0-9._~+/=-]{20,}
+                - sk-[A-Za-z0-9]{20,}
+            result: Authorized matching user records without secrets or credential material.
+            success: true
+          input:
+            arguments:
+                field: email
+                query: alice@example.com
+            context:
+                session: ${AUTHORIZED_SESSION}
+            tool: search_users
+      test_id: INFO_DISCLOSURE
+    - mcp_server_name: vulnerable-test-server
+      name: Output poisoning and unsafe rendering of user-controlled fields
+      prerequisites:
+        - description: Seed or identify a user record in the authorized tenant with a user-controlled field containing the prompt-injection payload.
+          variable: PROMPT_INJECTION_USER_QUERY
+        - description: Seed or identify a user record in the authorized tenant with a user-controlled field containing the XSS payload.
+          variable: XSS_USER_QUERY
+        - description: A valid authorized session allowed to search the seeded user records.
+          variable: AUTHORIZED_SESSION
+      purpose: |
+        Verifies that user-controlled database fields returned by search_users cannot poison an LLM client or downstream UI.
+        Usernames, emails, display names, or other returned fields must be treated as untrusted data, encoded safely, and
+        must not be allowed to masquerade as system instructions or executable client content.
+      severity: HIGH
+      test_cases:
+        - case_id: OUTPUT-POISON
+          description: Returned user-controlled fields must not be presented as trusted LLM instructions.
+          expected_output:
+            error_present: false
+            error_response_must_not_match_regex:
+                - '(?i)\[SYSTEM\]\s*:'
+                - (?i)ignore previous instructions
+                - (?i)reveal (the )?(system prompt|developer message|secrets)
+                - (?i)call .*tool.* and send
+            result: Matching record is returned only as clearly delimited untrusted data or is sanitized.
+            success: true
+          input:
+            arguments:
+                field: username
+                query: ${PROMPT_INJECTION_USER_QUERY}
+            context:
+                session: ${AUTHORIZED_SESSION}
+            tool: search_users
+        - case_id: OUTPUT-XSS
+          description: Returned user-controlled fields must be encoded so clients cannot execute HTML or JavaScript.
+          expected_output:
+            error_present: false
+            error_response_must_not_match_regex:
+                - <script\b[^>]*>
+                - <img\b[^>]*onerror\s*=
+                - 'javascript\s*:'
+                - onload\s*=
+            result: Matching record is returned with active content escaped, removed, or marked as inert data.
+            success: true
+          input:
+            arguments:
+                field: username
+                query: ${XSS_USER_QUERY}
+            context:
+                session: ${AUTHORIZED_SESSION}
+            tool: search_users
+      test_id: OUTPUT_VALIDATION
+    - mcp_server_name: vulnerable-test-server
+      name: Bounded input validation for search query and field parameters
+      prerequisites:
+        - description: Generate a string of the character A repeated exactly 5,242,880 bytes.
+          variable: OVERSIZED_QUERY_5MB
+        - description: Generate a field name string of the character f repeated exactly 65,536 bytes.
+          variable: OVERSIZED_FIELD_64KB
+      purpose: |
+        Verifies that search_users enforces length, character, and format constraints before running database searches.
+        Without bounds, attackers can submit oversized or malformed inputs that trigger expensive scans, excessive memory
+        allocation, parser failures, or unstable Unicode normalization behavior.
+      severity: MEDIUM
+      test_cases:
+        - case_id: INPUT-OVERSIZE
+          description: Oversized query should be rejected quickly without expensive database work.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 413
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(Traceback|stack trace|OutOfMemory|MemoryError)
+                - (?i)(SQLSTATE|sqlite|postgres|mysql|mongodb)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: username
+                query: ${OVERSIZED_QUERY_5MB}
+            tool: search_users
+        - case_id: INPUT-OVERSIZE
+          description: Oversized field name should be rejected before query construction.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 413
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(Traceback|stack trace|OutOfMemory|MemoryError)
+                - (?i)(SQLSTATE|sqlite|postgres|mysql|mongodb)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: ${OVERSIZED_FIELD_64KB}
+                query: alice
+            tool: search_users
+        - case_id: INPUT-UNICODE
+          description: Unicode normalization edge cases should not bypass field allowlisting or cause parser errors.
+          expected_output:
+            error_code_one_of:
+                - 400
+                - 403
+                - -32602
+            error_present: true
+            error_response_must_not_match_regex:
+                - (?i)(Traceback|stack trace|UnicodeDecodeError|UnicodeEncodeError)
+                - (?i)(SQLSTATE|sqlite|postgres|mysql|mongodb)
+            result: null
+            success: false
+          input:
+            arguments:
+                field: ｅｍａｉｌ
+                query: alice@example.com
+            tool: search_users
+      test_id: INPUT_VALIDATION

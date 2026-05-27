@@ -1,0 +1,9 @@
+{
+    "mcpServers": {
+        "vulnerable-test-server": {
+            "transport": "http",
+            "url": "http://localhost:8000/mcp/",
+            "env": {}
+        }
+    }
+}

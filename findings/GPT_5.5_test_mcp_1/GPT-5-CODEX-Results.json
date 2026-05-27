@@ -1,0 +1,47 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "AUTH-MISSING",
+              "shortDescription": {
+                "text": "AUTH: Unauthenticated caller should not be able to search the user database."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "AUTH-MISSING",
+          "level": "error",
+          "message": {
+            "text": "Unauthenticated caller should not be able to search the user database.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[{\\\"id\\\":3,\\\"username\\\":\\\"admin\\\",\\\"email\\\":\\\"admin@example.com\\\"}],\\\"count\\\":1,\\\"query\\\":\\\"admin@example.com\\\",\\\"field\\\":\\\"email\\\"}\"}]} [Verified: An unauthenticated caller queried the user API and received the admin account record, proving missing authentication controls.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        }
+      ]
+    }
+  ]
+}
