@@ -72,6 +72,10 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 		return nil
 	})
 
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk repository: %w", err)
+	}
+
 	fmt.Printf("Found %d secrets\n", len(allFindings))
 	return FromGitleaks(allFindings), nil
 }
