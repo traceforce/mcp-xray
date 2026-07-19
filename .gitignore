@@ -30,3 +30,7 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# built binary and downloaded engines (opengrep, codeql bundle) fetched by scripts/
+/mcpxray
+/bin/
