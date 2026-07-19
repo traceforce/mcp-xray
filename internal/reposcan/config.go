@@ -12,12 +12,15 @@ type Config struct {
 	// ExcludePatterns are directory patterns to exclude from scanning
 	// These are matched against path segments (e.g., ".venv", "node_modules", "cache")
 	ExcludedPaths []string
+	// TaintEngine selects the SAST taint engine: "opengrep" (default) or "none".
+	TaintEngine string
 }
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
 		MaxFileSize: 10 * 1024 * 1024, // 10MB
+		TaintEngine: "opengrep",
 		ExcludedPaths: []string{
 			".venv",
 			"venv",

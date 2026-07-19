@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"mcpxray/internal/reposcan/taint"
 	"mcpxray/internal/yararules"
 	"mcpxray/proto"
 )
@@ -114,6 +115,33 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	}
 
 	fmt.Printf("SAST found %d unsafe commands\n", len(allMatches))
-	// Convert matches to findings
-	return yararules.ToFindings(allMatches), nil
+	findings := yararules.ToFindings(allMatches)
+
+	// Taint engine runs in addition to the YARA scan above. It degrades quietly when
+	// the OpenGrep binary is absent, so existing YARA/SCA/secrets output is unaffected.
+	findings = append(findings, s.runTaintEngine(ctx)...)
+	return findings, nil
+}
+
+// runTaintEngine runs the OpenGrep source->sink taint engine when enabled and
+// available. Any failure returns no findings rather than aborting the scan.
+func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
+	if s.config.TaintEngine == "none" {
+		return nil
+	}
+	cfg := taint.DefaultConfig()
+	cfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
+	eng := taint.NewEngine(cfg)
+	if !eng.Available() {
+		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +
+			"(install opengrep or set MCPXRAY_OPENGREP_BIN)")
+		return nil
+	}
+	paths, err := eng.Scan(ctx, s.repoPath)
+	if err != nil {
+		fmt.Printf("SAST taint engine error (skipping): %v\n", err)
+		return nil
+	}
+	fmt.Printf("SAST taint engine found %d taint paths\n", len(paths))
+	return taint.PathsToFindings(paths)
 }

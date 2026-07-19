@@ -1,0 +1,4 @@
+# Normalize line endings; force LF for shell scripts so a Windows checkout can't rewrite
+# install_opengrep.sh to CRLF and break it.
+* text=auto
+*.sh text eol=lf
