@@ -1,0 +1,54 @@
+name: codeql-pack-ci
+
+# Determinism gate for the CodeQL query packs: install the SHA-pinned bundle, assert it
+# ships the pinned library-pack versions, then compile all three packs. Downloads ~810 MB
+# on purpose (no cache), so it runs only when the packs/adapter/installer change.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'codeql/**'
+      - 'scripts/install_codeql.sh'
+      - 'internal/reposcan/taint/codeql.go'
+  pull_request:
+    paths:
+      - 'codeql/**'
+      - 'scripts/install_codeql.sh'
+      - 'internal/reposcan/taint/codeql.go'
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GO_ALL_VERSION: '7.1.2'
+      PYTHON_ALL_VERSION: '7.1.2'
+      JAVASCRIPT_ALL_VERSION: '2.7.2'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - name: Install pinned CodeQL bundle
+        run: bash scripts/install_codeql.sh
+      - name: Assert bundle ships the pinned library-pack versions
+        run: |
+          set -euo pipefail
+          ROOT="bin/codeql-bundle/codeql"
+          for pack_ver in "go-all/${GO_ALL_VERSION}" "python-all/${PYTHON_ALL_VERSION}" "javascript-all/${JAVASCRIPT_ALL_VERSION}"; do
+            if [[ ! -d "${ROOT}/qlpacks/codeql/${pack_ver}" ]]; then
+              echo "[FATAL] bundle does not ship codeql/${pack_ver}; pin drift."
+              exit 1
+            fi
+            echo "[*] verified codeql/${pack_ver}"
+          done
+      - name: Compile query packs
+        run: |
+          set -euo pipefail
+          ROOT="bin/codeql-bundle/codeql"
+          for pack in python go javascript; do
+            "${ROOT}/codeql" query compile --search-path="${ROOT}" "codeql/${pack}/mcp_taint.ql"
+          done

@@ -100,6 +100,14 @@ arm64/x86_64). On other platforms, install `opengrep` yourself and set
 whenever the pinned engine is resolvable, and when the engine is absent it skips taint
 and still runs SCA, secrets, and the unsafe-command rules.
 
+The CodeQL taint query packs (cross-file, interprocedural taint for Go, TypeScript and
+Python) and a pinned, SHA-verified bundle installer are added here; the engine is wired
+into `repo-scan` by the stacked adapter follow-up.
+
+```bash
+make install-codeql   # pinned CodeQL bundle (Linux x86_64, macOS, Windows)
+```
+
 
 ## Output Format
 

@@ -1,4 +1,4 @@
-.PHONY: all build install proto clean install-dependencies install-opengrep ci help
+.PHONY: all build install proto clean install-dependencies install-opengrep install-codeql ci help
 
 DESTDIR = /usr/local/bin
 BINARY = mcpxray
@@ -26,6 +26,10 @@ endif
 # Install the OpenGrep engine used by the repo-scan taint SAST (pinned + SHA-verified)
 install-opengrep:
 	bash scripts/install_opengrep.sh
+
+# Install the CodeQL bundle for cross-file Go/TS/Python taint (pinned + SHA-verified)
+install-codeql:
+	bash scripts/install_codeql.sh
 
 # Generate protobuf Go code
 proto:
@@ -61,4 +65,5 @@ help:
 	@echo "  clean         - Clean generated protobuf files and binary"
 	@echo "  install-dependencies - Install required dependencies (buf); supports macOS (brew) and Linux (go install)"
 	@echo "  install-opengrep     - Download the pinned OpenGrep engine for the repo-scan taint SAST"
+	@echo "  install-codeql       - Download the pinned CodeQL bundle for cross-file Go/TS/Python taint"
 	@echo "  help          - Show this help message"

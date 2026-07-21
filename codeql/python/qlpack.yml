@@ -1,0 +1,14 @@
+name: traceforce/mcp-codeql-python
+version: 0.1.0
+# The MCP taint query pack (Python). Deterministic, version-controlled: structural
+# MCP-handler sources + static per-class sinks + CodeQL's interprocedural taint.
+# codeql/python-all is provided offline by the CodeQL bundle at analyze time
+# (the adapter passes --search-path to the bundle), so no network resolution.
+#
+# Version pin = the exact python-all shipped in the pinned bundle (v2.25.6). NOTE:
+# `--search-path` resolution does NOT enforce this constraint, so the real
+# determinism levers are (1) the SHA-pinned bundle in scripts/install_codeql.sh
+# and (2) the version-assert in .github/workflows/codeql-pack-ci.yml. This line
+# documents the tested version.
+dependencies:
+  codeql/python-all: 7.1.2
