@@ -1,16 +1,23 @@
 package yararules
 
 import (
+	_ "embed"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 
 	"mcpxray/proto"
 )
+
+// unsafePatternsYar is the YARA rule set embedded into the binary at build time. Embedding keeps the
+// binary self-contained: the previous loader resolved the rules via runtime.Caller(0) + a path
+// relative to the source tree, which is absent when mcpxray runs as an installed/`go build`-produced
+// binary (and is stripped to a non-existent relative path under `-trimpath`), causing a panic:
+// "failed to load YARA patterns file: open .../unsafe_patterns.yar: no such file or directory".
+//
+//go:embed unsafe_patterns.yar
+var unsafePatternsYar string
 
 // Reason represents standardized reasons for unsafe command detection
 type Reason string
@@ -77,17 +84,7 @@ var (
 
 // loadUnsafeSystemPatterns loads patterns from the YARA file
 func loadUnsafeSystemPatterns() {
-	// Get the directory of this file
-	_, filename, _, _ := runtime.Caller(0)
-	dir := filepath.Dir(filename)
-	yaraFile := filepath.Join(dir, "unsafe_patterns.yar")
-
-	data, err := os.ReadFile(yaraFile)
-	if err != nil {
-		panic(fmt.Sprintf("failed to load YARA patterns file: %v", err))
-	}
-
-	patterns, err := parseYaraFile(string(data))
+	patterns, err := parseYaraFile(unsafePatternsYar)
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse YARA patterns file: %v", err))
 	}
