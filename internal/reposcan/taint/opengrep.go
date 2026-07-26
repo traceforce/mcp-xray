@@ -78,6 +78,16 @@ func runOpenGrep(ctx context.Context, cfg Config, rulePath, target string) (*ogO
 	}
 	args = append(args, target)
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// Run with the scan root as CWD so any CWD-relative path the engine emits resolves
+	// under the repo, not an unrelated directory. Only when target is an absolute dir
+	// (what Engine.Scan passes); a relative target is left to resolve against the CWD.
+	if filepath.IsAbs(target) {
+		cmd.Dir = target
+	}
+	// On timeout the context kills the wrapper, but a still-running opengrep-cli child
+	// inherits stdout and keeps Output() blocked on the open pipe. WaitDelay bounds that
+	// wait and then force-closes the pipes, so the deadline actually stops the scan.
+	cmd.WaitDelay = 10 * time.Second
 	out, err := cmd.Output()
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("opengrep timed out after %ds", timeout)

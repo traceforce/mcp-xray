@@ -40,3 +40,7 @@ def exec_cmd(cmd: str) -> None:
 def read_split(name: str) -> str:
     p = Path(name)
     return p.read_text()
+
+@mcp.tool()
+def run_code(expr: str):
+    return eval(expr)

@@ -46,6 +46,13 @@ func (e *Engine) Scan(ctx context.Context, repoPath string) ([]PathRecord, error
 	if err != nil {
 		return nil, err
 	}
+	// Hand OpenGrep the symlink-resolved root. On macOS a repo under /tmp (a symlink to
+	// /private/tmp) otherwise makes the engine emit CWD-relative paths -- or exit 0 with
+	// zero results -- so taint silently scans nothing. resultsToPaths confines to this
+	// same resolved root, so source/sink paths stay consistent.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	rules, err := generatePythonRules(e.cfg.Classes)
 	if err != nil {
 		return nil, err

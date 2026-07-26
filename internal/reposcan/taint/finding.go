@@ -17,6 +17,7 @@ type classInfo struct {
 
 var classInfoByVC = map[string]classInfo{
 	"command_injection": {"INJECTION-COMMAND", proto.RiskSeverity_RISK_SEVERITY_CRITICAL, "Command injection"},
+	"code_injection":    {"INJECTION-CODE", proto.RiskSeverity_RISK_SEVERITY_CRITICAL, "Code injection"},
 	"path_traversal":    {"INJECTION-PATH", proto.RiskSeverity_RISK_SEVERITY_HIGH, "Path traversal"},
 	"sqli":              {"INJECTION-SQL", proto.RiskSeverity_RISK_SEVERITY_HIGH, "SQL injection"},
 	"ssrf":              {"SSRF-INTERNAL", proto.RiskSeverity_RISK_SEVERITY_HIGH, "Server-side request forgery"},

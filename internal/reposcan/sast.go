@@ -123,14 +123,18 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	return findings, nil
 }
 
-// runTaintEngine runs the OpenGrep source->sink taint engine when enabled and
-// available. Any failure returns no findings rather than aborting the scan.
+// runTaintEngine runs the OpenGrep source->sink taint engine. It activates by
+// installation: it runs whenever the pinned engine is resolvable (MCPXRAY_OPENGREP_BIN
+// or bin/opengrep next to the binary) and degrades quietly otherwise, so there is no
+// engine flag to keep in sync. Any failure returns no findings rather than aborting.
 func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
-	if s.config.TaintEngine == "none" {
-		return nil
-	}
 	cfg := taint.DefaultConfig()
 	cfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
+	if s.config.MaxFileSize > 0 {
+		// Honor the user's --max-file-size for taint too (every other scanner respects it)
+		// instead of only the engine's own default.
+		cfg.MaxTargetBytes = int(s.config.MaxFileSize)
+	}
 	eng := taint.NewEngine(cfg)
 	if !eng.Available() {
 		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +

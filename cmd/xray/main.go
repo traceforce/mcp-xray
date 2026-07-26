@@ -208,17 +208,11 @@ func NewRepoScanCommand() *cobra.Command {
 			enableCVE, _ := cmd.Flags().GetBool("cve")
 			enableSecrets, _ := cmd.Flags().GetBool("secrets")
 			enableSAST, _ := cmd.Flags().GetBool("sast")
-			taintEngine, _ := cmd.Flags().GetString("engine")
-			if taintEngine != "opengrep" && taintEngine != "none" {
-				fmt.Println("Error: --engine must be either 'opengrep' or 'none'")
-				os.Exit(1)
-			}
 
 			// Build config - by default scan everything (no excludes)
 			config := &reposcan.Config{
 				MaxFileSize:   10 * 1024 * 1024, // 10MB default
 				ExcludedPaths: []string{},       // Empty by default - scan everything
-				TaintEngine:   taintEngine,
 			}
 
 			// Apply max file size if specified
@@ -318,7 +312,6 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("cve", false, "Run CVE/SCA scan (software composition analysis)")
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
-	cmd.Flags().String("engine", "opengrep", "SAST taint engine: 'opengrep' (default) or 'none'")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd

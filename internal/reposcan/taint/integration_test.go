@@ -28,7 +28,7 @@ func TestEngineIntegration(t *testing.T) {
 		byClass[p.VulnClass]++
 		tools[p.SourceFunction] = true
 	}
-	wantClass := map[string]int{"command_injection": 2, "path_traversal": 3, "ssrf": 1, "sqli": 1}
+	wantClass := map[string]int{"command_injection": 2, "code_injection": 1, "path_traversal": 3, "ssrf": 1, "sqli": 1}
 	for cls, min := range wantClass {
 		if byClass[cls] < min {
 			t.Errorf("%s = %d, want >=%d (paths=%d)", cls, byClass[cls], min, len(paths))
@@ -36,7 +36,8 @@ func TestEngineIntegration(t *testing.T) {
 	}
 	// read_doc exercises the pathlib Path(...).read_text() sink; exec_cmd is cross-function.
 	// read_split exercises the two-statement pathlib receiver form (p = Path(x); p.read_text()).
-	for _, want := range []string{"run_ping", "exec_cmd", "read_file", "read_doc", "read_split", "fetch", "lookup"} {
+	// run_code exercises the eval() code-injection sink (distinct from command injection).
+	for _, want := range []string{"run_ping", "exec_cmd", "read_file", "read_doc", "read_split", "fetch", "lookup", "run_code"} {
 		if !tools[want] {
 			t.Errorf("expected a finding attributed to handler %q", want)
 		}

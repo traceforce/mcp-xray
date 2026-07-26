@@ -96,9 +96,9 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 The taint SAST uses the [OpenGrep](https://github.com/opengrep/opengrep) engine. Install
 the pinned, SHA-verified binary with `make install-opengrep` (Linux x86_64/arm64, macOS
 arm64/x86_64). On other platforms, install `opengrep` yourself and set
-`MCPXRAY_OPENGREP_BIN`. When the engine is absent, `repo-scan` skips taint analysis and
-still runs SCA, secrets, and the unsafe-command rules; disable it explicitly with
-`--engine none`.
+`MCPXRAY_OPENGREP_BIN`. Taint analysis activates by installation: `repo-scan` runs it
+whenever the pinned engine is resolvable, and when the engine is absent it skips taint
+and still runs SCA, secrets, and the unsafe-command rules.
 
 
 ## Output Format

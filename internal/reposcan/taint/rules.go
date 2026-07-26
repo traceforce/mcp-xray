@@ -3,7 +3,7 @@ package taint
 import "gopkg.in/yaml.v3"
 
 // DefaultClasses are the taint classes generated when the caller passes none.
-var DefaultClasses = []string{"command_injection", "path_traversal", "ssrf", "sqli"}
+var DefaultClasses = []string{"command_injection", "code_injection", "path_traversal", "ssrf", "sqli"}
 
 // baseSourcesPy scopes taint to an MCP handler parameter. Both the decorator-call
 // (@mcp.tool()) and bare-attribute (@mcp.tool) registration styles are covered so
@@ -27,6 +27,10 @@ var baseSinksPy = map[string][]string{
 		"subprocess.run($SINK, ..., shell=True, ...)",
 		"subprocess.Popen($SINK, ..., shell=True, ...)",
 		"subprocess.call($SINK, ..., shell=True, ...)",
+	},
+	// eval/exec run attacker input as code, a distinct class from shell command
+	// injection (test_categories.csv INJECTION-CODE vs INJECTION-COMMAND).
+	"code_injection": {
 		"eval($SINK)", "exec($SINK)",
 	},
 	"path_traversal": {
@@ -47,7 +51,9 @@ var baseSinksPy = map[string][]string{
 	},
 	"sqli": {
 		"$CUR.execute($SINK)", "$CUR.execute($SINK, ...)",
-		"sqlalchemy.text($SINK)", "text($SINK)",
+		// Only the qualified sqlalchemy.text form; a bare text($SINK) matches any local
+		// function named text and false-positives on benign helpers.
+		"sqlalchemy.text($SINK)",
 	},
 }
 
