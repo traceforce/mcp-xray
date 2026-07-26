@@ -3,6 +3,7 @@ package reposcan
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -132,8 +133,13 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	cfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
 	if s.config.MaxFileSize > 0 {
 		// Honor the user's --max-file-size for taint too (every other scanner respects it)
-		// instead of only the engine's own default.
-		cfg.MaxTargetBytes = int(s.config.MaxFileSize)
+		// instead of only the engine's own default. Clamp so the int64->int narrowing can
+		// never wrap to a small or negative byte cap on a 32-bit build.
+		maxBytes := s.config.MaxFileSize
+		if maxBytes > math.MaxInt {
+			maxBytes = math.MaxInt
+		}
+		cfg.MaxTargetBytes = int(maxBytes)
 	}
 	eng := taint.NewEngine(cfg)
 	if !eng.Available() {

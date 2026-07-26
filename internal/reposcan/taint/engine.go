@@ -25,7 +25,8 @@ func DefaultConfig() Config {
 		TimeoutSec:        300,
 		PerRuleTimeoutSec: 30,
 		MaxTargetBytes:    2_000_000,
-		Classes:           DefaultClasses,
+		// Copy so a caller mutating cfg.Classes can't corrupt the package-global default.
+		Classes: append([]string(nil), DefaultClasses...),
 	}
 }
 

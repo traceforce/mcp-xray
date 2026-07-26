@@ -3,8 +3,13 @@ package taint
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+// reSqlText matches a standalone sqlalchemy text() call: a word boundary before `text(`
+// so `gettext(`, `context(`, and pathlib `read_text(`/`write_text(` are not mislabeled.
+var reSqlText = regexp.MustCompile(`\btext\(`)
 
 // resultsToPaths converts decoded engine results into deduped taint paths. Every
 // engine-supplied path is confined to root before any read, so a malformed path
@@ -93,8 +98,9 @@ func canonicalSinkAPI(code string) string {
 		return "executescript"
 	case strings.Contains(c, ".execute("):
 		return "cursor.execute"
-	// sqlalchemy text() sink for any argument; _text( excludes pathlib read_text/write_text.
-	case strings.Contains(c, "text(") && !strings.Contains(c, "_text("):
+	// sqlalchemy text() sink for any argument; the word boundary excludes gettext/context
+	// and pathlib read_text/write_text (they keep their own cases below).
+	case reSqlText.MatchString(c):
 		return "sqlalchemy.text"
 	case strings.Contains(c, "urlopen("):
 		return "urllib.urlopen"
