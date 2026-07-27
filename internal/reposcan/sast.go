@@ -144,7 +144,7 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	eng := taint.NewEngine(cfg)
 	if !eng.Available() {
 		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +
-			"(install opengrep or set MCPXRAY_OPENGREP_BIN)")
+			"(run `make install-opengrep` or set MCPXRAY_OPENGREP_BIN)")
 		return nil
 	}
 	paths, err := eng.Scan(ctx, s.repoPath)
