@@ -209,11 +209,10 @@ func NewRepoScanCommand() *cobra.Command {
 			enableSecrets, _ := cmd.Flags().GetBool("secrets")
 			enableSAST, _ := cmd.Flags().GetBool("sast")
 
-			// Build config - by default scan everything (no excludes)
+			// Build config; ExcludedPaths is filled in below from the flags.
 			config := &reposcan.Config{
-				MaxFileSize:   10 * 1024 * 1024, // 10MB default
-				ExcludedPaths: []string{},       // Empty by default - scan everything
-				Root:          repoPath,         // scope excludes to the repo, not its parents
+				MaxFileSize: 10 * 1024 * 1024, // 10MB default
+				Root:        repoPath,         // scope excludes to the repo, not its parents
 			}
 
 			// Apply max file size if specified
