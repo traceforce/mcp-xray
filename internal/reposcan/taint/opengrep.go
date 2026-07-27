@@ -12,9 +12,10 @@ import (
 	"time"
 )
 
-// findOpengrep resolves the engine only from an explicit, pinned source: a file path in
+// findOpengrep resolves the engine only from an explicit source: a file path in
 // MCPXRAY_OPENGREP_BIN, then bin/opengrep (opengrep.exe on Windows) next to the mcpxray
-// binary (installed by `make install-opengrep`). MCPXRAY_OPENGREP_BIN must be a path to
+// binary (installed by the SHA-verified `make install-opengrep`). MCPXRAY_OPENGREP_BIN
+// is an operator-provided path and is not itself hash-verified. It must be a path to
 // the binary; it is NOT resolved on PATH and there is no `opengrep`-on-PATH fallback, so
 // plain repo-scan never auto-activates taint from an unrelated/unpinned engine. The
 // returned path is always absolute -- a relative path would be re-resolved against the
