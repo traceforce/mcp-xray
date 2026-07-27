@@ -15,15 +15,23 @@ import (
 // findOpengrep resolves the engine only from an explicit, pinned source:
 // MCPXRAY_OPENGREP_BIN, then bin/opengrep next to the mcpxray binary (installed by
 // `make install-opengrep`). It deliberately does NOT fall back to an `opengrep` on PATH,
-// so plain repo-scan never auto-activates taint from an unrelated/unpinned engine; point
-// MCPXRAY_OPENGREP_BIN at one on PATH to use it. "" when none is usable.
+// so plain repo-scan never auto-activates taint from an unrelated/unpinned engine; set
+// MCPXRAY_OPENGREP_BIN to the engine's path to use one elsewhere. The returned path is
+// always absolute -- a relative path would be re-resolved against the scanned repo (the
+// exec sets cmd.Dir to the scan root) and could run an attacker-planted binary. "" when
+// none is usable.
 func findOpengrep() string {
 	if b := os.Getenv("MCPXRAY_OPENGREP_BIN"); b != "" && isExec(b) {
+		// Absolutize against the current CWD (where isExec just validated it) so the later
+		// exec cannot resolve a relative name against the untrusted scan target.
+		if abs, err := filepath.Abs(b); err == nil {
+			return abs
+		}
 		return b
 	}
 	if exe, err := os.Executable(); err == nil {
 		if local := filepath.Join(filepath.Dir(exe), "bin", "opengrep"); isExec(local) {
-			return local
+			return local // absolute: filepath.Dir(os.Executable()) is absolute
 		}
 	}
 	return ""
@@ -49,6 +57,12 @@ func runOpenGrep(ctx context.Context, cfg Config, rulePath, target string) (*ogO
 	bin := cfg.OpengrepBin
 	if bin == "" {
 		return nil, fmt.Errorf("opengrep binary not found")
+	}
+	// Fail closed on a relative engine path: cmd.Dir below is the scanned (untrusted) repo,
+	// and Go resolves a relative Path against Dir -- so a relative bin would run the target
+	// repo's own binary. findOpengrep already absolutizes; this is the backstop.
+	if !filepath.IsAbs(bin) {
+		return nil, fmt.Errorf("opengrep binary path must be absolute, got %q", bin)
 	}
 	// Default any unset limit (mirrors DefaultConfig) so a partial Config never fires the
 	// deadline instantly or passes 0 to the CLI.
