@@ -12,14 +12,14 @@ import (
 	"time"
 )
 
-// findOpengrep resolves the engine only from an explicit, pinned source:
-// MCPXRAY_OPENGREP_BIN, then bin/opengrep next to the mcpxray binary (installed by
-// `make install-opengrep`). It deliberately does NOT fall back to an `opengrep` on PATH,
-// so plain repo-scan never auto-activates taint from an unrelated/unpinned engine; set
-// MCPXRAY_OPENGREP_BIN to the engine's path to use one elsewhere. The returned path is
-// always absolute -- a relative path would be re-resolved against the scanned repo (the
-// exec sets cmd.Dir to the scan root) and could run an attacker-planted binary. "" when
-// none is usable.
+// findOpengrep resolves the engine only from an explicit, pinned source: a file path in
+// MCPXRAY_OPENGREP_BIN, then bin/opengrep (opengrep.exe on Windows) next to the mcpxray
+// binary (installed by `make install-opengrep`). MCPXRAY_OPENGREP_BIN must be a path to
+// the binary; it is NOT resolved on PATH and there is no `opengrep`-on-PATH fallback, so
+// plain repo-scan never auto-activates taint from an unrelated/unpinned engine. The
+// returned path is always absolute -- a relative path would be re-resolved against the
+// scanned repo (the exec sets cmd.Dir to the scan root) and could run an attacker-planted
+// binary. "" when none is usable.
 func findOpengrep() string {
 	if b := os.Getenv("MCPXRAY_OPENGREP_BIN"); b != "" && isExec(b) {
 		// Absolutize against the current CWD (where isExec just validated it) so the later
@@ -30,11 +30,20 @@ func findOpengrep() string {
 		return b
 	}
 	if exe, err := os.Executable(); err == nil {
-		if local := filepath.Join(filepath.Dir(exe), "bin", "opengrep"); isExec(local) {
+		if local := filepath.Join(filepath.Dir(exe), "bin", opengrepExe()); isExec(local) {
 			return local // absolute: filepath.Dir(os.Executable()) is absolute
 		}
 	}
 	return ""
+}
+
+// opengrepExe is the engine's filename for the current OS (opengrep.exe on Windows), so
+// the next-to-binary lookup resolves the installed engine on every platform.
+func opengrepExe() string {
+	if runtime.GOOS == "windows" {
+		return "opengrep.exe"
+	}
+	return "opengrep"
 }
 
 func isExec(p string) bool {
