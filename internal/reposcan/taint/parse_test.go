@@ -116,6 +116,8 @@ func TestCanonicalSinkAPI(t *testing.T) {
 		`text(f"select {x}")`:    "sqlalchemy.text",
 		`sqlalchemy.text(q)`:     "sqlalchemy.text",
 		`something_unrelated(x)`: "unknown_sink",
+		// Another object's .text() must NOT be mislabeled as the sqlalchemy.text sink.
+		`resp.text(x)`: "unknown_sink",
 	}
 	for in, want := range cases {
 		if got := canonicalSinkAPI(in); got != want {

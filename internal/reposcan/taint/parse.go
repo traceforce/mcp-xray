@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
-// reSqlText matches a standalone sqlalchemy text() call: a word boundary before `text(`
-// so `gettext(`, `context(`, and pathlib `read_text(`/`write_text(` are not mislabeled.
-var reSqlText = regexp.MustCompile(`\btext\(`)
+// reSqlText matches a sqlalchemy text() sink: the qualified `sqlalchemy.text(` or a bare
+// `text(` (from `from sqlalchemy import text`), but NOT another object's `.text(` method
+// call, nor `gettext(`/`context(`/pathlib `read_text(`/`write_text(`.
+var reSqlText = regexp.MustCompile(`(^|[^\w.])text\(|sqlalchemy\.text\(`)
 
 // resultsToPaths converts decoded engine results into deduped taint paths. Every
 // engine-supplied path is confined to root before any read, so a malformed path
