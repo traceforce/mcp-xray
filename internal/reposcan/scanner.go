@@ -20,6 +20,10 @@ func NewDefaultRepoScanner(repoPath string) *RepoScanner {
 }
 
 func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
+	// Scope excludes to the repo (see Config.Root) unless the caller already set it.
+	if config.Root == "" {
+		config.Root = repoPath
+	}
 	return &RepoScanner{
 		repoPath:       repoPath,
 		config:         config,

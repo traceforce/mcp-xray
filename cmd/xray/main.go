@@ -213,6 +213,7 @@ func NewRepoScanCommand() *cobra.Command {
 			config := &reposcan.Config{
 				MaxFileSize:   10 * 1024 * 1024, // 10MB default
 				ExcludedPaths: []string{},       // Empty by default - scan everything
+				Root:          repoPath,         // scope excludes to the repo, not its parents
 			}
 
 			// Apply max file size if specified
@@ -220,16 +221,15 @@ func NewRepoScanCommand() *cobra.Command {
 				config.MaxFileSize = maxFileSize
 			}
 
-			// Apply excluded paths
+			// Apply excluded paths: the defaults (unless opted out) plus any -e values, so
+			// --use-default-excludes=false is honored even when -e is also passed.
 			defaultConfig := reposcan.DefaultConfig()
+			excludes := []string{}
 			if useDefaultExcludes {
-				// Use default excluded paths
-				config.ExcludedPaths = defaultConfig.ExcludedPaths
+				excludes = append(excludes, defaultConfig.ExcludedPaths...)
 			}
-			if len(excludedPaths) > 0 {
-				// User-provided excludes override or extend
-				config.ExcludedPaths = append(defaultConfig.ExcludedPaths, excludedPaths...)
-			}
+			excludes = append(excludes, excludedPaths...)
+			config.ExcludedPaths = excludes
 
 			// Determine which scans to run
 			// If no specific scan is enabled, run all (backward compatible)
