@@ -92,6 +92,11 @@ func runOpenGrep(ctx context.Context, cfg Config, rulePath, target string) (*ogO
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, fmt.Errorf("opengrep timed out after %ds", timeout)
 	}
+	if ctx.Err() != nil {
+		// Caller cancelled mid-scan: the output is incomplete, so surface an error rather
+		// than parsing partial stdout as a clean result.
+		return nil, fmt.Errorf("opengrep cancelled: %w", ctx.Err())
+	}
 	// OpenGrep's exit code is the reliable signal: 0 = clean, 1 = findings, >=2 = a real
 	// engine/ruleset failure (a skipped unparseable target file does not raise it). Key
 	// fatality off the code -- not the JSON error level, which is "warn" for some load
