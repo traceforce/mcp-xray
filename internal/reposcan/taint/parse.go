@@ -98,10 +98,6 @@ func canonicalSinkAPI(code string) string {
 		return "executescript"
 	case strings.Contains(c, ".execute("):
 		return "cursor.execute"
-	// sqlalchemy text() sink for any argument; the word boundary excludes gettext/context
-	// and pathlib read_text/write_text (they keep their own cases below).
-	case reSqlText.MatchString(c):
-		return "sqlalchemy.text"
 	case strings.Contains(c, "urlopen("):
 		return "urllib.urlopen"
 	case strings.Contains(c, "requests.get("):
@@ -130,6 +126,11 @@ func canonicalSinkAPI(code string) string {
 		return "eval"
 	case strings.Contains(c, "exec("):
 		return "exec"
+	// Checked last so a specific sink wrapping a text() arg (requests.get(text(u)),
+	// session.execute(text(q))) is labeled by that sink; only a standalone sqlalchemy.text
+	// or a bare `from sqlalchemy import text` call lands here.
+	case reSqlText.MatchString(c):
+		return "sqlalchemy.text"
 	}
 	return "unknown_sink"
 }
