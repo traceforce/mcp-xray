@@ -20,6 +20,9 @@ func NewDefaultRepoScanner(repoPath string) *RepoScanner {
 }
 
 func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
+	if config == nil {
+		config = DefaultConfig()
+	}
 	// Work on a copy so we never mutate the caller's Config: Root is per scan root, and a
 	// shared/reused config would otherwise get the wrong Root or race across scans. The
 	// ExcludedPaths slice is only read, so a shallow copy is safe to share.
