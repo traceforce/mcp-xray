@@ -79,10 +79,12 @@ func runOpenGrep(ctx context.Context, cfg Config, rulePath, target string) (*ogO
 	args = append(args, target)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	// Run with the scan root as CWD so any CWD-relative path the engine emits resolves
-	// under the repo, not an unrelated directory. Only when target is an absolute dir
-	// (what Engine.Scan passes); a relative target is left to resolve against the CWD.
+	// under the repo, not an unrelated directory. Only for an absolute directory (what
+	// Engine.Scan passes); a relative or non-dir target resolves against the caller's CWD.
 	if filepath.IsAbs(target) {
-		cmd.Dir = target
+		if fi, err := os.Stat(target); err == nil && fi.IsDir() {
+			cmd.Dir = target
+		}
 	}
 	// On timeout the context kills the wrapper, but a still-running opengrep-cli child
 	// inherits stdout and keeps Output() blocked on the open pipe. WaitDelay bounds that

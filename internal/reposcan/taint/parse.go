@@ -7,9 +7,9 @@ import (
 	"strings"
 )
 
-// reSqlText matches a sqlalchemy text() sink: the qualified `sqlalchemy.text(` or a bare
-// `text(` (from `from sqlalchemy import text`), but NOT another object's `.text(` method
-// call, nor `gettext(`/`context(`/pathlib `read_text(`/`write_text(`.
+// reSqlText matches a sqlalchemy text() sink -- either qualified sqlalchemy.text(...) or a
+// bare text(...) from a "from sqlalchemy import text" import -- but not another object's
+// .text() method, nor gettext()/context() or pathlib read_text()/write_text().
 var reSqlText = regexp.MustCompile(`(^|[^\w.])text\(|sqlalchemy\.text\(`)
 
 // resultsToPaths converts decoded engine results into deduped taint paths. Every
