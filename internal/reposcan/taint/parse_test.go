@@ -110,6 +110,7 @@ func TestCanonicalSinkAPI(t *testing.T) {
 		`requests.get(url)`:               "requests.get",
 		`cur.execute(q)`:                  "cursor.execute",
 		`urllib.request.urlopen(u)`:       "urllib.urlopen",
+		`session.request("GET", url=u)`:   "http.request",
 		// sqlalchemy text() sinks must classify for any argument, not just literals,
 		// so cross-engine dedup (SinkAPI is part of pathID) stays stable.
 		`text(user_input)`:       "sqlalchemy.text",

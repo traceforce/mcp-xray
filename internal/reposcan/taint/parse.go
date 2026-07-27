@@ -111,6 +111,10 @@ func canonicalSinkAPI(code string) string {
 		return "httpx.get"
 	case strings.Contains(c, "httpx.post("):
 		return "httpx.post"
+	// Generic HTTP client .request(url=...) sink (rules.go ssrf), after the named clients
+	// above so those keep their precise labels.
+	case strings.Contains(c, ".request("):
+		return "http.request"
 	case strings.Contains(c, "io.open("):
 		return "io.open"
 	case strings.Contains(c, "os.open("):
