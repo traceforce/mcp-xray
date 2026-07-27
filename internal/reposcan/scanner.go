@@ -23,10 +23,11 @@ func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
 	if config == nil {
 		config = DefaultConfig()
 	}
-	// Work on a copy so we never mutate the caller's Config: Root is per scan root, and a
-	// shared/reused config would otherwise get the wrong Root or race across scans. The
-	// ExcludedPaths slice is only read, so a shallow copy is safe to share.
+	// Work on a fully independent copy so we never mutate the caller's Config and a scan
+	// can't race a caller that reuses or mutates it: Root is per scan root, and the
+	// ExcludedPaths slice is copied too (the shallow struct copy would otherwise share it).
 	cfg := *config
+	cfg.ExcludedPaths = append([]string(nil), config.ExcludedPaths...)
 	if cfg.Root == "" {
 		cfg.Root = repoPath // scope excludes to the repo (see Config.Root)
 	}
