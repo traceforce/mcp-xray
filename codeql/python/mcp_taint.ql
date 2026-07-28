@@ -66,9 +66,13 @@ predicate dangerousSink(DataFlow::Node node, string cls) {
           .getMember(["run", "call", "Popen", "check_output", "check_call"])
           .getACall()
           .getArg(0)
-    or
-    node = API::builtin(["eval", "exec"]).getACall().getArg(0)
   )
+  or
+  // eval/exec run attacker input as code -- code injection (INJECTION-CODE), a distinct
+  // class from shell command injection, matching the opengrep taxonomy so both engines
+  // agree on Python (the one language they both cover).
+  cls = "code_injection" and
+  node = API::builtin(["eval", "exec"]).getACall().getArg(0)
   or
   cls = "path_traversal" and
   (

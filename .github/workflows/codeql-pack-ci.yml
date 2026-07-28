@@ -7,18 +7,28 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    # Include this workflow itself -- it holds the *_ALL_VERSION pins, so a pin-bump
+    # can never merge on a check that never ran.
     paths:
       - 'codeql/**'
       - 'scripts/install_codeql.sh'
       - 'internal/reposcan/taint/codeql.go'
+      - '.github/workflows/codeql-pack-ci.yml'
   pull_request:
     paths:
       - 'codeql/**'
       - 'scripts/install_codeql.sh'
       - 'internal/reposcan/taint/codeql.go'
+      - '.github/workflows/codeql-pack-ci.yml'
 
 permissions:
   contents: read
+
+# Serialize per ref and cancel superseded runs: each job is an uncached ~810 MB / 20-min
+# download, so three quick pushes must not fan out into three concurrent jobs.
+concurrency:
+  group: codeql-pack-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   compile:
@@ -32,6 +42,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      # Deliberately uncached: the SHA-256 pin in install_codeql.sh is the supply-chain
+      # control, re-verified on every run. Do NOT add actions/cache for the bundle -- it
+      # would restore an unverified copy and silently disable that check.
       - name: Install pinned CodeQL bundle
         run: bash scripts/install_codeql.sh
       - name: Assert bundle ships the pinned library-pack versions

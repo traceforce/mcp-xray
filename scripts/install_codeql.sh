@@ -55,7 +55,8 @@ CODEQL_EXE="$DEST_DIR/codeql/${EXE}"
 TARBALL="bin/${ASSET}"
 URL="https://github.com/${REPO}/releases/download/${CODEQL_BUNDLE_TAG}/${ASSET}"
 
-if [[ -x "$CODEQL_EXE" ]] && [[ "$("$CODEQL_EXE" version --format=terse 2>/dev/null)" == "$CODEQL_VERSION" ]]; then
+CACHED_VERSION="$([[ -x "$CODEQL_EXE" ]] && "$CODEQL_EXE" version --format=terse 2>/dev/null || true)"
+if [[ "${CACHED_VERSION//[$'\r\n']/}" == "$CODEQL_VERSION" ]]; then
   echo "[*] already installed: CodeQL $CODEQL_VERSION at $CODEQL_EXE"
   exit 0
 fi
@@ -76,4 +77,14 @@ mkdir -p "$DEST_DIR"
 tar -xzf "$TARBALL" -C "$DEST_DIR"
 rm -f "$TARBALL"
 [[ -x "$CODEQL_EXE" ]] || { echo "[FATAL] $CODEQL_EXE missing after extract" >&2; exit 1; }
-echo "[*] installed CodeQL $("$CODEQL_EXE" version --format=terse 2>/dev/null) at $HERE/$CODEQL_EXE"
+# Assert the freshly extracted binary actually runs and reports the pinned version, so a
+# truncated or broken download can't exit 0 (matches the cached-path check above). Keep
+# stderr visible so a broken binary's error surfaces; strip CR so a CRLF version string
+# from codeql.exe under git-bash doesn't spuriously mismatch.
+GOT_VERSION="$("$CODEQL_EXE" version --format=terse || true)"
+GOT_VERSION="${GOT_VERSION//[$'\r\n']/}"
+if [[ "$GOT_VERSION" != "$CODEQL_VERSION" ]]; then
+  echo "[FATAL] extracted CodeQL reports version '${GOT_VERSION:-<none>}', expected $CODEQL_VERSION" >&2
+  exit 1
+fi
+echo "[*] installed CodeQL $GOT_VERSION at $HERE/$CODEQL_EXE"

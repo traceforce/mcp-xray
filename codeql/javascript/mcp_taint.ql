@@ -44,16 +44,18 @@ predicate isMcpSource(DataFlow::Node source) {
  */
 predicate dangerousSink(DataFlow::Node node, string cls, string api) {
   cls = "command_injection" and
-  (
-    exists(string m |
-      m = ["exec", "execSync", "spawn", "spawnSync", "execFile", "execFileSync"] and
-      node =
-        API::moduleImport(["child_process", "node:child_process"]).getMember(m).getACall().getArgument(0) and
-      api = "child_process." + m
-    )
-    or
-    node = DataFlow::globalVarRef("eval").getACall().getArgument(0) and api = "eval"
+  exists(string m |
+    m = ["exec", "execSync", "spawn", "spawnSync", "execFile", "execFileSync"] and
+    node =
+      API::moduleImport(["child_process", "node:child_process"]).getMember(m).getACall().getArgument(0) and
+    api = "child_process." + m
   )
+  or
+  // eval runs attacker input as code -- code injection (INJECTION-CODE), matching the
+  // opengrep/CodeQL-python taxonomy rather than command injection.
+  cls = "code_injection" and
+  node = DataFlow::globalVarRef("eval").getACall().getArgument(0) and
+  api = "eval"
   or
   cls = "path_traversal" and
   exists(string m |
@@ -92,7 +94,8 @@ predicate dangerousSink(DataFlow::Node node, string cls, string api) {
       mod = ["http", "https", "node:http", "node:https"] and
       m = ["get", "request"] and
       node = API::moduleImport(mod).getMember(m).getACall().getArgument(0) and
-      api = mod + "." + m
+      // strip the node: prefix so the sink api stays colon-free, like child_process/fs above
+      api = mod.replaceAll("node:", "") + "." + m
     )
   )
   or
