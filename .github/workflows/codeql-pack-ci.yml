@@ -1,8 +1,9 @@
 name: codeql-pack-ci
 
 # Determinism gate for the CodeQL query packs: install the SHA-pinned bundle, assert it
-# ships the pinned library-pack versions, then compile all three packs. Downloads ~810 MB
-# on purpose (no cache), so it runs only when the packs/adapter/installer change.
+# ships the pinned library-pack versions, compile all three packs, then run the real
+# SARIF -> parser integration test. Downloads ~810 MB on purpose (no cache), so it runs
+# only when the packs/adapter/installer change.
 on:
   workflow_dispatch:
   push:
@@ -42,6 +43,9 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
       # Deliberately uncached: the SHA-256 pin in install_codeql.sh is the supply-chain
       # control, re-verified on every run. Do NOT add actions/cache for the bundle -- it
       # would restore an unverified copy and silently disable that check.
@@ -65,3 +69,7 @@ jobs:
           for pack in python go javascript; do
             "${ROOT}/codeql" query compile --search-path="${ROOT}" "codeql/${pack}/mcp_taint.ql"
           done
+      - name: CodeQL taint integration (real SARIF -> parser contract, Python + JS)
+        run: go test -run 'TestCodeQLIntegration$|TestCodeQLIntegrationJS$' -v ./internal/reposcan/taint/...
+        env:
+          MCPXRAY_CODEQL_BIN: ${{ github.workspace }}/bin/codeql-bundle

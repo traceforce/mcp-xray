@@ -100,13 +100,20 @@ arm64/x86_64). On other platforms, install `opengrep` yourself and set
 whenever the pinned engine is resolvable, and when the engine is absent it skips taint
 and still runs SCA, secrets, and the unsafe-command rules.
 
-The CodeQL taint query packs (cross-file, interprocedural taint for Go, TypeScript and
-Python) and a pinned, SHA-verified bundle installer are added here; the engine is wired
-into `repo-scan` by the stacked adapter follow-up.
+For cross-file, interprocedural taint on Go and TypeScript (and Python), install the CodeQL
+engine. It activates by installation too, and its findings are merged with OpenGrep's:
 
 ```bash
-make install-codeql   # pinned CodeQL bundle (Linux x86_64, macOS, Windows)
+make install-codeql                        # pinned CodeQL bundle (Linux x86_64, macOS, Windows)
+./mcpxray repo-scan <repo>                 # every installed engine runs; results merged
+./mcpxray repo-scan <repo> --deep=false    # fast path: OpenGrep only, skip CodeQL
 ```
+
+The deep CodeQL pass builds a database per language, so it is slower; `--deep=false` skips it
+and runs only the fast intra-file OpenGrep scan. Python and TypeScript extract build-free (the
+target is never executed). Go has no build-free mode, so CodeQL compiles the target; that step
+runs only with `--codeql-allow-build` and is otherwise skipped with a warning; the scan never
+blocks on a prompt.
 
 
 ## Output Format

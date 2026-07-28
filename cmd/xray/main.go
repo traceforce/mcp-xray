@@ -208,11 +208,15 @@ func NewRepoScanCommand() *cobra.Command {
 			enableCVE, _ := cmd.Flags().GetBool("cve")
 			enableSecrets, _ := cmd.Flags().GetBool("secrets")
 			enableSAST, _ := cmd.Flags().GetBool("sast")
+			codeqlAllowBuild, _ := cmd.Flags().GetBool("codeql-allow-build")
+			deep, _ := cmd.Flags().GetBool("deep")
 
 			// Build config - by default scan everything (no excludes)
 			config := &reposcan.Config{
-				MaxFileSize:   10 * 1024 * 1024, // 10MB default
-				ExcludedPaths: []string{},       // Empty by default - scan everything
+				MaxFileSize:      10 * 1024 * 1024, // 10MB default
+				ExcludedPaths:    []string{},       // Empty by default - scan everything
+				CodeQLAllowBuild: codeqlAllowBuild,
+				Deep:             deep,
 			}
 
 			// Apply max file size if specified
@@ -312,6 +316,8 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("cve", false, "Run CVE/SCA scan (software composition analysis)")
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
+	cmd.Flags().Bool("codeql-allow-build", false, "Allow CodeQL to build a Go database (runs the Go toolchain, which can execute build-time code; only for trusted repos)")
+	cmd.Flags().Bool("deep", true, "Run deep cross-file taint (CodeQL) in addition to the fast intra-file scan; --deep=false runs OpenGrep only")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd
