@@ -55,8 +55,10 @@ CODEQL_EXE="$DEST_DIR/codeql/${EXE}"
 TARBALL="bin/${ASSET}"
 URL="https://github.com/${REPO}/releases/download/${CODEQL_BUNDLE_TAG}/${ASSET}"
 
-CACHED_VERSION="$([[ -x "$CODEQL_EXE" ]] && "$CODEQL_EXE" version --format=terse 2>/dev/null || true)"
-if [[ -x "$CODEQL_EXE" && "${CACHED_VERSION//[$'\r\n']/}" == "$CODEQL_VERSION" ]]; then
+# Fast path: accept an existing bundle only if it is executable, runs (nonzero exit
+# short-circuits to a re-download, like the post-extract check), and reports the pin.
+if CACHED_VERSION="$([[ -x "$CODEQL_EXE" ]] && "$CODEQL_EXE" version --format=terse 2>/dev/null)" \
+  && [[ "${CACHED_VERSION//[$'\r\n']/}" == "$CODEQL_VERSION" ]]; then
   echo "[*] already installed: CodeQL $CODEQL_VERSION at $CODEQL_EXE"
   exit 0
 fi
