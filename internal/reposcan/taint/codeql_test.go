@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -319,5 +320,37 @@ func TestCodeQLScanSurfacesFailure(t *testing.T) {
 	cfg.PackDir = packs
 	if _, err := NewCodeQLEngine(cfg).Scan(context.Background(), "testdata/py-vuln", []string{"python"}); err == nil {
 		t.Error("a query CodeQL cannot analyze must return an error, not report 0 findings")
+	}
+}
+
+// TestCodeQLScanRejectsRelativeBin locks the fix for the code-execution path: a relative
+// engine path could resolve against the scanned repo and run an attacker binary, so Scan
+// must fail closed before exec.
+func TestCodeQLScanRejectsRelativeBin(t *testing.T) {
+	cfg := CodeQLConfig{Bin: filepath.Join("bin", "codeql"), PackDir: t.TempDir()} // relative bin
+	_, err := NewCodeQLEngine(cfg).Scan(context.Background(), t.TempDir(), []string{"python"})
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("a relative codeql bin must be rejected, got %v", err)
+	}
+}
+
+// TestFindCodeQLAbsolutizesEnv locks that a relative MCPXRAY_CODEQL_BIN is returned as an
+// absolute path, so it can never be re-resolved against the scan target at exec time.
+func TestFindCodeQLAbsolutizesEnv(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, codeqlExe()), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MCPXRAY_CODEQL_BIN", codeqlExe()) // relative
+	if got := findCodeQL(); !filepath.IsAbs(got) {
+		t.Fatalf("findCodeQL must absolutize a relative env var, got %q", got)
 	}
 }

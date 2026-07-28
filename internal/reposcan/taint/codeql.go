@@ -74,6 +74,12 @@ func DefaultCodeQLConfig() CodeQLConfig {
 // not PATH-resolved). "" when none is usable.
 func findCodeQL() string {
 	if b := os.Getenv("MCPXRAY_CODEQL_BIN"); b != "" {
+		// Absolutize against the current CWD (where isExec/Stat validate it) so a relative
+		// MCPXRAY_CODEQL_BIN can never later resolve against the scanned repo and run an
+		// attacker-planted binary (mirrors findOpengrep).
+		if abs, err := filepath.Abs(b); err == nil {
+			b = abs
+		}
 		if fi, err := os.Stat(b); err == nil && fi.IsDir() {
 			// Accept either the dir that directly holds the exe or a bundle root, whose
 			// standard layout nests it under codeql/ (<bundle>/codeql/<exe>).
@@ -138,6 +144,11 @@ func (e *CodeQLEngine) Available() bool {
 func (e *CodeQLEngine) Scan(ctx context.Context, repoPath string, langs []string) ([]PathRecord, error) {
 	if !e.Available() {
 		return nil, nil
+	}
+	// Backstop: never exec a relative engine path (findCodeQL already absolutizes). A
+	// relative bin could resolve against the scanned repo and run an attacker binary.
+	if !filepath.IsAbs(e.cfg.Bin) {
+		return nil, fmt.Errorf("codeql binary path must be absolute, got %q", e.cfg.Bin)
 	}
 	root, err := filepath.Abs(repoPath)
 	if err != nil {
