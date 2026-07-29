@@ -46,10 +46,17 @@ var (
 	// A class body or object-literal opening ABOVE the source: we have left the handler's
 	// scope, so stop rather than walking into an unrelated earlier declaration.
 	reScopeBoundary = regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+[A-Za-z_$]|^\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]*)?=\s*\{\s*$`)
-	// Any MCP registration call (the source's own boundary) and the tool-name string in one.
-	reRegBoundary = regexp.MustCompile(`\.(?:tool|registerTool|resource|setRequestHandler)\s*\(`)
+	// Registration calls that ENCLOSE a handler body. Includes the Go SDK / mcp-go
+	// AddTool|AddResource|AddPrompt|AddResourceTemplate forms, whose handler is a closure
+	// -- without them the upward scan runs past the registration and names the enclosing
+	// func (typically `main`) as the MCP tool.
+	reRegBoundary = regexp.MustCompile(`\.(?:tool|registerTool|resource|setRequestHandler|AddTool|AddResource|AddPrompt|AddResourceTemplate)\s*\(`)
 	reRegName     = regexp.MustCompile("\\.(?:tool|registerTool|resource)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]")
 	reIdent       = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)`)
+	// A Go anonymous func literal opening a callback body on the registration line
+	// (`AddTool(tool, func(ctx, req) {`). Word-boundary anchored so it matches `func(` /
+	// `func (` but never a named `func main(` or an identifier ending in "func" (someFunc().
+	reFuncLit = regexp.MustCompile(`\bfunc\s*\(`)
 )
 
 // CodeQLConfig controls the CodeQL taint engine. Zero value is not usable; call
@@ -289,7 +296,19 @@ func (e *CodeQLEngine) parseSarif(s *cqSarif, root string) []PathRecord {
 			if a := reSinkAPI.FindStringSubmatch(msg); a != nil {
 				sinkAPI = a[1]
 			} else if sinkSnippet != "" {
+				// The python pack emits no sink= tag and its sink node is the tainted
+				// ARGUMENT, so a call wrapped across lines leaves the api name on a
+				// neighbouring line and the one-line snippet yields unknown_sink -- which
+				// also poisons pathID/sinkIdentity and defeats the cross-engine merge.
+				// Retry once over a padded window before giving up.
 				sinkAPI = canonicalSinkAPI(sinkSnippet)
+				if sinkAPI == "unknown_sink" {
+					if wide := snippet(fileLines, sinkAbs, sinkLine-1, sinkLine+1); wide != "" {
+						if a := canonicalSinkAPI(wide); a != "unknown_sink" {
+							sinkAPI = a
+						}
+					}
+				}
 			}
 			fn, param := enclosingHandler(srcAbs, srcLine)
 			out = append(out, PathRecord{
@@ -317,6 +336,10 @@ var notMethodKeyword = map[string]bool{
 	"if": true, "for": true, "while": true, "switch": true, "catch": true,
 	"do": true, "else": true, "try": true, "return": true, "with": true,
 	"function": true, "class": true,
+	// `func` guards a Go anonymous closure `func(ctx, in) {`: reMethodDecl runs before the
+	// registration-boundary check and would otherwise attribute the sink to a tool literally
+	// named "func" instead of stopping at the enclosing AddTool.
+	"func": true,
 }
 
 // enclosingHandler scans upward from line for the nearest def/func declaration and
@@ -389,15 +412,37 @@ func enclosesSource(ln string) bool {
 	}
 	t := strings.TrimSpace(ln)
 	t = strings.TrimSpace(strings.TrimRight(t, ";"))
+	// A Go anonymous func literal (mcp-go `AddTool(tool, func(ctx, req) {`). Go uses `func`,
+	// not `function`, and its one-line form ends in `{`, so without this the scan runs past
+	// the registration and misreports the enclosing func (`main`). Require the trailing `{`
+	// so a self-contained body call whose literal closes on the same line
+	// (`f("k", func(y){ return y })`) is NOT mistaken for a boundary.
+	if reFuncLit.MatchString(ln) && strings.HasSuffix(t, "{") {
+		return true
+	}
 	return strings.HasSuffix(t, "(") || strings.HasSuffix(t, ",")
 }
 
 // firstParam returns the identifier of the first parameter in a signature's param
 // list, stripping any type annotation (`host: str` -> host, `url string` -> url).
 func firstParam(params string) string {
-	first := strings.SplitN(params, ",", 2)[0]
-	first = strings.TrimSpace(strings.SplitN(first, ":", 2)[0]) // python `name: T`
-	if m := reIdent.FindStringSubmatch(first); m != nil {
+	for _, raw := range strings.Split(params, ",") {
+		p := strings.TrimSpace(strings.SplitN(raw, ":", 2)[0]) // python `name: T`
+		m := reIdent.FindStringSubmatch(p)
+		if m == nil {
+			continue
+		}
+		// Skip receivers and the injected Go context param: neither is ever the attacker-
+		// controlled value, so reporting them as the tainted parameter is always wrong.
+		// The context param is skipped by TYPE, not name, so the idiomatic `_ context.Context`
+		// / `c context.Context` / unnamed forms are all handled; a Python param literally
+		// named ctx carries no such type and is still returned.
+		switch {
+		case m[1] == "self" || m[1] == "cls":
+			continue
+		case strings.Contains(raw, "context.Context"):
+			continue
+		}
 		return m[1] // handles go `name T` and bare `name`
 	}
 	return "unknown"

@@ -56,6 +56,42 @@ func TestCodeQLParseSarifConfinesEscapingPath(t *testing.T) {
 	}
 }
 
+// TestCodeQLParseSarifCrossLineSink locks the python cross-line sink recovery: when the
+// sink node points at a tainted ARGUMENT on its own line, the single-line snippet is
+// unknown_sink; the padded-window retry must recover the real API so pathID/sinkIdentity
+// stay stable and the cross-engine merge still works.
+func TestCodeQLParseSarifCrossLineSink(t *testing.T) {
+	root := t.TempDir()
+	src := "import subprocess\n" + // 1
+		"\n" + // 2
+		"def run_ping(host):\n" + // 3
+		"    subprocess.run(\n" + // 4
+		"        host,\n" + // 5  <- sink node (argument only)
+		"        shell=True,\n" + // 6
+		"    )\n" // 7
+	if err := os.WriteFile(filepath.Join(root, "server.py"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := &cqSarif{Runs: []cqRun{{Results: []cqResult{{
+		Message: cqText{Text: `MCP-TAINT\[command_injection\]: handler input reaches a command_injection sink.`},
+		CodeFlows: []cqCodeFlow{{ThreadFlows: []cqThreadFlow{{
+			Locations: []cqThreadLoc{cqNode("server.py", 3), cqNode("server.py", 5)},
+		}}}},
+	}}}}}
+	paths := (&CodeQLEngine{}).parseSarif(s, root)
+	if len(paths) != 1 {
+		t.Fatalf("want 1 path, got %d", len(paths))
+	}
+	p := paths[0]
+	// The single sink line "host," alone yields unknown_sink; only the retry recovers this.
+	if p.SinkAPI != "subprocess.run+shell=True" {
+		t.Errorf("cross-line sink API = %q, want subprocess.run+shell=True (retry did not recover)", p.SinkAPI)
+	}
+	if p.SourceFunction != "run_ping" || p.SourceParam != "host" {
+		t.Errorf("source = (%q,%q), want (run_ping,host)", p.SourceFunction, p.SourceParam)
+	}
+}
+
 func TestNormURI(t *testing.T) {
 	for in, want := range map[string]string{
 		"server.py":         "server.py",
@@ -75,10 +111,24 @@ func TestEnclosingHandlerAndFirstParam(t *testing.T) {
 		t.Errorf("enclosingHandler = (%q,%q), want (run_ping,host)", fn, p)
 	}
 	for in, want := range map[string]string{
-		"host: str":                     "host",
-		"url string":                    "url",
-		"ctx context.Context, x string": "ctx",
-		"":                              "unknown",
+		"host: str":  "host",
+		"url string": "url",
+		// A Go handler's leading context param is not attacker-controlled, so the first
+		// REAL parameter is the tainted one. Skipped by TYPE, so every idiomatic spelling
+		// (ctx / c / _ / unnamed) is handled, not just the literal name "ctx".
+		"ctx context.Context, x string": "x",
+		"_ context.Context, in Input":   "in",
+		"c context.Context, in Input":   "in",
+		// Python receivers are never the tainted value either.
+		"self, host: str": "host",
+		"cls, url: str":   "url",
+		// But a param literally named ctx that is NOT a context type still counts -- the
+		// skip is type-gated, not name-gated.
+		"ctx, payload": "ctx",
+		// A signature that is only a receiver has no attacker-controlled param.
+		"self":      "unknown",
+		"cls, self": "unknown",
+		"":          "unknown",
 	} {
 		if got := firstParam(in); got != want {
 			t.Errorf("firstParam(%q) = %q, want %q", in, got, want)
@@ -114,6 +164,80 @@ func TestHandlerRegexAcrossLanguages(t *testing.T) {
 	} {
 		if got := match(line); got != want {
 			t.Errorf("handler name for %q = %q, want %q", line, got, want)
+		}
+	}
+}
+
+// TestRegBoundaryMatchesGoSDKForms locks that the Go SDK / mcp-go registration verbs are
+// recognized as handler boundaries (they carry the handler as a closure), alongside the
+// JS/TS forms, and that a lookalike identifier is not mistaken for one.
+func TestRegBoundaryMatchesGoSDKForms(t *testing.T) {
+	for _, ln := range []string{
+		"\ts.AddTool(tool,",
+		"\tsrv.AddResource(res,",
+		"\t.AddPrompt(p,",
+		"\tmux.AddResourceTemplate(tmpl,",
+		"server.tool(\"x\", () => {",
+		"m.registerTool('y', cb)",
+		"api.setRequestHandler(schema, h)",
+	} {
+		if !reRegBoundary.MatchString(ln) {
+			t.Errorf("reRegBoundary should match a registration line: %q", ln)
+		}
+	}
+	for _, ln := range []string{
+		"\tresult := helper.AddToolHelper(x)", // AddTool* is a prefix here, not the verb
+		"\tfmt.Println(addTool)",
+		"\treturn nil",
+	} {
+		if reRegBoundary.MatchString(ln) {
+			t.Errorf("reRegBoundary must not match a non-registration line: %q", ln)
+		}
+	}
+}
+
+// TestEnclosingHandlerGoAddToolClosure locks that a sink inside a Go mcp-go AddTool
+// closure is NOT attributed to the enclosing `main` (the false-attribution bug the
+// reRegBoundary + func-literal boundary fixes). Both the multi-line and the common
+// one-line registration shapes must stop at the boundary rather than naming main.
+func TestEnclosingHandlerGoAddToolClosure(t *testing.T) {
+	cases := map[string]string{
+		"multiline": "package main\n" +
+			"func main() {\n" +
+			"\ts.AddTool(\n" +
+			"\t\tnewTool(\"run_cmd\"),\n" +
+			"\t\tfunc(ctx context.Context, in Input) (*Out, error) {\n" +
+			"\t\t\tout, _ := exec.Command(\"sh\", \"-c\", in.Cmd).Output()\n" +
+			"\t\t\t_ = out\n" +
+			"\t\t\treturn nil, nil\n" +
+			"\t\t},\n" +
+			"\t)\n" +
+			"}\n",
+		"oneline": "package main\n" +
+			"func main() {\n" +
+			"\ts.AddTool(newTool(\"run_cmd\"), func(ctx context.Context, in Input) (*Out, error) {\n" +
+			"\t\tout, _ := exec.Command(\"sh\", \"-c\", in.Cmd).Output()\n" +
+			"\t\treturn nil, nil\n" +
+			"\t})\n" +
+			"}\n",
+	}
+	for name, src := range cases {
+		f := filepath.Join(t.TempDir(), "server.go")
+		if err := os.WriteFile(f, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sinkLine := 0
+		for i, ln := range strings.Split(src, "\n") {
+			if strings.Contains(ln, "exec.Command") {
+				sinkLine = i + 1
+			}
+		}
+		// Must stop at the AddTool boundary and report "unknown" -- not the enclosing
+		// `main` (the false-attribution bug) and not the literal `func` closure keyword.
+		// The tool name lives inside newTool("run_cmd"), which reRegName cannot read, so
+		// "unknown" is the honest result.
+		if fn, _ := enclosingHandler(f, sinkLine); fn != "unknown" {
+			t.Errorf("[%s] enclosingHandler = %q, want unknown (stop at the AddTool boundary, never name main/func)", name, fn)
 		}
 	}
 }
