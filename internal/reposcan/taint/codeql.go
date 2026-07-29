@@ -114,6 +114,12 @@ func codeqlExe() string {
 // honestly false rather than self-activating from a ./codeql in the working directory.
 func findPackDir() string {
 	if d := os.Getenv("MCPXRAY_CODEQL_PACKS"); d != "" {
+		// Absolutize against the current CWD (where Available()'s Stat validates it) so a
+		// relative MCPXRAY_CODEQL_PACKS can't later resolve against the scanned repo and load
+		// attacker-planted query packs (mirrors findCodeQL / findOpengrep).
+		if abs, err := filepath.Abs(d); err == nil {
+			return abs
+		}
 		return d
 	}
 	if exe, err := os.Executable(); err == nil {

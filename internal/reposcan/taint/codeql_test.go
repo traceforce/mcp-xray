@@ -386,3 +386,22 @@ func TestFindCodeQLAbsolutizesEnv(t *testing.T) {
 		t.Fatalf("findCodeQL must absolutize a relative env var, got %q", got)
 	}
 }
+
+// TestFindPackDirAbsolutizesEnv locks that a relative MCPXRAY_CODEQL_PACKS is returned as an
+// absolute path, so a repo-local ./codeql can't be re-resolved against the scan target and
+// feed attacker-planted query packs to CodeQL (mirrors TestFindCodeQLAbsolutizesEnv).
+func TestFindPackDirAbsolutizesEnv(t *testing.T) {
+	dir := t.TempDir()
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("MCPXRAY_CODEQL_PACKS", "codeql") // relative
+	if got := findPackDir(); !filepath.IsAbs(got) {
+		t.Fatalf("findPackDir must absolutize a relative env var, got %q", got)
+	}
+}
