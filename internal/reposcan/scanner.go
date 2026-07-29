@@ -20,12 +20,23 @@ func NewDefaultRepoScanner(repoPath string) *RepoScanner {
 }
 
 func NewRepoScannerWithConfig(repoPath string, config *Config) *RepoScanner {
+	if config == nil {
+		config = DefaultConfig()
+	}
+	// Work on a fully independent copy so we never mutate the caller's Config and a scan
+	// can't race a caller that reuses or mutates it: Root is per scan root, and the
+	// ExcludedPaths slice is copied too (the shallow struct copy would otherwise share it).
+	cfg := *config
+	cfg.ExcludedPaths = append([]string(nil), config.ExcludedPaths...)
+	if cfg.Root == "" {
+		cfg.Root = repoPath // scope excludes to the repo (see Config.Root)
+	}
 	return &RepoScanner{
 		repoPath:       repoPath,
-		config:         config,
-		scaScanner:     NewSCAScanner(repoPath, config),
-		secretsScanner: NewSecretsScanner(repoPath, config),
-		sastScanner:    NewSASTScanner(repoPath, config),
+		config:         &cfg,
+		scaScanner:     NewSCAScanner(repoPath, &cfg),
+		secretsScanner: NewSecretsScanner(repoPath, &cfg),
+		sastScanner:    NewSASTScanner(repoPath, &cfg),
 	}
 }
 
