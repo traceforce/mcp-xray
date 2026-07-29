@@ -113,3 +113,18 @@ func TestMergePathsSameEngineKeepsDistinctParams(t *testing.T) {
 		t.Fatalf("same-engine distinct params must stay separate, got %d", len(got))
 	}
 }
+
+// Two distinct flows that share a sink but originate on different source lines with an
+// "unknown" handler (the shape that bypasses the sameFlow gate via the exact-match fast
+// path) must stay separate. Without SourceLine in pathID they collapsed to one, silently
+// dropping a finding -- e.g. two setRequestHandler flows into one shared helper.
+func TestMergePathsUnknownHandlerDistinctSourceLines(t *testing.T) {
+	mk := func(srcLine int) PathRecord {
+		return PathRecord{VulnClass: "command_injection", SourceFile: "s.py", SourceLine: srcLine,
+			SourceFunction: "unknown", SourceParam: "arg", SinkFile: "s.py", SinkLine: 40,
+			SinkAPI: "os.system", Engine: "codeql"}
+	}
+	if got := MergePaths([]PathRecord{mk(10), mk(20)}); len(got) != 2 {
+		t.Fatalf("distinct unknown-handler flows collapsed: got %d records, want 2", len(got))
+	}
+}
