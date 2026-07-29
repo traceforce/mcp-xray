@@ -56,39 +56,63 @@ func TestCodeQLParseSarifConfinesEscapingPath(t *testing.T) {
 	}
 }
 
-// TestCodeQLParseSarifCrossLineSink locks the python cross-line sink recovery: when the
-// sink node points at a tainted ARGUMENT on its own line, the single-line snippet is
-// unknown_sink; the padded-window retry must recover the real API so pathID/sinkIdentity
-// stay stable and the cross-engine merge still works.
-func TestCodeQLParseSarifCrossLineSink(t *testing.T) {
+// parseOne runs parseSarif on a single command_injection flow whose sink node is at
+// sinkLine, and returns the one resulting record.
+func parseOne(t *testing.T, src string, srcLine, sinkLine int) PathRecord {
+	t.Helper()
 	root := t.TempDir()
-	src := "import subprocess\n" + // 1
-		"\n" + // 2
-		"def run_ping(host):\n" + // 3
-		"    subprocess.run(\n" + // 4
-		"        host,\n" + // 5  <- sink node (argument only)
-		"        shell=True,\n" + // 6
-		"    )\n" // 7
 	if err := os.WriteFile(filepath.Join(root, "server.py"), []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s := &cqSarif{Runs: []cqRun{{Results: []cqResult{{
 		Message: cqText{Text: `MCP-TAINT\[command_injection\]: handler input reaches a command_injection sink.`},
 		CodeFlows: []cqCodeFlow{{ThreadFlows: []cqThreadFlow{{
-			Locations: []cqThreadLoc{cqNode("server.py", 3), cqNode("server.py", 5)},
+			Locations: []cqThreadLoc{cqNode("server.py", srcLine), cqNode("server.py", sinkLine)},
 		}}}},
 	}}}}}
 	paths := (&CodeQLEngine{}).parseSarif(s, root)
 	if len(paths) != 1 {
 		t.Fatalf("want 1 path, got %d", len(paths))
 	}
-	p := paths[0]
-	// The single sink line "host," alone yields unknown_sink; only the retry recovers this.
+	return paths[0]
+}
+
+// TestCodeQLParseSarifCrossLineSink locks the python cross-line sink recovery: when the
+// sink node points at a tainted ARGUMENT and the single-line snippet is unknown_sink, the
+// retry recovers the real API from the call opened on the line ABOVE, so pathID/sinkIdentity
+// stay stable and the cross-engine merge still works.
+func TestCodeQLParseSarifCrossLineSink(t *testing.T) {
+	// The api (subprocess.run + shell=True) is on/above the sink arg; the arg line alone is
+	// unknown_sink, and only the upward retry recovers it.
+	src := "import subprocess\n" + // 1
+		"\n" + // 2
+		"def run_ping(host):\n" + // 3
+		"    subprocess.run(\n" + // 4
+		"        host, shell=True)\n" // 5  <- sink node (arg + shell on this line)
+	p := parseOne(t, src, 3, 5)
 	if p.SinkAPI != "subprocess.run+shell=True" {
-		t.Errorf("cross-line sink API = %q, want subprocess.run+shell=True (retry did not recover)", p.SinkAPI)
+		t.Errorf("cross-line sink API = %q, want subprocess.run+shell=True (upward retry did not recover)", p.SinkAPI)
 	}
 	if p.SourceFunction != "run_ping" || p.SourceParam != "host" {
 		t.Errorf("source = (%q,%q), want (run_ping,host)", p.SourceFunction, p.SourceParam)
+	}
+}
+
+// TestCodeQLParseSarifSinkNoStealBelow locks that the retry never widens BELOW the sink:
+// a path_traversal open() sink whose next statement is os.system must not be relabelled
+// os.system. Widening downward (the original bug) produced "path traversal reaches
+// os.system"; an honest recovered "open" is correct.
+func TestCodeQLParseSarifSinkNoStealBelow(t *testing.T) {
+	src := "def read(name):\n" + // 1
+		"    open(\n" + // 2
+		"        name)\n" + // 3  <- sink node (call closes here)
+		"    os.system(other)\n" // 4  <- unrelated next statement at n+1
+	p := parseOne(t, src, 1, 3)
+	if p.SinkAPI == "os.system" {
+		t.Errorf("sink API = %q; the retry stole the next statement's api (must widen upward only)", p.SinkAPI)
+	}
+	if p.SinkAPI != "open" {
+		t.Errorf("sink API = %q, want open (recovered from the line above)", p.SinkAPI)
 	}
 }
 
@@ -238,6 +262,55 @@ func TestEnclosingHandlerGoAddToolClosure(t *testing.T) {
 		// "unknown" is the honest result.
 		if fn, _ := enclosingHandler(f, sinkLine); fn != "unknown" {
 			t.Errorf("[%s] enclosingHandler = %q, want unknown (stop at the AddTool boundary, never name main/func)", name, fn)
+		}
+	}
+}
+
+// TestEnclosingHandlerGoAssignClosure locks the assign-then-register Go shape
+// (`h := func(ctx, in) {`, `var h = func(...) {`): a sink inside the closure must be
+// attributed to the closure variable, never to the enclosing `main`. firstParam still
+// skips the leading context param.
+func TestEnclosingHandlerGoAssignClosure(t *testing.T) {
+	cases := map[string]struct {
+		src       string
+		wantFn    string
+		wantParam string
+	}{
+		"walrus": {
+			src: "package main\n" + // 1
+				"func main() {\n" + // 2
+				"\thandler := func(ctx context.Context, in Input) {\n" + // 3
+				"\t\tout, _ := exec.Command(\"sh\", \"-c\", in.Cmd).Output()\n" + // 4
+				"\t\t_ = out\n" +
+				"\t}\n" +
+				"\ts.AddTool(tool, handler)\n" +
+				"}\n",
+			wantFn: "handler", wantParam: "in",
+		},
+		"var-eq": {
+			src: "package main\n" + // 1
+				"func main() {\n" + // 2
+				"\tvar h = func(name string) {\n" + // 3
+				"\t\texec.Command(\"sh\", \"-c\", name).Run()\n" + // 4
+				"\t}\n" +
+				"\tsrv.AddTool(t, h)\n" +
+				"}\n",
+			wantFn: "h", wantParam: "name",
+		},
+	}
+	for name, c := range cases {
+		f := filepath.Join(t.TempDir(), "server.go")
+		if err := os.WriteFile(f, []byte(c.src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		sinkLine := 0
+		for i, ln := range strings.Split(c.src, "\n") {
+			if strings.Contains(ln, "exec.Command") {
+				sinkLine = i + 1
+			}
+		}
+		if fn, p := enclosingHandler(f, sinkLine); fn != c.wantFn || p != c.wantParam {
+			t.Errorf("[%s] enclosingHandler = (%q,%q), want (%q,%q) -- must never be main", name, fn, p, c.wantFn, c.wantParam)
 		}
 	}
 }

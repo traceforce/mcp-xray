@@ -36,6 +36,12 @@ var (
 	reHandlerName = regexp.MustCompile(`\b(?:func\s+(?:\([^)]*\)\s*)?|def\s+|function\s+)([A-Za-z_$][\w$]*)\s*\(`)
 	// JS/TS arrow handler assigned to a name: `const f = (args) =>` / `= async (args) =>`.
 	reArrowHandler = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*=>`)
+	// Go closure assigned to a name then registered separately (`h := func(ctx, in) {`,
+	// `var h = func(ctx, in) {`), the mcp-go `srv.AddTool(tool, h)` shape. Named here so
+	// the upward scan stops at the closure instead of walking on to the enclosing `main`.
+	// `:?=` matches `:=`/`=` but a struct field `Handler: func(...)` is not (it has `:`
+	// without `=`); `x := funcCall()` is not (`func\s*\(` needs `(` right after `func`).
+	reGoClosure = regexp.MustCompile(`\b(?:var\s+)?([A-Za-z_$][\w$]*)\s*:?=\s*func\s*\(([^)]*)\)`)
 	// JS/TS inline MCP registration `server.tool("name", (args) => {`: an anonymous callback
 	// whose tool-NAME string is the attribution, with the param on the same line.
 	reInlineHandler = regexp.MustCompile("\\.(?:tool|registerTool|resource)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,\\s*(?:async\\s+)?(?:function\\s*)?\\(([^)]*)\\)")
@@ -297,13 +303,16 @@ func (e *CodeQLEngine) parseSarif(s *cqSarif, root string) []PathRecord {
 				sinkAPI = a[1]
 			} else if sinkSnippet != "" {
 				// The python pack emits no sink= tag and its sink node is the tainted
-				// ARGUMENT, so a call wrapped across lines leaves the api name on a
-				// neighbouring line and the one-line snippet yields unknown_sink -- which
-				// also poisons pathID/sinkIdentity and defeats the cross-engine merge.
-				// Retry once over a padded window before giving up.
+				// ARGUMENT, so a call wrapped across lines leaves the api name on the line
+				// ABOVE (the call opens there) and the one-line snippet yields unknown_sink
+				// -- which also poisons pathID/sinkIdentity and defeats the cross-engine
+				// merge. Retry once over the sink line plus the line above. Never widen
+				// BELOW: the next line can be an unrelated statement whose api would be
+				// stolen (a path_traversal open() sink mislabelled with the following
+				// os.system) -- an honest unknown_sink beats a confidently wrong label.
 				sinkAPI = canonicalSinkAPI(sinkSnippet)
 				if sinkAPI == "unknown_sink" {
-					if wide := snippet(fileLines, sinkAbs, sinkLine-1, sinkLine+1); wide != "" {
+					if wide := snippet(fileLines, sinkAbs, sinkLine-1, sinkLine); wide != "" {
 						if a := canonicalSinkAPI(wide); a != "unknown_sink" {
 							sinkAPI = a
 						}
@@ -365,6 +374,12 @@ func enclosingHandler(file string, line int) (name, param string) {
 			return m[1], firstParam(m[2])
 		}
 		if m := reInlineHandler.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(m[2])
+		}
+		// A Go closure assigned to a name (`h := func(ctx, in) {`) -- named for the var so
+		// the scan stops here instead of reaching the enclosing `main`. Tried before the
+		// arrow check; neither pattern's regex matches the other.
+		if m := reGoClosure.FindStringSubmatch(ln); m != nil {
 			return m[1], firstParam(m[2])
 		}
 		// A named arrow handler is tried before the boundary so one whose body itself
