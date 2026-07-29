@@ -61,8 +61,8 @@ func ResolveGoBuildConsent(langs []string, allowFlag bool) bool {
 	}
 	if slices.Contains(langs, "go") {
 		fmt.Println("CodeQL Go analysis builds the target with the Go toolchain, which can " +
-			"execute build-time code (go:generate, cgo); skipped. Pass --codeql-allow-build " +
-			"to enable it on code you trust.")
+			"execute build-time code (cgo compiles and runs C from the target); skipped. Pass " +
+			"--codeql-allow-build to enable it on code you trust.")
 	}
 	return false
 }

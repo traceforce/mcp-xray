@@ -180,6 +180,12 @@ func (e *CodeQLEngine) Scan(ctx context.Context, repoPath string, langs []string
 	if !filepath.IsAbs(e.cfg.Bin) {
 		return nil, fmt.Errorf("codeql binary path must be absolute, got %q", e.cfg.Bin)
 	}
+	// Same backstop for the pack dir (joined into the query path below): findPackDir
+	// absolutizes, but a hand-built CodeQLConfig with a relative PackDir would otherwise
+	// load query packs from the scanned repo's CWD.
+	if !filepath.IsAbs(e.cfg.PackDir) {
+		return nil, fmt.Errorf("codeql pack dir must be absolute, got %q", e.cfg.PackDir)
+	}
 	root, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, err

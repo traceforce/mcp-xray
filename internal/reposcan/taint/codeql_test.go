@@ -533,6 +533,33 @@ func TestCodeQLScanRejectsRelativeBin(t *testing.T) {
 	}
 }
 
+// TestCodeQLScanRejectsRelativePackDir locks the symmetric guard: a relative pack dir must
+// be rejected too, so a hand-built config cannot load query packs from the scanned repo's
+// CWD. A real relative pack is placed so Available() passes and the IsAbs backstop -- not
+// Available's Stat miss -- is what rejects the run.
+func TestCodeQLScanRejectsRelativePackDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "codeql", "python"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codeql", "python", "mcp_taint.ql"), []byte("select 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg := CodeQLConfig{Bin: filepath.Join(dir, codeqlExe()), PackDir: "codeql"} // abs bin, relative packs
+	_, err = NewCodeQLEngine(cfg).Scan(context.Background(), t.TempDir(), []string{"python"})
+	if err == nil || !strings.Contains(err.Error(), "pack dir must be absolute") {
+		t.Fatalf("a relative codeql pack dir must be rejected, got %v", err)
+	}
+}
+
 // packDirWithQuery returns a pack dir holding a python/mcp_taint.ql, the minimum
 // Available() requires.
 func packDirWithQuery(t *testing.T) string {
