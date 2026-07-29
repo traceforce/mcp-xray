@@ -14,16 +14,12 @@ type Config struct {
 	ExcludedPaths []string
 	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
 	CodeQLAllowBuild bool
-	// Deep enables the deep cross-file taint engine (CodeQL) in addition to the fast
-	// intra-file OpenGrep scan. Default true; --deep=false runs only OpenGrep.
-	Deep bool
 }
 
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
 		MaxFileSize: 10 * 1024 * 1024, // 10MB
-		Deep:        true,
 		ExcludedPaths: []string{
 			".venv",
 			"venv",

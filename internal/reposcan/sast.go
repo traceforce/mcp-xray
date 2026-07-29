@@ -139,9 +139,8 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 // runTaintEngine runs every installed source->sink taint engine and merges their paths.
 // Engines activate by installation: OpenGrep (fast, intra-file) and CodeQL (deep,
 // cross-file) each run when their pinned binary is resolvable and degrade quietly
-// otherwise, so there is no engine flag to keep in sync. The deep pass is additionally
-// gated by --deep so a fast OpenGrep-only scan stays available. Any failure returns no
-// findings rather than aborting the scan.
+// otherwise, so there is no engine flag at all -- installing an engine is what enables it.
+// Any failure returns no findings rather than aborting the scan.
 func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	var paths []taint.PathRecord
 
@@ -174,15 +173,10 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 
 	// CodeQL: the deep cross-file/interprocedural pass (slower; builds a DB per language).
 	ccfg := taint.DefaultCodeQLConfig() // resolves the bin+packs once (Stat/Executable)
-	switch {
-	case !s.config.Deep:
-		// Say so: with --deep=false and no opengrep installed, nothing else would report
-		// that no taint analysis ran at all.
-		fmt.Println("SAST codeql deep pass disabled (--deep=false); skipping cross-file taint")
-	case !taint.NewCodeQLEngine(ccfg).Available():
+	if !taint.NewCodeQLEngine(ccfg).Available() {
 		fmt.Println("SAST codeql engine not available (needs the codeql binary and query packs); " +
 			"skipping (run `make install-codeql`, or set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS)")
-	default:
+	} else {
 		langs := taint.DetectLangs(s.repoPath)
 		ccfg.AllowGoBuild = taint.ResolveGoBuildConsent(langs, s.config.CodeQLAllowBuild)
 		// Keep any partial results, but surface an analysis failure loudly instead of
@@ -192,7 +186,7 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 		paths = append(paths, p...)
 		// Report the failure FIRST so a partial result is never read as a complete one,
 		// then always report a count -- a genuine clean run must be visibly distinct from
-		// "the deep pass never ran".
+		// the engine never having run.
 		if err != nil {
 			fmt.Printf("SAST codeql analysis failed (results may be incomplete): %v\n", err)
 		}

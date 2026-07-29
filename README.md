@@ -106,14 +106,15 @@ engine. It activates by installation too, and its findings are merged with OpenG
 ```bash
 make install-codeql                        # pinned CodeQL bundle (Linux x86_64, macOS, Windows)
 ./mcpxray repo-scan <repo>                 # every installed engine runs; results merged
-./mcpxray repo-scan <repo> --deep=false    # fast path: OpenGrep only, skip CodeQL
 ```
 
-The deep CodeQL pass builds a database per language, so it is slower; `--deep=false` skips it
-and runs only the fast intra-file OpenGrep scan. Python and TypeScript extract build-free (the
-target is never executed). Go has no build-free mode, so CodeQL compiles the target; that step
-runs only with `--codeql-allow-build` and is otherwise skipped with a warning; the scan never
-blocks on a prompt.
+CodeQL builds a database per language, so a scan takes noticeably longer once the bundle is
+installed; that cost is the price of cross-file analysis. To drop back to the fast intra-file
+pass, uninstall the engine the way you installed it: remove the bundle from `make install-codeql`
+(it lives next to the binary), or unset `MCPXRAY_CODEQL_BIN` if you pointed it at one. Python and
+TypeScript extract build-free (the target is never executed). Go has no build-free mode, so CodeQL
+compiles the target; that step runs only with `--codeql-allow-build` and is otherwise skipped with
+a warning; the scan never blocks on a prompt.
 
 
 ## Output Format
