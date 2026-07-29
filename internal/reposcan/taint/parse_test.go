@@ -119,6 +119,23 @@ func TestCanonicalSinkAPI(t *testing.T) {
 		`something_unrelated(x)`: "unknown_sink",
 		// Another object's .text() must NOT be mislabeled as the sqlalchemy.text sink.
 		`resp.text(x)`: "unknown_sink",
+		// Sinks the CodeQL Python pack selects but the opengrep rules do not: without an
+		// arm each falls through to "unknown_sink" (or, for the ones containing "open(",
+		// to a wrong label), and SinkAPI feeds the finding title and the dedup keys.
+		// `p = Path(name)` is the pack's sink node for the split pathlib form its own
+		// fixture (testdata/py-vuln read_split) exercises.
+		`p = Path(name)`:           "pathlib.Path",
+		`tarfile.open(p)`:          "tarfile.open", // must NOT fall through to "open"
+		`zipfile.ZipFile(p)`:       "zipfile.ZipFile",
+		`cur.executemany(q, rows)`: "cursor.executemany", // must NOT match .execute(
+		`os.remove(p)`:             "os.remove",
+		`os.unlink(p)`:             "os.remove",
+		`os.mkdir(p)`:              "os.mkdir",
+		`shutil.copy(a, b)`:        "shutil.copy",
+		`shutil.move(a, b)`:        "shutil.move",
+		`requests.put(u)`:          "http.put",
+		`requests.delete(u)`:       "http.delete",
+		`httpx.put(u)`:             "http.put",
 	}
 	for in, want := range cases {
 		if got := canonicalSinkAPI(in); got != want {

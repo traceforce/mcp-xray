@@ -327,10 +327,42 @@ func TestCodeQLScanSurfacesFailure(t *testing.T) {
 // engine path could resolve against the scanned repo and run an attacker binary, so Scan
 // must fail closed before exec.
 func TestCodeQLScanRejectsRelativeBin(t *testing.T) {
-	cfg := CodeQLConfig{Bin: filepath.Join("bin", "codeql"), PackDir: t.TempDir()} // relative bin
+	// A real pack, so Available() is satisfied and the IsAbs backstop is what rejects the
+	// run (an empty PackDir would short-circuit in Available and never reach it).
+	cfg := CodeQLConfig{Bin: filepath.Join("bin", "codeql"), PackDir: packDirWithQuery(t)} // relative bin
 	_, err := NewCodeQLEngine(cfg).Scan(context.Background(), t.TempDir(), []string{"python"})
 	if err == nil || !strings.Contains(err.Error(), "absolute") {
 		t.Fatalf("a relative codeql bin must be rejected, got %v", err)
+	}
+}
+
+// packDirWithQuery returns a pack dir holding a python/mcp_taint.ql, the minimum
+// Available() requires.
+func packDirWithQuery(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "python"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "python", "mcp_taint.ql"), []byte("select 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestCodeQLAvailableRequiresAPack locks that a pack dir with no query reports
+// unavailable, so a misconfigured MCPXRAY_CODEQL_PACKS surfaces as "engine not available"
+// instead of a silent zero-finding run that reads like a clean deep scan.
+func TestCodeQLAvailableRequiresAPack(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "codeql")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if NewCodeQLEngine(CodeQLConfig{Bin: bin, PackDir: t.TempDir()}).Available() {
+		t.Error("a pack dir with no mcp_taint.ql must report unavailable")
+	}
+	if !NewCodeQLEngine(CodeQLConfig{Bin: bin, PackDir: packDirWithQuery(t)}).Available() {
+		t.Error("a pack dir holding python/mcp_taint.ql must report available")
 	}
 }
 

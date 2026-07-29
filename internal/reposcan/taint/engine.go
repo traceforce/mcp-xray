@@ -98,11 +98,13 @@ func MergePaths(paths []PathRecord) []PathRecord {
 			continue
 		}
 		// Same vuln located by a different engine: merge into the first record of this
-		// sink identity that this engine has not contributed to yet. Tracking every index
-		// (not just the first) so multiple params reaching one sink each pair up correctly.
+		// sink identity that this engine has not contributed to yet AND that describes the
+		// same flow. Tracking every index (not just the first) so multiple params reaching
+		// one sink each pair up correctly; the sameFlow gate stops an engine that found a
+		// DIFFERENT handler's flow into the same sink from being absorbed and lost.
 		merged := false
 		for _, idx := range sink[p.sinkIdentity()] {
-			if !hasEngine(out[idx].Engine, p.Engine) {
+			if !hasEngine(out[idx].Engine, p.Engine) && sameFlow(out[idx], p) {
 				addEngine(&out[idx], p.Engine)
 				exact[p.pathID()] = idx // record so a duplicate of this exact path dedups here too
 				merged = true
@@ -117,6 +119,29 @@ func MergePaths(paths []PathRecord) []PathRecord {
 		out = append(out, p)
 	}
 	return out
+}
+
+// sameFlow reports whether two records with an identical sinkIdentity describe the SAME
+// flow, so the cross-engine merge never absorbs (and thereby deletes) a distinct vuln that
+// merely shares a sink. Several handlers funnelling into one shared helper is exactly the
+// shape CodeQL was added to find, and engine coverage over them is routinely asymmetric.
+//
+// SourceFunction is the discriminator: it is left out of sinkIdentity because the engines
+// DERIVE it differently, but when both recover a concrete name they agree (OpenGrep binds
+// the $F metavariable to the def, CodeQL scans up to the same def). SourceParam is
+// deliberately not used -- that is the field that genuinely diverges.
+//
+// A record whose handler an engine could NOT recover ("unknown") deliberately does not
+// merge. Letting it match anything would reopen the deletion hole from the other side: an
+// unknown-handler record would absorb a concrete, distinct finding and then carry a
+// wrongly-corroborated engine tag. Refusing costs at most a duplicate entry, and this file
+// prefers a duplicate to a miss (see sinkIdentity). It also keeps the output independent
+// of the order the engines' records arrive in, which for CodeQL is raw SARIF order.
+func sameFlow(a, b PathRecord) bool {
+	if a.SourceFunction == "unknown" || b.SourceFunction == "unknown" {
+		return false
+	}
+	return a.SourceFunction == b.SourceFunction
 }
 
 func addEngine(rec *PathRecord, engine string) {

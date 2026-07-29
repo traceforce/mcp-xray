@@ -128,13 +128,24 @@ type CodeQLEngine struct{ cfg CodeQLConfig }
 // NewCodeQLEngine returns an engine bound to cfg.
 func NewCodeQLEngine(cfg CodeQLConfig) *CodeQLEngine { return &CodeQLEngine{cfg: cfg} }
 
-// Available reports whether the codeql binary and the query packs were resolved.
+// Available reports whether the codeql binary and at least one query pack were resolved.
 func (e *CodeQLEngine) Available() bool {
 	if e.cfg.Bin == "" || e.cfg.PackDir == "" {
 		return false
 	}
-	fi, err := os.Stat(e.cfg.PackDir)
-	return err == nil && fi.IsDir()
+	if fi, err := os.Stat(e.cfg.PackDir); err != nil || !fi.IsDir() {
+		return false
+	}
+	// Require an actual pack. A directory that merely EXISTS would otherwise report
+	// available, and Scan would then skip every language (each fileExists(ql) misses) and
+	// return no paths and no error -- making a misconfigured MCPXRAY_CODEQL_PACKS
+	// indistinguishable from a clean deep scan.
+	for _, cqLang := range codeqlLangs {
+		if fileExists(filepath.Join(e.cfg.PackDir, cqLang, "mcp_taint.ql")) {
+			return true
+		}
+	}
+	return false
 }
 
 // Scan runs CodeQL for each supported language present in langs and returns the merged

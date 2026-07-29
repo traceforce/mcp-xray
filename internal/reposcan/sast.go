@@ -166,7 +166,9 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 			paths = append(paths, p...)
 		}
 	} else {
-		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +
+		// Names the engine, not "taint analysis": the CodeQL pass below may still run, and
+		// claiming taint was skipped while reporting CodeQL paths reads as a contradiction.
+		fmt.Println("SAST opengrep engine not found; skipping the fast intra-file pass " +
 			"(run `make install-opengrep` or set MCPXRAY_OPENGREP_BIN)")
 	}
 
@@ -174,7 +176,9 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	ccfg := taint.DefaultCodeQLConfig() // resolves the bin+packs once (Stat/Executable)
 	switch {
 	case !s.config.Deep:
-		// deep pass disabled (--deep=false); fast OpenGrep-only scan.
+		// Say so: with --deep=false and no opengrep installed, nothing else would report
+		// that no taint analysis ran at all.
+		fmt.Println("SAST codeql deep pass disabled (--deep=false); skipping cross-file taint")
 	case !taint.NewCodeQLEngine(ccfg).Available():
 		fmt.Println("SAST codeql engine not available (needs the codeql binary and query packs); " +
 			"skipping (run `make install-codeql`, or set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS)")
@@ -185,13 +189,14 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 		// letting a broken CodeQL run read as a clean "found 0 taint paths".
 		p, err := taint.NewCodeQLEngine(ccfg).Scan(ctx, s.repoPath, langs)
 		p = s.dropExcludedPaths(p) // CodeQL has no engine-side exclude; honor it here
-		if len(p) > 0 {
-			fmt.Printf("SAST codeql found %d taint paths\n", len(p))
-			paths = append(paths, p...)
-		}
+		paths = append(paths, p...)
+		// Report the failure FIRST so a partial result is never read as a complete one,
+		// then always report a count -- a genuine clean run must be visibly distinct from
+		// "the deep pass never ran".
 		if err != nil {
 			fmt.Printf("SAST codeql analysis failed (results may be incomplete): %v\n", err)
 		}
+		fmt.Printf("SAST codeql found %d taint paths\n", len(p))
 	}
 
 	return taint.PathsToFindings(taint.MergePaths(paths))
