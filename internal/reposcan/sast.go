@@ -140,7 +140,8 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 // Engines activate by installation: OpenGrep (fast, intra-file) and CodeQL (deep,
 // cross-file) each run when their pinned binary is resolvable and degrade quietly
 // otherwise, so there is no engine flag at all -- installing an engine is what enables it.
-// Any failure returns no findings rather than aborting the scan.
+// A failing engine contributes whatever partial paths it produced (often none) instead
+// of aborting the scan.
 func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	var paths []taint.PathRecord
 
