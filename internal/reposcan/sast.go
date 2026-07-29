@@ -76,10 +76,15 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	var allMatches []yararules.UnsafeCommandMatch
 
 	err := filepath.Walk(s.repoPath, func(filePath string, info os.FileInfo, err error) error {
-		// Warn but continue when an entry can't be walked or statted (e.g. permission
+		// Warn but continue when an ENTRY can't be walked or statted (e.g. permission
 		// denied): one bad path must not abort the scan, but the skip is surfaced so
-		// reduced coverage is not silent.
+		// reduced coverage is not silent. The scan ROOT is different: if it cannot be
+		// read there is nothing to scan, and continuing would report a missing or
+		// unreadable repo as a clean zero-finding result with a valid SARIF and exit 0.
 		if err != nil {
+			if filePath == s.repoPath {
+				return fmt.Errorf("cannot read scan root %s: %w", filePath, err)
+			}
 			fmt.Fprintf(os.Stderr, "reposcan: skipping %s: %v\n", filePath, err)
 			return nil
 		}
@@ -140,8 +145,9 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 // Engines activate by installation: OpenGrep (fast, intra-file) and CodeQL (deep,
 // cross-file) each run when their pinned binary is resolvable and degrade quietly
 // otherwise, so there is no engine flag at all -- installing an engine is what enables it.
-// A failing engine contributes whatever partial paths it produced (often none) instead
-// of aborting the scan.
+// Neither engine aborts the scan on failure: OpenGrep discards its results and reports
+// the error, while CodeQL keeps whatever paths the languages that succeeded produced and
+// reports the ones that failed.
 func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	var paths []taint.PathRecord
 
