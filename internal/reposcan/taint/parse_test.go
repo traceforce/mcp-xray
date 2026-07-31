@@ -100,14 +100,60 @@ func TestResultsToPathsRootsRelativePath(t *testing.T) {
 	}
 }
 
+// TestPathlibLabelFromClass pins the half of the pathlib label that canonicalSinkAPI cannot
+// decide on its own, because one line can be two different sinks and only the vuln class
+// tells them apart.
+//
+// The contract: whatever CodeQL's python pack emits for the same file:line, OpenGrep must
+// emit too, or sinkIdentity splits one vulnerability into two reports. The pack has no
+// read_text/write_text sink -- its only pathlib sink is the Path() construction.
+func TestPathlibLabelFromClass(t *testing.T) {
+	cases := []struct {
+		name, class, api, snippet, want string
+	}{
+		{"inline read is the Path node for CodeQL", "path_traversal", "pathlib.read_text",
+			`return Path(name).read_text()`, "pathlib.Path"},
+		{"inline write likewise", "path_traversal", "pathlib.write_text",
+			`Path(name).write_text(data)`, "pathlib.Path"},
+		{"open() enclosing a Path() argument stays open", "path_traversal", "open",
+			`with open(Path(base) / name) as f:`, "open"},
+		{"two-statement read has no Path( on the line", "path_traversal", "pathlib.read_text",
+			`return p.read_text()`, "pathlib.read_text"},
+		{"bare construction is already pathlib.Path", "path_traversal", "pathlib.Path",
+			`p = Path(name)`, "pathlib.Path"},
+		// The same line is a code_injection at eval AND a path_traversal at Path(). Only the
+		// path_traversal finding is corrected; the code_injection keeps the enclosing call.
+		{"eval wrapping an inline read keeps eval for code_injection", "code_injection", "eval",
+			`data = eval(Path(name).read_text())`, "eval"},
+		{"...and becomes pathlib.Path for the path_traversal on the same line", "path_traversal", "eval",
+			`data = eval(Path(name).read_text())`, "pathlib.Path"},
+		{"other classes are never touched", "command_injection", "os.system",
+			`os.system("cat " + str(Path(base) / name))`, "os.system"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pathlibLabelFromClass(c.class, c.api, c.snippet); got != c.want {
+				t.Errorf("pathlibLabelFromClass(%q, %q, %q) = %q, want %q",
+					c.class, c.api, c.snippet, got, c.want)
+			}
+		})
+	}
+}
+
 func TestCanonicalSinkAPI(t *testing.T) {
 	cases := map[string]string{
 		`os.system("a" + b)`:              "os.system",
 		`subprocess.run(cmd, shell=True)`: "subprocess.run+shell=True",
 		`open(path)`:                      "open",
-		// Inline construction+read: CodeQL reports the Path() node on this same line, so the
-		// label must be pathlib.Path (not pathlib.read_text) or the two engines split it.
-		`Path(name).read_text()`: "pathlib.Path",
+		// The ENCLOSING call wins: here the sink is open() and Path() only builds its
+		// argument, which is exactly what CodeQL reports. A bare `Path(` test ordered above
+		// `open(` claimed this line for pathlib and split the finding across engines.
+		`with open(Path(base) / name) as f:`:  "open",
+		`data = eval(Path(name).read_text())`: "eval",
+		// The inline construction+read is a path_traversal at the Path() node for CodeQL, but
+		// that depends on the vuln class -- one line can be two sinks -- so it is corrected by
+		// pathlibLabelFromClass, not here. See TestPathlibLabelFromClass.
+		`Path(name).read_text()`: "pathlib.read_text",
 		// The bare two-statement read/write (no Path( on the line) keeps the precise label.
 		`p.read_text()`:                 "pathlib.read_text",
 		`p.write_text(data)`:            "pathlib.write_text",

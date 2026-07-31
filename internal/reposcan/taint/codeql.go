@@ -64,6 +64,30 @@ var (
 	// (`AddTool(tool, func(ctx, req) {`). Word-boundary anchored so it matches `func(` /
 	// `func (` but never a named `func main(` or an identifier ending in "func" (someFunc().
 	reFuncLit = regexp.MustCompile(`\bfunc\s*\(`)
+	// The OFFICIAL Go SDK carries the tool name in a STRUCT FIELD, not as a bare quoted
+	// first argument:
+	//
+	//	mcp.AddTool(s, &mcp.Tool{Name: "fetch_url"}, func(ctx, req, args) { ... })
+	//
+	// reRegName requires the string immediately after the open paren, so it cannot see this
+	// and the finding came back with tool name "unknown" -- newly visible, because the Go
+	// pack only recently started producing sources for literal-registered handlers.
+	//
+	// mark3labs' `newTool("run_cmd")` is deliberately NOT matched: that is a helper CALL
+	// whose argument is not reliably the tool name, so "unknown" stays the honest answer
+	// there (TestEnclosingHandlerGoOfficialSDKShapes pins it). A `Name:` struct field is
+	// unambiguous, which is why this one is safe to read.
+	reGoToolName = regexp.MustCompile(`\bName:\s*"([^"]+)"`)
+	// A Go func literal's parameter list, so the forward scan can recover a literal-registered
+	// handler's params the way it already does for JS callbacks
+	// (`func(ctx context.Context, req *mcp.CallToolRequest, args In) (...) {`).
+	//
+	// Deliberately NOT anchored to the line start: the official SDK's one-line form puts the
+	// literal after the tool struct on the same line as the registration
+	// (`mcp.AddTool(s, &mcp.Tool{Name: "x"}, func(ctx, req, args) {`). `\bfunc\s*\(` cannot
+	// match JS's `function (` -- "func" there is followed by "tion", not "(" -- so this stays
+	// Go-only despite running on every language's registrations.
+	reGoFuncLitOpen = regexp.MustCompile(`\bfunc\s*\(([^)]*)\)`)
 )
 
 // CodeQLConfig controls the CodeQL taint engine. Zero value is not usable; call
@@ -472,6 +496,11 @@ func enclosingHandler(file string, line int) (name, param string) {
 		// Forms the inline regex can't parse (3-arg registerTool, multi-line,
 		// setRequestHandler) yield the tool name when present on this line, else "unknown".
 		if reRegBoundary.MatchString(ln) && enclosesSource(ln) {
+			// The official Go SDK's `&mcp.Tool{Name: "x"}` form, checked before the JS-shaped
+			// quoted-first-argument regex because the two cannot both match a line.
+			if m := reGoToolName.FindStringSubmatch(ln); m != nil {
+				return m[1], scanRegistration(lines, i, line).param
+			}
 			if m := reRegName.FindStringSubmatch(ln); m != nil {
 				// Name on the boundary line, callback params below (`server.tool("x",` then
 				// the arrow on the next line): recover the param by scanning forward.
@@ -563,6 +592,10 @@ func scanRegistration(lines []string, start, srcLine int) regAttr {
 				out.name = m[1]
 			} else if m := reRegNameLine.FindStringSubmatch(ln); m != nil {
 				out.name = m[1]
+			} else if m := reGoToolName.FindStringSubmatch(ln); m != nil {
+				// The official Go SDK's `&mcp.Tool{Name: "x"}`, which can also sit on its own
+				// line in a wrapped registration.
+				out.name = m[1]
 			}
 		}
 		if out.param == "unknown" {
@@ -573,6 +606,11 @@ func scanRegistration(lines []string, start, srcLine int) regAttr {
 			} else if m := reTrailingCallback.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
 				out.param = firstParam(m[1])
 			} else if m := reCallbackOpen.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				out.param = firstParam(m[1])
+			} else if m := reGoFuncLitOpen.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				// A Go func literal on its own line: `func(ctx, req, args In) (...) {`.
+				// reCallbackOpen cannot match it (that one expects the param list to open the
+				// line), so without this the literal-registered Go handler had no param.
 				out.param = firstParam(m[1])
 			}
 		}
@@ -665,6 +703,17 @@ func firstParam(params string) string {
 		case m[1] == "self" || m[1] == "cls":
 			continue
 		case strings.Contains(raw, "context.Context"):
+			continue
+		}
+		// A Go POINTER parameter is the SDK's request object (`req *mcp.CallToolRequest`),
+		// never the decoded tool input. The Go pack excludes it by type
+		// (`not p.getType()... instanceof PointerType`), so reporting it here contradicted
+		// the query that produced the finding: every official-SDK result named `req` where
+		// the source is the typed `args` struct that follows it.
+		//
+		// Matched on the TYPE, not anywhere in the text, so a Python default containing a
+		// multiplication (`b=2*3`) is not mistaken for a pointer.
+		if rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), m[1])); strings.HasPrefix(rest, "*") {
 			continue
 		}
 		return m[1] // handles go `name T` and bare `name`

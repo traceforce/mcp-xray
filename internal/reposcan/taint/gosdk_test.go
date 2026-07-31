@@ -8,6 +8,103 @@ import (
 	"testing"
 )
 
+// TestEnclosingHandlerGoOfficialSDKShapes is the unit-level half of the V43-1 attribution
+// fix: no engine needed, so it runs everywhere the integration gate skips.
+//
+// The official SDK registers handlers several ways and all must be nameable. The literal
+// form was the gap: its tool name lives in a `&mcp.Tool{Name: "x"}` struct field rather
+// than a bare quoted first argument, so it came back "unknown" once the pack started
+// producing sources for literal-registered handlers. enclosingHandler scans text, not
+// compiled Go, so these fixtures need not compile.
+func TestEnclosingHandlerGoOfficialSDKShapes(t *testing.T) {
+	const sig = "ctx context.Context, req *mcp.CallToolRequest, args FetchArgs"
+	cases := map[string]struct {
+		src     string
+		line    int
+		fn, prm string
+	}{
+		"inline func literal, wrapped": {
+			src: "package main\n" +
+				"func main() {\n" +
+				"\tmcp.AddTool(s, &mcp.Tool{Name: \"fetch_url\"},\n" +
+				"\t\tfunc(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\t\t\thttp.Get(args.URL)\n" +
+				"\t\t\treturn nil, nil, nil\n" +
+				"\t\t})\n}\n",
+			line: 5, fn: "fetch_url", prm: "args",
+		},
+		"inline func literal, one line": {
+			src: "package main\n" +
+				"func main() {\n" +
+				"\tmcp.AddTool(s, &mcp.Tool{Name: \"fetch_url\"}, func(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\t\thttp.Get(args.URL)\n" +
+				"\t\treturn nil, nil, nil\n" +
+				"\t})\n}\n",
+			line: 4, fn: "fetch_url", prm: "args",
+		},
+		"tool struct on its own line": {
+			src: "package main\n" +
+				"func main() {\n" +
+				"\tmcp.AddTool(s,\n" +
+				"\t\t&mcp.Tool{Name: \"blob\"},\n" +
+				"\t\tfunc(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\t\t\thttp.Get(args.URL)\n" +
+				"\t\t\treturn nil, nil, nil\n" +
+				"\t\t})\n}\n",
+			line: 6, fn: "blob", prm: "args",
+		},
+		// Named for the variable, which is the honest answer and already worked.
+		"closure bound to a variable": {
+			src: "package main\n" +
+				"func main() {\n" +
+				"\tlookup := func(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\t\thttp.Get(args.URL)\n" +
+				"\t\treturn nil, nil, nil\n" +
+				"\t}\n" +
+				"\tmcp.AddTool(s, &mcp.Tool{Name: \"lookup\"}, lookup)\n}\n",
+			line: 4, fn: "lookup", prm: "args",
+		},
+		"named function": {
+			src: "package main\n" +
+				"func runPing(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\thttp.Get(args.URL)\n" +
+				"\treturn nil, nil, nil\n}\n",
+			line: 3, fn: "runPing", prm: "args",
+		},
+		// mark3labs' tool name is a helper-call argument (`newTool("run_cmd")`), not a
+		// `Name:` struct field, so reGoToolName deliberately does not read it -- "unknown"
+		// stays the honest answer rather than mistaking the helper's argument for the tool.
+		"mark3labs newTool helper stays unknown": {
+			src: "package main\n" +
+				"func main() {\n" +
+				"\ts.AddTool(newTool(\"run_cmd\"),\n" +
+				"\t\tfunc(" + sig + ") (*mcp.CallToolResult, any, error) {\n" +
+				"\t\t\thttp.Get(args.URL)\n" +
+				"\t\t\treturn nil, nil, nil\n" +
+				"\t\t})\n}\n",
+			line: 5, fn: "unknown", prm: "args",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "server.go")
+			if err := os.WriteFile(f, []byte(tc.src), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fn, prm := enclosingHandler(f, tc.line)
+			if fn != tc.fn {
+				t.Errorf("handler = %q, want %q", fn, tc.fn)
+			}
+			if prm != tc.prm {
+				t.Errorf("param = %q, want %q (req is the pointer request the pack excludes)", prm, tc.prm)
+			}
+			if fn == "main" {
+				t.Error("attribution leaked to the enclosing main()")
+			}
+		})
+	}
+}
+
 // TestCodeQLIntegrationGoOfficialSDK is the V43-1 gate.
 //
 // The review's point: sources were scoped to github.com/mark3labs/mcp-go, but a server
@@ -68,10 +165,12 @@ func TestCodeQLIntegrationGoOfficialSDK(t *testing.T) {
 	byClass := map[string]int{}
 	handlers := map[string]bool{}
 	sinks := map[string]bool{}
+	params := map[string]bool{}
 	for _, p := range paths {
 		byClass[p.VulnClass]++
 		handlers[p.SourceFunction] = true
 		sinks[p.SinkAPI] = true
+		params[p.SourceParam] = true
 	}
 	// command_injection/path_traversal come from the NAMED handlers; ssrf and sqli come
 	// ONLY from the closure handlers (inline func literal + variable-bound closure). Before
@@ -85,18 +184,37 @@ func TestCodeQLIntegrationGoOfficialSDK(t *testing.T) {
 	}
 	// Attribution must name the handler, proving the source is the typed struct parameter
 	// of a registered official-SDK handler rather than some incidental match.
-	for _, h := range []string{"runPing", "readFile"} {
+	//
+	// The closure shapes are the point: the official SDK carries the tool name in a STRUCT
+	// FIELD (`&mcp.Tool{Name: "fetch_url"}`), not as a bare quoted first argument, so before
+	// reGoToolName these came back "unknown" -- a finding the pack could see but the adapter
+	// could not name. "fetch_url" is registered with an INLINE func literal and "lookup" with
+	// a closure bound to a variable, so both recovery paths are covered.
+	for _, h := range []string{"runPing", "readFile", "fetch_url", "lookup"} {
 		if !handlers[h] {
 			t.Errorf("expected a finding attributed to handler %s (got %v)", h, handlers)
 		}
+	}
+	if handlers["unknown"] {
+		t.Errorf("a finding was attributed to \"unknown\": every handler in this fixture is "+
+			"nameable, either by declaration or from the Tool{Name:} field (got %v)", handlers)
+	}
+	if handlers["main"] {
+		t.Errorf("attribution leaked to the enclosing main() (got %v)", handlers)
 	}
 	for _, s := range []string{"os/exec.Command", "os.ReadFile"} {
 		if !sinks[s] {
 			t.Errorf("expected sink api %s (got %v)", s, sinks)
 		}
 	}
-	// NOTE: SourceParam is "req", not "args". The SARIF region gives the line but not the
-	// column, so enclosingHandler names the handler's FIRST parameter. That is a known,
-	// documented adapter limitation (see enclosingHandler) and is why MergePaths keys on
-	// the sink identity rather than the param name -- so it is deliberately not asserted.
+	// The tainted parameter is the decoded `args` struct. The request parameter is a POINTER
+	// and the Go pack excludes it by type, so reporting `req` contradicted the query that
+	// produced the finding; firstParam now skips Go pointer params for the same reason.
+	if params["req"] {
+		t.Errorf("SourceParam = \"req\", the *mcp.CallToolRequest the pack excludes by type; "+
+			"want the decoded args struct (got %v)", params)
+	}
+	if !params["args"] {
+		t.Errorf("expected the decoded tool-input struct to be named as the source param (got %v)", params)
+	}
 }

@@ -118,6 +118,17 @@ def t_pathlib_read(name: str) -> str:
 
 
 @mcp.tool()
+def t_open_with_path(name: str) -> str:
+    """tool."""
+    # The other half of the same trap, and the one that was missing: the sink here is open(),
+    # and Path() only builds its argument. A label rule that claims any line mentioning
+    # `Path(` for pathlib reports this as pathlib.Path while CodeQL reports open -- the same
+    # split, in the shape people actually write when joining a base dir to a user path.
+    with open(Path("/srv/data") / name) as f:
+        return f.read()
+
+
+@mcp.tool()
 def t_shutil_move(src: str) -> str:
     """tool."""
     return str(shutil.move(
