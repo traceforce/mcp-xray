@@ -16,8 +16,8 @@ type Config struct {
 	CodeQLAllowBuild bool
 	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
 	// seconds. Zero means the caller said nothing: fall back to MCPXRAY_CODEQL_TIMEOUT,
-	// then to codeqlDefaultTimeoutSec. A target that exceeds the budget dies as an opaque
-	// `signal: killed` and contributes nothing, so this must be reachable without
+	// then to codeqlDefaultTimeoutSec. A large target legitimately exceeds the default
+	// (reported as "timed out after Ns"), so the budget must be raisable without
 	// recompiling.
 	CodeQLTimeoutSec int
 }

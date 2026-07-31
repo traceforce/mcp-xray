@@ -13,8 +13,7 @@ import (
 // built on the OFFICIAL github.com/modelcontextprotocol/go-sdk produces zero sources, so
 // the Go pack reported nothing for every vuln class -- and because Go only runs under
 // --codeql-allow-build, a user who opts in gets a clean-looking zero rather than an error.
-// He also said explicitly: "validate against a real official-SDK server since I'm
-// inferring the exact source shape."
+// The review asked to validate against a REAL official-SDK server, not the docs.
 //
 // testdata/go-sdk-vuln is that server: both handlers take their tool input as a TYPED
 // STRUCT parameter, with no RequireString/GetString accessor anywhere. Before the

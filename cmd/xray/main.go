@@ -317,7 +317,7 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
 	cmd.Flags().Bool("codeql-allow-build", false, "Allow CodeQL to build a Go database (runs the Go toolchain, which can execute build-time code; only for trusted repos)")
-	cmd.Flags().Int("codeql-timeout", 0, "Per-language CodeQL budget in seconds, covering database create + analyze (0 = MCPXRAY_CODEQL_TIMEOUT, else 600). Raise it for large repositories, where the default kills the language and it contributes nothing.")
+	cmd.Flags().Int("codeql-timeout", 0, "Per-language CodeQL budget in seconds, covering database create + analyze (0 = MCPXRAY_CODEQL_TIMEOUT, else 600). Raise for large repositories.")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd

@@ -27,7 +27,10 @@ func TestJSRegNamesMatchPack(t *testing.T) {
 	}
 	data, err := os.ReadFile(ql)
 	if err != nil {
-		t.Skipf("pack not present at %s: %v", ql, err)
+		// This gate's whole job is to keep the pack's source names and the adapter regexes
+		// in sync; if the pack it reads has moved or gone, that is a failure to surface,
+		// not a reason to skip (a skipped drift-gate is silently fail-open).
+		t.Fatalf("pack not present at %s: %v", ql, err)
 	}
 
 	// isMcpSource pins the names in a `reg.getMethodName() = [ ... ]` list.

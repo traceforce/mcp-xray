@@ -121,7 +121,6 @@ A target that exceeds it contributes nothing, so raise it for large repositories
 `--codeql-timeout <seconds>` (or `MCPXRAY_CODEQL_TIMEOUT`); the flag wins when both are set.
 Exceeding the budget is reported as `timed out after Ns`, never as a clean zero.
 
-
 ## Output Format
 
 MCP X-Ray generates reports in [SARIF (Static Analysis Results Interchange Format)](https://sarifweb.azurewebsites.net/) format, which is widely supported by security tools and CI/CD platforms.
