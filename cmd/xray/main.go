@@ -417,7 +417,8 @@ func NewPentestCommand() *cobra.Command {
 
 			// Create pentest tool
 			maxRetries, _ := cmd.Flags().GetInt("llm-max-retries")
-			pentestTool, err := pentest.NewPentestTool(configPath, llmModel, maxRetries)
+			reuseInventory, _ := cmd.Flags().GetBool("reuse-inventory")
+			pentestTool, err := pentest.NewPentestTool(configPath, llmModel, maxRetries, reuseInventory)
 			if err != nil {
 				fmt.Printf("Error creating pentest tool: %v\n", err)
 				os.Exit(1)
@@ -492,6 +493,7 @@ func NewPentestCommand() *cobra.Command {
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().Bool("reuse-inventory", false, "Reuse an existing inventory file if found in the test directory, instead of regenerating")
 
 	return cmd
 }

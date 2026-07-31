@@ -1,0 +1,225 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "INFO-STACK",
+              "shortDescription": {
+                "text": "INFO_DISCLOSURE: Invalid field should fail without exposing stack traces, source paths, or database internals."
+              }
+            },
+            {
+              "id": "INJECTION-SQL",
+              "shortDescription": {
+                "text": "INJECTION: Boolean-based injection in query should not return all users or bypass filtering."
+              }
+            },
+            {
+              "id": "AUTH-MISSING",
+              "shortDescription": {
+                "text": "AUTH: Unauthenticated caller should not be able to search the user database."
+              }
+            },
+            {
+              "id": "AUTH-CROSS-TENANT",
+              "shortDescription": {
+                "text": "AUTH: Low-privilege tenant A caller should not retrieve tenant B user records by email."
+              }
+            },
+            {
+              "id": "AUTH-PRIVILEGE",
+              "shortDescription": {
+                "text": "AUTH: Low-privilege caller should not use broad wildcard-style search to enumerate privileged accounts."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Boolean-based injection in query should not return all users or bypass filtering.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' OR '1'='1': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE username LIKE '%' OR '1'='1%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "UNION-based injection should not expose sensitive user table columns.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' UNION SELECT id,email,password_hash,api_key FROM users--': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE email LIKE '%' UNION SELECT id,email,password_hash,api_key FROM users--%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Field-name injection should be rejected because only username and email are valid searchable fields.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"alice\\\",\\\"field\\\":\\\"username) OR 1=1--\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Sensitive column probing via field parameter should be blocked by field allowlisting.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"anything\\\",\\\"field\\\":\\\"password_hash\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-MISSING",
+          "level": "error",
+          "message": {
+            "text": "Unauthenticated caller should not be able to search the user database.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[{\\\"id\\\":3,\\\"username\\\":\\\"admin\\\",\\\"email\\\":\\\"admin@example.com\\\"}],\\\"count\\\":1,\\\"query\\\":\\\"admin@example.com\\\",\\\"field\\\":\\\"email\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-CROSS-TENANT",
+          "level": "error",
+          "message": {
+            "text": "Low-privilege tenant A caller should not retrieve tenant B user records by email.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"2d61ede0-47d7-4d39-bb33-5f65769bc4ae\\\",\\\"field\\\":\\\"email\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-PRIVILEGE",
+          "level": "error",
+          "message": {
+            "text": "Low-privilege caller should not use broad wildcard-style search to enumerate privileged accounts.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"%\\\",\\\"field\\\":\\\"username\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INFO-STACK",
+          "level": "error",
+          "message": {
+            "text": "Invalid field should fail without exposing stack traces, source paths, or database internals.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"alice\\\",\\\"field\\\":\\\"not_a_valid_field\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        }
+      ]
+    }
+  ]
+}
