@@ -45,7 +45,19 @@ predicate isOfficialSdkHandler(FuncDef f) {
     reg.getTarget().getName() in ["AddTool", "AddPrompt", "AddResource", "AddResourceTemplate"] and
     reg.getTarget().getPackage().getPath().matches("github.com/modelcontextprotocol/go-sdk%") and
     h = reg.getAnArgument() and
-    f = h.asExpr().(FunctionName).getTarget().getFuncDecl()
+    (
+      // A named function passed by reference: mcp.AddTool(s, tool, runPing).
+      f = h.asExpr().(FunctionName).getTarget().getFuncDecl()
+      or
+      // A func literal, either inline or bound to a variable first:
+      //   mcp.AddTool(s, tool, func(ctx, req, args) { ... })
+      //   h := func(ctx, req, args) { ... }; mcp.AddTool(s, tool, h)
+      // FunctionName cannot bind a FuncLit, so the arm above misses both shapes and an
+      // official-SDK server whose handlers are closures produced zero sources. Match the
+      // literal directly and follow local dataflow to the handler argument; localFlow is
+      // reflexive, so the zero-step case covers the inline form.
+      exists(FuncLit lit | DataFlow::localFlow(DataFlow::exprNode(lit), h) and f = lit)
+    )
   )
 }
 
