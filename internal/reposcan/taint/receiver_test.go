@@ -3,6 +3,7 @@ package taint
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
@@ -18,6 +19,13 @@ import (
 func TestCodeQLSqliReceiverPrecision(t *testing.T) {
 	if os.Getenv("MCPXRAY_CODEQL_BIN") == "" {
 		t.Skip("set MCPXRAY_CODEQL_BIN to a pinned codeql to run this integration test")
+	}
+	if _, err := exec.LookPath("node"); err != nil {
+		// The fixture is a bare .ts with no package.json; the TypeScript extractor shells
+		// out to node to parse it, so without node `database create` extracts nothing and
+		// the scan reports zero -- a false failure, not a real regression. Skip on the
+		// missing toolchain like the Go gate does, rather than failing.
+		t.Skip("the TypeScript extractor requires node to parse the .ts fixture")
 	}
 	packs, _ := filepath.Abs("../../../codeql")
 	eng := NewCodeQLEngine(CodeQLConfig{Bin: findCodeQL(), PackDir: packs, TimeoutSec: 600})

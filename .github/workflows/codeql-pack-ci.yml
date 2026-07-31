@@ -69,7 +69,11 @@ jobs:
           for pack in python go javascript; do
             "${ROOT}/codeql" query compile --search-path="${ROOT}" "codeql/${pack}/mcp_taint.ql"
           done
-      - name: CodeQL taint integration (real SARIF -> parser contract, Python + JS)
-        run: go test -run 'TestCodeQLIntegration$|TestCodeQLIntegrationJS$' -v ./internal/reposcan/taint/...
+      # Runs all four real-engine gates: the Python/JS parser contract PLUS the Go
+      # official-SDK gate (V43-1) and the JS sqli receiver-precision gate (V43-5). The
+      # runner ships node and this job installs Go, which those two gates need; leaving
+      # them out let a pack/adapter regression they were written to catch ship green.
+      - name: CodeQL taint integration (real SARIF -> parser contract; Python, JS, Go, sqli precision)
+        run: go test -run 'TestCodeQLIntegration$|TestCodeQLIntegrationJS$|TestCodeQLIntegrationGoOfficialSDK$|TestCodeQLSqliReceiverPrecision$' -v ./internal/reposcan/taint/...
         env:
           MCPXRAY_CODEQL_BIN: ${{ github.workspace }}/bin/codeql-bundle

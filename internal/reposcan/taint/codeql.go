@@ -98,6 +98,20 @@ func DefaultCodeQLConfig() CodeQLConfig {
 	return CodeQLConfig{Bin: findCodeQL(), PackDir: findPackDir(), TimeoutSec: codeqlTimeoutFromEnv()}
 }
 
+// CodeQLConfigFor resolves the default config, then lets an explicit per-language timeout
+// (the --codeql-timeout flag) win when overrideTimeoutSec > 0 -- the documented "flag wins
+// when both are set" contract. A zero or negative override means the caller said nothing,
+// so the env/default budget DefaultCodeQLConfig already resolved is kept; a bad flag can
+// never produce an instantly-expired budget. Extracted from sast.go so this precedence is
+// unit-tested rather than only exercised through a full engine scan.
+func CodeQLConfigFor(overrideTimeoutSec int) CodeQLConfig {
+	cfg := DefaultCodeQLConfig()
+	if overrideTimeoutSec > 0 {
+		cfg.TimeoutSec = overrideTimeoutSec
+	}
+	return cfg
+}
+
 // findCodeQL resolves the codeql executable only from an explicit, pinned source:
 // MCPXRAY_CODEQL_BIN (an exe or a bundle dir), then bin/codeql-bundle/codeql/codeql next
 // to the mcpxray binary. It deliberately does NOT fall back to a `codeql` on PATH, so

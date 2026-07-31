@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -29,14 +30,29 @@ func TestCodeQLIntegrationGoOfficialSDK(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("the Go extractor compiles the fixture; a go toolchain is required")
 	}
-	cfg := DefaultCodeQLConfig()
+	// Resolve the pack from the repo tree like the sibling gates (TestCodeQLIntegration /
+	// TestCodeQLIntegrationJS), NOT via DefaultCodeQLConfig/findPackDir: `go test` runs from
+	// the package dir with MCPXRAY_CODEQL_PACKS unset, so findPackDir returns "" and this
+	// gate would skip while the others run -- so the CI -run filter could include it and it
+	// would still never execute.
+	packs, _ := filepath.Abs("../../../codeql")
+	cfg := CodeQLConfig{Bin: findCodeQL(), PackDir: packs, TimeoutSec: codeqlTimeoutFromEnv(), AllowGoBuild: true}
 	if cfg.TimeoutSec < 900 {
 		cfg.TimeoutSec = 900 // database create for Go includes a compile
 	}
-	cfg.AllowGoBuild = true
 	eng := NewCodeQLEngine(cfg)
 	if !eng.Available() {
-		t.Skip("codeql bundle not installed; set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS")
+		t.Skip("codeql bundle not installed; set MCPXRAY_CODEQL_BIN to run")
+	}
+	// Warm the module cache before the scan: `database create` for Go compiles the fixture,
+	// and on a cold or offline GOMODCACHE the Go extractor exits 0 having extracted nothing
+	// -- a silent zero the len(paths)==0 check below would misread as the source-shape
+	// regression this gate targets. Build first so a zero means the pack; skip (not fail)
+	// when the modules genuinely cannot be fetched, so the failure names the real cause.
+	build := exec.Command("go", "build", "./...")
+	build.Dir = "testdata/go-sdk-vuln"
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("cannot compile the official-SDK fixture (offline module cache?): %v\n%s", err, out)
 	}
 
 	paths, err := eng.Scan(context.Background(), "testdata/go-sdk-vuln", []string{"go"})

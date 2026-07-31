@@ -179,12 +179,10 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	}
 
 	// CodeQL: the deep cross-file/interprocedural pass (slower; builds a DB per language).
-	ccfg := taint.DefaultCodeQLConfig() // resolves the bin+packs once (Stat/Executable)
-	// An explicit --codeql-timeout wins over the env default resolved above; 0 means the
-	// caller said nothing, so keep whatever DefaultCodeQLConfig already worked out.
-	if s.config.CodeQLTimeoutSec > 0 {
-		ccfg.TimeoutSec = s.config.CodeQLTimeoutSec
-	}
+	// Resolves the bin+packs once (Stat/Executable) and applies the --codeql-timeout
+	// override: an explicit flag (>0) wins over the env default, 0 keeps whatever was
+	// resolved. Precedence lives in CodeQLConfigFor so it is unit-tested, not just run here.
+	ccfg := taint.CodeQLConfigFor(s.config.CodeQLTimeoutSec)
 	if !taint.NewCodeQLEngine(ccfg).Available() {
 		fmt.Println("SAST codeql engine not available (needs the codeql binary and query packs); " +
 			"skipping (run `make install-codeql`, or set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS)")
