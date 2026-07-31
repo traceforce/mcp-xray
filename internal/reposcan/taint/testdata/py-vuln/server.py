@@ -44,3 +44,14 @@ def read_split(name: str) -> str:
 @mcp.tool()
 def run_code(expr: str):
     return eval(expr)
+
+@mcp.tool()
+def spawn_proc(prog: str) -> None:
+    # os.spawnv: the MODE constant is arg0 and the program PATH is arg1. The pack must taint
+    # arg1 -- matching arg0 made every os.spawn* name dead.
+    os.spawnv(os.P_NOWAIT, prog, [prog])
+
+@mcp.tool()
+def exec_proc(prog: str) -> None:
+    # os.execv: the program PATH is arg0.
+    os.execv(prog, [prog])

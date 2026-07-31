@@ -13,6 +13,7 @@ import io
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import requests
 from mcp.server.fastmcp import FastMCP
@@ -105,6 +106,15 @@ def t_os_open(path: str) -> str:
         path,
         os.O_RDONLY,
     ))
+
+
+@mcp.tool()
+def t_pathlib_read(name: str) -> str:
+    """tool."""
+    # Inline Path(x).read_text(): CodeQL reports the Path() node, OpenGrep the read, both on
+    # THIS single line. They must agree on pathlib.Path or sinkIdentity (line + api) splits
+    # the finding into two -- the V43-4 regression, which had no pathlib case here to catch.
+    return Path(name).read_text()
 
 
 @mcp.tool()

@@ -47,12 +47,13 @@ func TestCodeQLIntegrationGoOfficialSDK(t *testing.T) {
 	// Warm the module cache before the scan: `database create` for Go compiles the fixture,
 	// and on a cold or offline GOMODCACHE the Go extractor exits 0 having extracted nothing
 	// -- a silent zero the len(paths)==0 check below would misread as the source-shape
-	// regression this gate targets. Build first so a zero means the pack; skip (not fail)
-	// when the modules genuinely cannot be fetched, so the failure names the real cause.
-	build := exec.Command("go", "build", "./...")
-	build.Dir = "testdata/go-sdk-vuln"
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Skipf("cannot compile the official-SDK fixture (offline module cache?): %v\n%s", err, out)
+	// regression this gate targets. Download the modules first so a zero means the pack;
+	// skip (not fail) when they genuinely cannot be fetched, so the failure names the real
+	// cause. `go mod download` (not `go build`) leaves no compiled artifact in the tree.
+	dl := exec.Command("go", "mod", "download")
+	dl.Dir = "testdata/go-sdk-vuln"
+	if out, err := dl.CombinedOutput(); err != nil {
+		t.Skipf("cannot fetch the official-SDK fixture's modules (offline cache?): %v\n%s", err, out)
 	}
 
 	paths, err := eng.Scan(context.Background(), "testdata/go-sdk-vuln", []string{"go"})
@@ -72,9 +73,14 @@ func TestCodeQLIntegrationGoOfficialSDK(t *testing.T) {
 		handlers[p.SourceFunction] = true
 		sinks[p.SinkAPI] = true
 	}
-	for _, cls := range []string{"command_injection", "path_traversal"} {
+	// command_injection/path_traversal come from the NAMED handlers; ssrf and sqli come
+	// ONLY from the closure handlers (inline func literal + variable-bound closure). Before
+	// the FuncLit arm in isOfficialSdkHandler those two produced zero sources, so requiring
+	// them here fails if the closure shapes ever stop being treated as sources again.
+	for _, cls := range []string{"command_injection", "path_traversal", "ssrf", "sqli"} {
 		if byClass[cls] < 1 {
-			t.Errorf("%s = %d, want >=1 (paths=%d)", cls, byClass[cls], len(paths))
+			t.Errorf("%s = %d, want >=1 (paths=%d); a missing closure-only class (ssrf/sqli) "+
+				"means the FuncLit source arm regressed", cls, byClass[cls], len(paths))
 		}
 	}
 	// Attribution must name the handler, proving the source is the typed struct parameter

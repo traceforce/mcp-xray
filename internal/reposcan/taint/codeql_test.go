@@ -474,12 +474,22 @@ func TestCodeQLIntegration(t *testing.T) {
 		t.Fatalf("scan: %v", err)
 	}
 	byClass := map[string]int{}
+	sinks := map[string]bool{}
 	for _, p := range paths {
 		byClass[p.VulnClass]++
+		sinks[p.SinkAPI] = true
 	}
 	for _, cls := range []string{"command_injection", "path_traversal", "ssrf", "sqli"} {
 		if byClass[cls] < 1 {
 			t.Errorf("%s = %d, want >=1 (paths=%d)", cls, byClass[cls], len(paths))
+		}
+	}
+	// V43-3: os.spawn* takes the mode at arg0 and the program path at arg1, while os.exec*
+	// takes the path at arg0. The pack matched arg0 for the whole family, so every spawn*
+	// name was dead. Require BOTH sinks so a regression back to a single arg index fails.
+	for _, api := range []string{"os.spawnv", "os.execv"} {
+		if !sinks[api] {
+			t.Errorf("expected sink %s in results (got %v)", api, sinks)
 		}
 	}
 }

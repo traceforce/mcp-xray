@@ -23,9 +23,14 @@ func TestSinkAPILabelParity(t *testing.T) {
 	if !og.Available() {
 		t.Skip("opengrep not installed; set MCPXRAY_OPENGREP_BIN")
 	}
-	cq := NewCodeQLEngine(DefaultCodeQLConfig())
+	// Resolve the pack from the repo tree, like the sibling integration gates: `go test`
+	// runs from the package dir with MCPXRAY_CODEQL_PACKS unset, so DefaultCodeQLConfig's
+	// findPackDir returns "" and this gate SKIPs even under codeql-pack-ci's env -- which is
+	// exactly how the label-parity regression it guards shipped unnoticed.
+	packs, _ := filepath.Abs("../../../codeql")
+	cq := NewCodeQLEngine(CodeQLConfig{Bin: findCodeQL(), PackDir: packs, TimeoutSec: 600})
 	if !cq.Available() {
-		t.Skip("codeql not installed; set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS")
+		t.Skip("codeql not installed; set MCPXRAY_CODEQL_BIN to run")
 	}
 
 	root, err := filepath.Abs("testdata/py-parity")
@@ -95,7 +100,8 @@ func TestSinkAPILabelParity(t *testing.T) {
 // not two records. This is what V43-4 was actually protecting.
 func TestMergeCorroboratesOnParityFixture(t *testing.T) {
 	og := NewEngine(DefaultConfig())
-	cq := NewCodeQLEngine(DefaultCodeQLConfig())
+	packs, _ := filepath.Abs("../../../codeql")
+	cq := NewCodeQLEngine(CodeQLConfig{Bin: findCodeQL(), PackDir: packs, TimeoutSec: 600})
 	if !og.Available() || !cq.Available() {
 		t.Skip("both engines required")
 	}

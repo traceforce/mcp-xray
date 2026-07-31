@@ -231,15 +231,19 @@ func canonicalSinkAPI(code string) string {
 		return "os.open"
 	case strings.Contains(c, "codecs.open("):
 		return "codecs.open"
+	// Path(tainted) construction is the CodeQL pack's path_traversal sink node -- it always
+	// reports the Path() call, never the read. For the INLINE `Path(x).read_text()` form both
+	// engines land on the SAME line, so OpenGrep must label it "pathlib.Path" too or
+	// sinkIdentity (which keys on sink line + api) splits one vulnerability into two. Checked
+	// BEFORE the read_text/write_text arms so the inline form aligns; the two-statement
+	// `p = Path(x); p.read_text()` form (no Path( on the read line) still keeps its precise
+	// label below, and that cross-line case is the documented residual in sinkIdentity.
+	case strings.Contains(c, "Path("):
+		return "pathlib.Path"
 	case strings.Contains(c, ".read_text("):
 		return "pathlib.read_text"
 	case strings.Contains(c, ".write_text("):
 		return "pathlib.write_text"
-	// Path(tainted) construction: the CodeQL pack's path_traversal sink node for the
-	// two-statement `p = Path(x); p.read_text()` form, where the read is on another line.
-	// After the read_text/write_text arms so the inline form keeps its precise label.
-	case strings.Contains(c, "Path("):
-		return "pathlib.Path"
 	case strings.Contains(c, "open("):
 		return "open"
 	case strings.Contains(c, "eval("):

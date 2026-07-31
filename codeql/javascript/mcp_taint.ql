@@ -45,18 +45,6 @@ predicate isMcpSource(DataFlow::Node source) {
 }
 
 /**
- * Holds if `node` is a dangerous sink argument for vuln class `cls`, reached via the
- * sink API `api` (the `<module>.<fn>` the query matched). `api` is emitted in the
- * result so the pipeline records the precise sink deterministically rather than
- * re-deriving it from a snippet. Static per-class lists; CodeQL still requires taint
- * to actually reach them, so a broad list does not create false positives.
- */
-/**
- * Holds if `node` is (or derives from) a client object created by a known SQL package, so
- * a `.query()`/`.execute()`/`.raw()` on it is a genuine database sink rather than a
- * same-named method on an unrelated object.
- */
-/**
  * A name conventionally given to a database handle, whether a local variable (`db`) or a
  * class field (`this.db`). A job queue is `queue`/`jobs` and a query-string builder is
  * `url`/`params`, so the noise Varun described stays excluded.
@@ -69,6 +57,11 @@ predicate dbHandleName(string n) {
     ]
 }
 
+/**
+ * Holds if `node` is (or derives from) a client object created by a known SQL package, so
+ * a `.query()`/`.execute()`/`.raw()` on it is a genuine database sink rather than a
+ * same-named method on an unrelated object.
+ */
 predicate dbClientReceiver(DataFlow::Node node) {
   // Preferred: the receiver demonstrably flows from a known SQL package.
   exists(API::Node db |
@@ -93,6 +86,13 @@ predicate dbClientReceiver(DataFlow::Node node) {
   dbHandleName(node.asExpr().(PropAccess).getPropertyName().toLowerCase())
 }
 
+/**
+ * Holds if `node` is a dangerous sink argument for vuln class `cls`, reached via the
+ * sink API `api` (the `<module>.<fn>` the query matched). `api` is emitted in the
+ * result so the pipeline records the precise sink deterministically rather than
+ * re-deriving it from a snippet. Static per-class lists; CodeQL still requires taint
+ * to actually reach them, so a broad list does not create false positives.
+ */
 predicate dangerousSink(DataFlow::Node node, string cls, string api) {
   cls = "command_injection" and
   exists(string m |

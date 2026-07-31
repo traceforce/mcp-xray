@@ -105,12 +105,16 @@ func TestCanonicalSinkAPI(t *testing.T) {
 		`os.system("a" + b)`:              "os.system",
 		`subprocess.run(cmd, shell=True)`: "subprocess.run+shell=True",
 		`open(path)`:                      "open",
-		`Path(name).read_text()`:          "pathlib.read_text",
-		`p.write_text(data)`:              "pathlib.write_text",
-		`requests.get(url)`:               "requests.get",
-		`cur.execute(q)`:                  "cursor.execute",
-		`urllib.request.urlopen(u)`:       "urllib.urlopen",
-		`session.request("GET", url=u)`:   "http.request",
+		// Inline construction+read: CodeQL reports the Path() node on this same line, so the
+		// label must be pathlib.Path (not pathlib.read_text) or the two engines split it.
+		`Path(name).read_text()`: "pathlib.Path",
+		// The bare two-statement read/write (no Path( on the line) keeps the precise label.
+		`p.read_text()`:                 "pathlib.read_text",
+		`p.write_text(data)`:            "pathlib.write_text",
+		`requests.get(url)`:             "requests.get",
+		`cur.execute(q)`:                "cursor.execute",
+		`urllib.request.urlopen(u)`:     "urllib.urlopen",
+		`session.request("GET", url=u)`: "http.request",
 		// sqlalchemy text() sinks must classify for any argument, not just literals,
 		// so cross-engine dedup (SinkAPI is part of pathID) stays stable.
 		`text(user_input)`:       "sqlalchemy.text",

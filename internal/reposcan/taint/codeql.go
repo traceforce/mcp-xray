@@ -365,7 +365,8 @@ func (e *CodeQLEngine) parseSarif(s *cqSarif, root string) []PathRecord {
 			if a := reSinkAPI.FindStringSubmatch(msg); a != nil {
 				sinkAPI = a[1]
 			} else if sinkSnippet != "" {
-				// The python pack emits no sink= tag and its sink node is the tainted
+				// Fallback for any result WITHOUT a sink= tag (all three packs emit one now,
+				// but a malformed or older SARIF may not). The sink node is the tainted
 				// ARGUMENT, so a call wrapped across lines leaves the api name on the line
 				// ABOVE (the call opens there) and the one-line snippet yields unknown_sink
 				// -- which also poisons pathID/sinkIdentity and defeats the cross-engine

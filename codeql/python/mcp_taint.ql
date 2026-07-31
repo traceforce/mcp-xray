@@ -33,11 +33,6 @@ predicate isMcpHandlerDecorator(Expr d) {
 predicate isMcpHandler(Function f) { isMcpHandlerDecorator(f.getADecorator()) }
 
 /**
- * Holds if `node` is a dangerous sink argument for vuln class `cls`. Static,
- * deterministic per-class lists; CodeQL still requires taint to actually reach
- * them, so a broad list does not create false positives without a real flow.
- */
-/**
  * Holds if `node` is a dangerous sink argument for class `cls`, reached via sink API `api`.
  *
  * `api` is emitted into the SARIF message as `sink=<api>` so the adapter reads it
@@ -115,12 +110,19 @@ predicate dangerousSink(DataFlow::Node node, string cls, string api) {
     node = API::moduleImport("asyncio").getMember("create_subprocess_shell").getACall().getArg(0) and
     api = "asyncio.create_subprocess_shell"
     or
+    // os.exec* family: the program path is argument 0.
     exists(string m |
-      m in [
-          "execl", "execle", "execlp", "execv", "execve", "execvp", "execvpe",
-          "spawnl", "spawnle", "spawnlp", "spawnv", "spawnve", "spawnvp", "spawnvpe"
-        ] and
+      m in ["execl", "execle", "execlp", "execv", "execve", "execvp", "execvpe"] and
       node = API::moduleImport("os").getMember(m).getACall().getArg(0) and
+      api = "os." + m
+    )
+    or
+    // os.spawn* family: argument 0 is the MODE constant (os.P_WAIT/P_NOWAIT); the program
+    // path is argument 1. Matching arg 0 here silently made all seven spawn names dead --
+    // the mode is never tainted -- so the list read as 14 sinks and delivered 7.
+    exists(string m |
+      m in ["spawnl", "spawnle", "spawnlp", "spawnv", "spawnve", "spawnvp", "spawnvpe"] and
+      node = API::moduleImport("os").getMember(m).getACall().getArg(1) and
       api = "os." + m
     )
   )
