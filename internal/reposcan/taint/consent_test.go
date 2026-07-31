@@ -1,14 +1,48 @@
 package taint
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func TestDetectLangs(t *testing.T) {
-	got := DetectLangs("testdata/py-vuln")
+	got := DetectLangs("testdata/py-vuln", nil)
 	if !reflect.DeepEqual(got, []string{"python"}) {
 		t.Errorf("DetectLangs = %v, want [python]", got)
+	}
+}
+
+// The exclude closure must gate DETECTION, not just result-filtering: a language living
+// only in an excluded dir must not be detected (else it triggers the Go consent warning
+// and, under --codeql-allow-build, gets compiled). Uses a dir name absent from skipDirs so
+// the closure -- not the built-in skip list -- is what excludes it.
+func TestDetectLangsHonoursExclude(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.py"), []byte("x=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "thirdparty"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "thirdparty", "lib.go"), []byte("package v\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := DetectLangs(dir, nil); !reflect.DeepEqual(got, []string{"python", "go"}) {
+		t.Errorf("no exclude: got %v, want [python go]", got)
+	}
+	excl := func(rel string) bool {
+		for _, seg := range strings.Split(filepath.ToSlash(rel), "/") {
+			if seg == "thirdparty" {
+				return true
+			}
+		}
+		return false
+	}
+	if got := DetectLangs(dir, excl); !reflect.DeepEqual(got, []string{"python"}) {
+		t.Errorf("exclude thirdparty: got %v, want [python]", got)
 	}
 }
 

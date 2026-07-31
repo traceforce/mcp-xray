@@ -184,7 +184,10 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 		fmt.Println("SAST codeql engine not available (needs the codeql binary and query packs); " +
 			"skipping (run `make install-codeql`, or set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS)")
 	} else {
-		langs := taint.DetectLangs(s.repoPath)
+		// Pass exclusions into DETECTION, not just result-filtering: a language living only
+		// in an excluded dir must not trigger the Go consent warning, and must not be
+		// extracted/compiled by `database create` under --codeql-allow-build.
+		langs := taint.DetectLangs(s.repoPath, s.config.ShouldExclude)
 		ccfg.AllowGoBuild = taint.ResolveGoBuildConsent(langs, s.config.CodeQLAllowBuild)
 		// Keep any partial results, but surface an analysis failure loudly instead of
 		// letting a broken CodeQL run read as a clean "found 0 taint paths".

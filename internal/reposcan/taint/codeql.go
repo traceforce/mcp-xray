@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -44,7 +45,7 @@ var (
 	reGoClosure = regexp.MustCompile(`\b(?:var\s+)?([A-Za-z_$][\w$]*)\s*:?=\s*func\s*\(([^)]*)\)`)
 	// JS/TS inline MCP registration `server.tool("name", (args) => {`: an anonymous callback
 	// whose tool-NAME string is the attribution, with the param on the same line.
-	reInlineHandler = regexp.MustCompile("\\.(?:tool|registerTool|resource)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,\\s*(?:async\\s+)?(?:function\\s*)?\\(([^)]*)\\)")
+	reInlineHandler = regexp.MustCompile("\\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,\\s*(?:async\\s+)?(?:function\\s*)?\\(([^)]*)\\)")
 	// A JS/TS class or object-literal method declaration -- `async runCmd(args) {`,
 	// `public handle(req): void {`, `run_cmd(args) {`. Anchored and keyword-guarded (see
 	// notMethodKeyword) so a control statement like `if (cond) {` is never read as a handler.
@@ -56,8 +57,8 @@ var (
 	// AddTool|AddResource|AddPrompt|AddResourceTemplate forms, whose handler is a closure
 	// -- without them the upward scan runs past the registration and names the enclosing
 	// func (typically `main`) as the MCP tool.
-	reRegBoundary = regexp.MustCompile(`\.(?:tool|registerTool|resource|setRequestHandler|AddTool|AddResource|AddPrompt|AddResourceTemplate)\s*\(`)
-	reRegName     = regexp.MustCompile("\\.(?:tool|registerTool|resource)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]")
+	reRegBoundary = regexp.MustCompile(`\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt|setRequestHandler|AddTool|AddResource|AddPrompt|AddResourceTemplate)\s*\(`)
+	reRegName     = regexp.MustCompile("\\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]")
 	reIdent       = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)`)
 	// A Go anonymous func literal opening a callback body on the registration line
 	// (`AddTool(tool, func(ctx, req) {`). Word-boundary anchored so it matches `func(` /
@@ -74,9 +75,27 @@ type CodeQLConfig struct {
 	AllowGoBuild bool // consent to compile Go targets (see consent.go)
 }
 
+// codeqlDefaultTimeoutSec is the per-language budget covering database create AND analyze.
+// Large targets legitimately exceed it (a monorepo can spend the whole budget in
+// extraction alone), so it is overridable via MCPXRAY_CODEQL_TIMEOUT rather than being a
+// hard ceiling a user cannot move.
+const codeqlDefaultTimeoutSec = 600
+
+// codeqlTimeoutFromEnv reads MCPXRAY_CODEQL_TIMEOUT (seconds). A missing, unparseable, or
+// non-positive value yields the default -- a bad env var must not silently produce an
+// instantly-expired context, which would look like "0 taint paths".
+func codeqlTimeoutFromEnv() int {
+	if v := os.Getenv("MCPXRAY_CODEQL_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return codeqlDefaultTimeoutSec
+}
+
 // DefaultCodeQLConfig resolves the pinned bundle and packs. Zero value is not usable.
 func DefaultCodeQLConfig() CodeQLConfig {
-	return CodeQLConfig{Bin: findCodeQL(), PackDir: findPackDir(), TimeoutSec: 600}
+	return CodeQLConfig{Bin: findCodeQL(), PackDir: findPackDir(), TimeoutSec: codeqlTimeoutFromEnv()}
 }
 
 // findCodeQL resolves the codeql executable only from an explicit, pinned source:
@@ -190,6 +209,14 @@ func (e *CodeQLEngine) Scan(ctx context.Context, repoPath string, langs []string
 	if err != nil {
 		return nil, err
 	}
+	// Resolve symlinks in the root, mirroring OpenGrep's Engine.Scan. CodeQL normally
+	// emits %SRCROOT%-relative URIs so this rarely matters, but if it ever emits an
+	// absolute URI under a symlinked root (macOS /tmp -> /private/tmp), withinRoot passes
+	// while relToRoot degrades Source/SinkFile to the bare basename -- which defeats
+	// dropExcludedPaths and can collapse two distinct same-basename findings via pathID.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
 	var out []PathRecord
 	var errs []error
 	for _, lang := range langs {
@@ -202,6 +229,12 @@ func (e *CodeQLEngine) Scan(ctx context.Context, repoPath string, langs []string
 		}
 		ql := filepath.Join(e.cfg.PackDir, cqLang, "mcp_taint.ql")
 		if !fileExists(ql) {
+			// A language was DETECTED but its pack is absent -- a partial or misconfigured
+			// MCPXRAY_CODEQL_PACKS. Available() returns true when any one pack exists, so
+			// continuing silently here reports "found 0 taint paths" for a language that
+			// was never analysed. Available()'s own contract says that state must not be
+			// indistinguishable from a clean scan, so surface it.
+			errs = append(errs, fmt.Errorf("%s: no query pack at %s (language detected but not analysed)", lang, ql))
 			continue
 		}
 		sarif, err := e.runLang(ctx, root, cqLang, ql)
@@ -232,10 +265,20 @@ func (e *CodeQLEngine) runLang(ctx context.Context, root, cqLang, ql string) (*c
 
 	timeout := e.cfg.TimeoutSec // default a partial Config so ctx isn't instantly expired
 	if timeout <= 0 {
-		timeout = 600
+		timeout = codeqlDefaultTimeoutSec
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
+	// Report the deadline as a deadline. Without this a language that exceeds the budget
+	// dies as an opaque "signal: killed" and contributes nothing -- unreadable in a scan
+	// log. runOpenGrep already distinguishes this case; mirror it.
+	deadline := func(stage string, err error, out []byte) error {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s timed out after %ds (raise CodeQLConfig.TimeoutSec or "+
+				"MCPXRAY_CODEQL_TIMEOUT for large targets)", stage, timeout)
+		}
+		return fmt.Errorf("%s: %w: %s", stage, err, tail(out))
+	}
 	createArgs := []string{"database", "create", dbPath, "--language=" + cqLang,
 		"--source-root=" + root, "--overwrite", "--quiet"}
 	if cqLang != "go" {
@@ -247,14 +290,14 @@ func (e *CodeQLEngine) runLang(ctx context.Context, root, cqLang, ql string) (*c
 	create := exec.CommandContext(ctx, e.cfg.Bin, createArgs...)
 	create.WaitDelay = codeqlKillGrace
 	if o, err := create.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("database create: %w: %s", err, tail(o))
+		return nil, deadline("database create", err, o)
 	}
 	analyze := exec.CommandContext(ctx, e.cfg.Bin, "database", "analyze", dbPath, ql,
 		"--format=sarif-latest", "--output="+sarifPath,
 		"--search-path="+searchPath(e.cfg.Bin), "--rerun", "--quiet", "--threads=0")
 	analyze.WaitDelay = codeqlKillGrace
 	if o, err := analyze.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("database analyze: %w: %s", err, tail(o))
+		return nil, deadline("database analyze", err, o)
 	}
 	data, err := os.ReadFile(sarifPath)
 	if err != nil {
@@ -355,6 +398,16 @@ var notMethodKeyword = map[string]bool{
 	// registration-boundary check and would otherwise attribute the sink to a tool literally
 	// named "func" instead of stopping at the enclosing AddTool.
 	"func": true,
+	// `async` guards the anonymous TS callback of a multi-line registration:
+	//     server.registerTool(
+	//       "name", { schema },
+	//       async ({ url, headers }: any): Promise<ToolResult> => {
+	// reMethodDecl's optional-modifier group can match zero times, so it captured `async`
+	// itself as the method name -- findings were reported "in handler `async`". Excluding
+	// it lets the scan fall through to the enclosing registration, which names the tool.
+	"async": true,
+	// `await` and `yield` open parenthesised expressions in the same statement position.
+	"await": true, "yield": true,
 }
 
 // enclosingHandler scans upward from line for the nearest def/func declaration and
@@ -405,9 +458,20 @@ func enclosingHandler(file string, line int) (name, param string) {
 		// setRequestHandler) yield the tool name when present on this line, else "unknown".
 		if reRegBoundary.MatchString(ln) && enclosesSource(ln) {
 			if m := reRegName.FindStringSubmatch(ln); m != nil {
-				return m[1], "unknown"
+				// Name on the boundary line, callback params below (`server.tool("x",` then
+				// the arrow on the next line): recover the param by scanning forward.
+				return m[1], scanRegistration(lines, i, line).param
 			}
-			return "unknown", "unknown"
+			// Nothing on this line: a fully wrapped registration
+			//     server.registerTool(
+			//       "toolB",
+			//       { schema },
+			//       async ({ url }) => {
+			// Both the name string and the callback params sit BELOW the boundary, so read
+			// forward instead of giving up -- the same information the upward scan cannot
+			// see, in the same call.
+			r := scanRegistration(lines, i, line)
+			return r.name, r.param
 		}
 		// Leaving the enclosing class/object scope: report "unknown" rather than blaming
 		// whatever declaration happens to sit above it.
@@ -415,8 +479,12 @@ func enclosingHandler(file string, line int) (name, param string) {
 			return "unknown", "unknown"
 		}
 		// A declaration whose signature is split across lines (`def f(` / `func f(`).
+		// reHandler only matches when the whole parameter list is on one line, so a
+		// wrapped signature reached here with the NAME recovered but the param given up
+		// on -- reporting `unknown` for a parameter OpenGrep names correctly. Join the
+		// continuation lines and recover it.
 		if m := reHandlerName.FindStringSubmatch(ln); m != nil {
-			return m[1], "unknown"
+			return m[1], firstParam(joinSignature(lines, i))
 		}
 	}
 	return "unknown", "unknown"
@@ -444,11 +512,131 @@ func enclosesSource(ln string) bool {
 	return strings.HasSuffix(t, "(") || strings.HasSuffix(t, ",")
 }
 
+// regAttr is what a forward scan of a multi-line registration recovered.
+type regAttr struct{ name, param string }
+
+var (
+	// The first quoted argument of a wrapped registration -- the tool name.
+	reRegNameLine = regexp.MustCompile("^\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,?\\s*$")
+	// A callback opening on its own line: `async ({ url }: any) => {`, `(args) => {`,
+	// `function (args) {`, `async function (args) {`. The param list is captured.
+	reCallbackOpen = regexp.MustCompile(`^\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*(?::[^={;]*)?(?:=>)?\s*\{?\s*$`)
+	// A callback that is the LAST argument on a registration line whose first argument is
+	// not a string -- the dispatcher shape
+	//   this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+	// reInlineHandler cannot match it (it requires a quoted tool name first), so the
+	// param was left unknown even though it is right there on the line.
+	reTrailingCallback = regexp.MustCompile(`,\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*(?::[^={;]*)?=>`)
+)
+
+// scanRegistration walks FORWARD from a multi-line registration boundary at lines[start]
+// to recover the tool name and the callback's first parameter, stopping at srcLine so it
+// can never read past the source it is attributing (which would pick up a LATER tool).
+//
+// Mirrors joinSignature: the information the upward scan needs is below the boundary, not
+// above it. Fields that are not found stay "unknown" -- degrade, never guess.
+func scanRegistration(lines []string, start, srcLine int) regAttr {
+	out := regAttr{name: "unknown", param: "unknown"}
+	end := start + sigMaxLines
+	if srcLine > 0 && srcLine < end {
+		end = srcLine // never cross the source line
+	}
+	for i := start; i < len(lines) && i < end; i++ {
+		ln := lines[i]
+		if out.name == "unknown" {
+			if m := reRegName.FindStringSubmatch(ln); m != nil {
+				out.name = m[1]
+			} else if m := reRegNameLine.FindStringSubmatch(ln); m != nil {
+				out.name = m[1]
+			}
+		}
+		if out.param == "unknown" {
+			// Inline form first (`.tool("x", (a) => {` on one line), then a callback that
+			// opens on its own line after the name/schema arguments.
+			if m := reInlineHandler.FindStringSubmatch(ln); m != nil {
+				out.param = firstParam(m[2])
+			} else if m := reTrailingCallback.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				out.param = firstParam(m[1])
+			} else if m := reCallbackOpen.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				out.param = firstParam(m[1])
+			}
+		}
+		if out.name != "unknown" && out.param != "unknown" {
+			break
+		}
+	}
+	return out
+}
+
+// sigMaxLines bounds how far a wrapped signature is followed. Real handler signatures
+// wrap over a handful of lines; a larger window would start swallowing the body when the
+// opening paren is never closed (minified or malformed source).
+const sigMaxLines = 40
+
+// joinSignature returns the parameter text of a declaration whose signature starts on
+// lines[start] and may wrap. It walks forward accumulating characters after the first
+// '(' until parens balance, so nested types keep their commas
+//
+//	def install(
+//	    install_dir: str,
+//	    opts: Dict[str, Any] = None,
+//	) -> str:
+//
+// yields "install_dir: str, opts: Dict[str, Any] = None,". Returns "" when the signature
+// does not close within sigMaxLines, which leaves the caller reporting "unknown" exactly
+// as before -- degrade, never guess.
+func joinSignature(lines []string, start int) string {
+	var b strings.Builder
+	depth, seen := 0, false
+	for i := start; i < len(lines) && i < start+sigMaxLines; i++ {
+		for _, r := range lines[i] {
+			switch r {
+			case '(':
+				depth++
+				if !seen {
+					// Opening paren of the signature itself: start capturing AFTER it.
+					seen = true
+					continue
+				}
+			case ')':
+				depth--
+				if depth == 0 {
+					return b.String()
+				}
+			}
+			if seen {
+				b.WriteRune(r)
+			}
+		}
+		if seen {
+			// Insert a space at each line break so a param list wrapped WITHOUT trailing
+			// commas cannot fuse two identifiers into one token across the wrap.
+			b.WriteRune(' ')
+		}
+	}
+	return ""
+}
+
 // firstParam returns the identifier of the first parameter in a signature's param
 // list, stripping any type annotation (`host: str` -> host, `url string` -> url).
 func firstParam(params string) string {
+	// A DESTRUCTURED object parameter -- `async ({ url, headers = {} }: any) =>`, the
+	// standard TS MCP handler shape -- has its real parameter names inside the braces.
+	// Without unwrapping, the leading `{ url` fails reIdent and the scan silently falls
+	// through to the SECOND field, reporting the wrong parameter rather than "unknown"
+	// (observed in the wild: `headers` reported where `url` was the tainted value). Only a
+	// LEADING `{` is a destructuring pattern; a `{` later in the list is an object TYPE or
+	// default on the first param (`(input: {url}, other)`), which must NOT be unwrapped.
+	if trimmed := strings.TrimSpace(params); strings.HasPrefix(trimmed, "{") {
+		if j := strings.LastIndex(trimmed, "}"); j > 0 {
+			if inner := strings.TrimSpace(trimmed[1:j]); inner != "" {
+				params = inner
+			}
+		}
+	}
 	for _, raw := range strings.Split(params, ",") {
 		p := strings.TrimSpace(strings.SplitN(raw, ":", 2)[0]) // python `name: T`
+		p = strings.TrimSpace(strings.SplitN(p, "=", 2)[0])    // JS default `headers = {}`
 		m := reIdent.FindStringSubmatch(p)
 		if m == nil {
 			continue

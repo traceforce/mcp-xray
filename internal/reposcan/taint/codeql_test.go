@@ -153,6 +153,12 @@ func TestEnclosingHandlerAndFirstParam(t *testing.T) {
 		"self":      "unknown",
 		"cls, self": "unknown",
 		"":          "unknown",
+		// A LEADING destructured object param unwraps to its first field.
+		"{ url, headers = {} }: any": "url",
+		// But a `{` that is an object TYPE / default on a NAMED first param must NOT be
+		// unwrapped -- the first param is the name, not a field inside the braces.
+		"input: { url: string }, other": "input",
+		"x = {a: 1}, y":                 "x",
 	} {
 		if got := firstParam(in); got != want {
 			t.Errorf("firstParam(%q) = %q, want %q", in, got, want)
@@ -185,6 +191,11 @@ func TestHandlerRegexAcrossLanguages(t *testing.T) {
 		"const g = async (req, res) => {":            "g",
 		`server.tool("fetch_url", async (args) => {`: "fetch_url",
 		`mcp.registerTool('do_thing', (a, b) => {`:   "do_thing",
+		// V43-6: the adapter must recognize the same registration verbs the JS pack now
+		// emits sources for (registerResource/prompt/registerPrompt).
+		`server.registerResource("get_doc", async (uri) => {`: "get_doc",
+		`mcp.registerPrompt('summarize', (args) => {`:         "summarize",
+		`app.prompt("greet", (a) => {`:                        "greet",
 	} {
 		if got := match(line); got != want {
 			t.Errorf("handler name for %q = %q, want %q", line, got, want)
@@ -351,15 +362,19 @@ func TestEnclosingHandlerBoundaries(t *testing.T) {
 				"server.registerTool(\"toolB\", { schema: z }, (b) => {\n" +
 				"  exec(b.cmd);\n" +
 				"});\n",
-			line: 3, fn: "toolB", prm: "unknown",
+			line: 3, fn: "toolB", prm: "b",
 		},
-		// setRequestHandler: no tool-name string -> honest unknown, does not reach toolA.
+		// setRequestHandler is a DISPATCHER: it serves every tool and the name is only known
+		// at runtime from request.params.name, so "unknown" for the tool name is the honest
+		// answer, not a limitation. The callback param IS statically visible on the line and
+		// is now recovered (reTrailingCallback) -- it sits after a non-string first argument,
+		// which reInlineHandler cannot match. Must still not reach toolA.
 		"setRequestHandler": {
 			src: "server.tool(\"toolA\", (a) => a);\n" +
 				"server.setRequestHandler(CallToolSchema, async (req) => {\n" +
 				"  exec(req.params);\n" +
 				"});\n",
-			line: 3, fn: "unknown", prm: "unknown",
+			line: 3, fn: "unknown", prm: "req",
 		},
 		// A self-contained `.tool(...)` call in a body is not a boundary: the scan passes
 		// it and names the real enclosing function, not the string the call carries.
@@ -375,7 +390,10 @@ func TestEnclosingHandlerBoundaries(t *testing.T) {
 			src:  "const handler = (req) => { svc.resource(\"x\"); exec(req.cmd); };\n",
 			line: 1, fn: "handler", prm: "req",
 		},
-		// Multi-line registration: the boundary line carries no name string -> unknown.
+		// Multi-line registration: the boundary line carries no name string, so
+		// scanRegistration reads FORWARD from it (bounded by the source line) to recover
+		// both. Must resolve to toolB, never the preceding toolA -- forward-scanning past
+		// the source would reintroduce the false-accusation bug.
 		"multiline-registration": {
 			src: "server.tool(\"toolA\", (a) => a);\n" +
 				"server.tool(\n" +
@@ -384,15 +402,32 @@ func TestEnclosingHandlerBoundaries(t *testing.T) {
 				"    exec(b);\n" +
 				"  }\n" +
 				");\n",
-			line: 5, fn: "unknown", prm: "unknown",
+			line: 5, fn: "toolB", prm: "b",
+		},
+		// The TS shape that previously reported handler `async`: reMethodDecl captured the
+		// `async` keyword as a method name, and firstParam then skipped the destructured
+		// `{ url` and returned the SECOND field. Now `async` is a non-method keyword, so
+		// the scan falls through to the registration, and firstParam unwraps the braces.
+		"wrapped-registration-destructured-param": {
+			src: "server.registerTool(\n" +
+				"  \"graphql_introspect\",\n" +
+				"  { inputSchema: { type: \"object\" } },\n" +
+				"  async ({ url, headers = {} }: any): Promise<ToolResult> => {\n" +
+				"    await axios.post(url, {}, { headers });\n" +
+				"  }\n" +
+				");\n",
+			line: 5, fn: "graphql_introspect", prm: "url",
 		},
 		// Multi-line def: name captured on the `def f(` line, param list continues below.
+		// joinSignature follows the wrap to parenthesis balance, so the first parameter is
+		// recovered rather than reported "unknown" -- OpenGrep names it for the same code,
+		// and the mismatch was cosmetic noise in merged output.
 		"multiline-def": {
 			src: "def run_ping(\n" +
 				"    host,\n" +
 				"    opts):\n" +
 				"    os.system(host)\n",
-			line: 4, fn: "run_ping", prm: "unknown",
+			line: 4, fn: "run_ping", prm: "host",
 		},
 	}
 	for name, c := range cases {
@@ -481,6 +516,12 @@ func TestCodeQLIntegrationJS(t *testing.T) {
 	// The inline `server.tool("run_cmd", (args) => ...)` shape must attribute to the tool name.
 	if !tools["run_cmd"] {
 		t.Errorf("expected a finding attributed to handler run_cmd (got %v)", tools)
+	}
+	// V43-5: a sqli sink on a class FIELD receiver (`this.db.query(...)`) must be detected.
+	// This can only match via dbClientReceiver's PropAccess arm; a VarAccess-only check
+	// misses the standard OOP handler shape entirely.
+	if !tools["lookup_field"] {
+		t.Errorf("expected a this.db.query sqli finding attributed to lookup_field (got %v)", tools)
 	}
 	// The 3-arg `registerTool("https_fetch", {schema}, (req) => ...)` shape is not parseable
 	// by the inline regex; the adapter must still attribute it to https_fetch via the
