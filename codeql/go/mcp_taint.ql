@@ -31,6 +31,56 @@ predicate isMcpSourceCall(DataFlow::CallNode c) {
 }
 
 /**
+ * Holds if `f` is a tool handler registered with the OFFICIAL SDK
+ * (github.com/modelcontextprotocol/go-sdk), i.e. passed to mcp.AddTool / AddPrompt /
+ * AddResource as the handler argument.
+ *
+ * Verified against a real official-SDK fixture rather than inferred from docs: the
+ * extractor reports `AddTool` with 3 arguments from package
+ * `github.com/modelcontextprotocol/go-sdk/mcp`, whose last argument resolves to the
+ * handler FuncDecl.
+ */
+predicate isOfficialSdkHandler(FuncDef f) {
+  exists(DataFlow::CallNode reg, DataFlow::Node h |
+    reg.getTarget().getName() in ["AddTool", "AddPrompt", "AddResource", "AddResourceTemplate"] and
+    reg.getTarget().getPackage().getPath().matches("github.com/modelcontextprotocol/go-sdk%") and
+    h = reg.getAnArgument() and
+    f = h.asExpr().(FunctionName).getTarget().getFuncDecl()
+  )
+}
+
+/**
+ * Holds if `source` is the decoded tool-input parameter of an official-SDK handler.
+ *
+ * The official SDK unmarshals the JSON arguments into a typed struct and hands it to the
+ * handler as a parameter -- there is NO accessor call to match, which is why the
+ * mark3labs-scoped predicate above finds nothing on such a server and the scan returns a
+ * clean-looking zero.
+ *
+ * The parameter itself is the source; `args.Field` reads propagate by ordinary taint
+ * through field reads (probed: `args.Host` is a SelectorExpr whose base is this
+ * parameter). The context and request parameters are excluded by TYPE, so the predicate
+ * survives signature changes and extra parameters rather than hard-coding index 2.
+ */
+predicate isOfficialSdkSource(DataFlow::Node source) {
+  exists(FuncDef f, Parameter p |
+    isOfficialSdkHandler(f) and
+    p = f.getParameter(_) and
+    not p.getType().getUnderlyingType() instanceof PointerType and
+    not p.getType().hasQualifiedName("context", "Context") and
+    source = DataFlow::parameterNode(p)
+  )
+  or
+  // The low-level map form: req.Params.Arguments, used when a handler takes the raw
+  // request instead of a typed struct.
+  exists(DataFlow::FieldReadNode fr |
+    fr.getFieldName() = "Arguments" and
+    fr.getBase().getType().toString().matches("%Params%") and
+    source = fr
+  )
+}
+
+/**
  * Holds if `node` is a dangerous sink argument for vuln class `cls`, reached via the
  * sink API `api` (the `<pkg>.<func>` the query matched, e.g. `net/http.Get`).
  *
@@ -100,6 +150,8 @@ predicate dangerousSink(DataFlow::Node node, string cls, string api) {
 module McpGoConfig implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node source) {
     exists(DataFlow::CallNode c | isMcpSourceCall(c) and source = c.getResult(0))
+    or
+    isOfficialSdkSource(source)
   }
 
   predicate isSink(DataFlow::Node sink) { dangerousSink(sink, _, _) }

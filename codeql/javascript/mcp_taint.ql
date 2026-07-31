@@ -24,7 +24,16 @@ import semmle.javascript.ApiGraphs
  */
 predicate isMcpSource(DataFlow::Node source) {
   exists(DataFlow::MethodCallNode reg |
-    reg.getMethodName() = ["tool", "registerTool", "resource", "setRequestHandler"] and
+    // registerResource is the documented resource API on the current McpServer surface,
+    // and prompt/registerPrompt are its prompt equivalents. Without them, modern
+    // resource and prompt handlers produce no sources at all -- silent zero coverage
+    // for a whole handler category. The #44 adapter's reRegBoundary/reRegName want the
+    // same names, or the query finds a source the adapter cannot attribute.
+    reg.getMethodName() =
+      [
+        "tool", "registerTool", "resource", "registerResource", "prompt",
+        "registerPrompt", "setRequestHandler"
+      ] and
     source = reg.getABoundCallbackParameter(_, _)
   )
   or
@@ -42,6 +51,48 @@ predicate isMcpSource(DataFlow::Node source) {
  * re-deriving it from a snippet. Static per-class lists; CodeQL still requires taint
  * to actually reach them, so a broad list does not create false positives.
  */
+/**
+ * Holds if `node` is (or derives from) a client object created by a known SQL package, so
+ * a `.query()`/`.execute()`/`.raw()` on it is a genuine database sink rather than a
+ * same-named method on an unrelated object.
+ */
+/**
+ * A name conventionally given to a database handle, whether a local variable (`db`) or a
+ * class field (`this.db`). A job queue is `queue`/`jobs` and a query-string builder is
+ * `url`/`params`, so the noise Varun described stays excluded.
+ */
+predicate dbHandleName(string n) {
+  n =
+    [
+      "db", "pool", "conn", "connection", "client", "knex", "sequelize", "prisma", "sql",
+      "database", "datasource"
+    ]
+}
+
+predicate dbClientReceiver(DataFlow::Node node) {
+  // Preferred: the receiver demonstrably flows from a known SQL package.
+  exists(API::Node db |
+    db =
+      API::moduleImport([
+          "pg", "mysql", "mysql2", "mysql2/promise", "sqlite3", "better-sqlite3",
+          "knex", "sequelize", "typeorm", "mssql", "oracledb", "@prisma/client",
+          "postgres", "pg-promise", "drizzle-orm"
+        ]).getAMember*() and
+    node = db.getAValueReachableFromSource()
+  )
+  or
+  // Fallback on the receiver's NAME. Import-tracking alone is too strict in practice: the
+  // handle is very often constructed in one module and imported into the tool file
+  // (`import { db } from "./db"`), where the flow to the package is not visible; requiring
+  // the import would trade Varun's false positives for false NEGATIVES -- the worse trade
+  // for a scanner. Cover both a local variable (`db.query(...)`) and a class FIELD
+  // (`this.db.query(...)`, `this.pool.execute(...)`) -- the standard OOP handler shape,
+  // whose receiver is a PropAccess, not a VarAccess, and was previously missed entirely.
+  dbHandleName(node.asExpr().(VarAccess).getName().toLowerCase())
+  or
+  dbHandleName(node.asExpr().(PropAccess).getPropertyName().toLowerCase())
+}
+
 predicate dangerousSink(DataFlow::Node node, string cls, string api) {
   cls = "command_injection" and
   exists(string m |
@@ -102,6 +153,11 @@ predicate dangerousSink(DataFlow::Node node, string cls, string api) {
   cls = "sqli" and
   exists(DataFlow::MethodCallNode c, string m |
     m = ["query", "execute", "raw"] and c.getMethodName() = m and node = c.getArgument(0) and
+    // Constrain the RECEIVER to a known database client. Matching any `.query()`/
+    // `.execute()`/`.raw()` on any object reported a job queue's execute, a URL/query-string
+    // builder, or any custom class as HIGH SQL injection. The receiver must flow from one of
+    // these packages for the call to be a database sink.
+    dbClientReceiver(c.getReceiver()) and
     api = "db." + m
   )
 }

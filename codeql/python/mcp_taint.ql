@@ -37,78 +37,148 @@ predicate isMcpHandler(Function f) { isMcpHandlerDecorator(f.getADecorator()) }
  * deterministic per-class lists; CodeQL still requires taint to actually reach
  * them, so a broad list does not create false positives without a real flow.
  */
-predicate dangerousSink(DataFlow::Node node, string cls) {
+/**
+ * Holds if `node` is a dangerous sink argument for class `cls`, reached via sink API `api`.
+ *
+ * `api` is emitted into the SARIF message as `sink=<api>` so the adapter reads it
+ * deterministically from the query instead of re-deriving it from source text. The Python
+ * pack previously omitted it (js/go both emit), which forced snippet recovery and yielded
+ * `unknown_sink` on calls wrapped across lines.
+ *
+ * CRITICAL: these strings must match `canonicalSinkAPI` in parse.go EXACTLY, because
+ * SinkAPI is part of `sinkIdentity` (the cross-engine merge key). A subtly-wrong label is
+ * WORSE than unknown_sink -- it looks correct while silently splitting one vulnerability
+ * into two reports. TestSinkAPILabelParity pins every label pair.
+ */
+predicate dangerousSink(DataFlow::Node node, string cls, string api) {
   cls = "ssrf" and
   (
-    exists(string m | m in ["get", "post", "put", "delete", "head", "patch"] |
-      node = API::moduleImport("requests").getMember(m).getACall().getArg(0)
+    // canonicalSinkAPI keeps requests.get/post distinct but folds put/delete/head/patch
+    // (and their httpx twins) into http.<verb>; mirror that split exactly.
+    exists(string m | m in ["get", "post"] |
+      node = API::moduleImport("requests").getMember(m).getACall().getArg(0) and
+      api = "requests." + m
     )
     or
-    node = API::moduleImport("urllib").getMember("request").getMember("urlopen").getACall().getArg(0)
+    exists(string m | m in ["put", "delete", "head", "patch"] |
+      node = API::moduleImport("requests").getMember(m).getACall().getArg(0) and
+      api = "http." + m
+    )
+    or
+    node = API::moduleImport("urllib").getMember("request").getMember("urlopen").getACall().getArg(0) and
+    api = "urllib.urlopen"
     or
     exists(string m | m in ["get", "post"] |
-      node = API::moduleImport("httpx").getMember(m).getACall().getArg(0)
+      node = API::moduleImport("httpx").getMember(m).getACall().getArg(0) and
+      api = "httpx." + m
+    )
+    or
+    exists(string m | m in ["put", "delete", "head", "patch"] |
+      node = API::moduleImport("httpx").getMember(m).getACall().getArg(0) and
+      api = "http." + m
     )
     or
     // requests.request/httpx.request(method, url, ...): the URL is the 2nd positional
     // argument (or the `url=` keyword), not arg 0, which is the HTTP method.
-    exists(API::CallNode c | c = API::moduleImport(["requests", "httpx"]).getMember("request").getACall() |
-      node = c.getArg(1) or node = c.getArgByName("url")
+    exists(API::CallNode c | c = API::moduleImport("requests").getMember("request").getACall() |
+      (node = c.getArg(1) or node = c.getArgByName("url")) and api = "requests.request"
+    )
+    or
+    // httpx.request has no dedicated canonicalSinkAPI arm; it lands on the generic
+    // `.request(` arm, which labels http.request. Match that, do not invent httpx.request.
+    exists(API::CallNode c | c = API::moduleImport("httpx").getMember("request").getACall() |
+      (node = c.getArg(1) or node = c.getArgByName("url")) and api = "http.request"
     )
   )
   or
   cls = "command_injection" and
   (
-    node = API::moduleImport("os").getMember(["system", "popen"]).getACall().getArg(0)
+    exists(string m | m in ["system", "popen"] |
+      node = API::moduleImport("os").getMember(m).getACall().getArg(0) and api = "os." + m
+    )
     or
-    node =
-      API::moduleImport("subprocess")
-          .getMember(["run", "call", "Popen", "check_output", "check_call"])
-          .getACall()
-          .getArg(0)
+    // Shelled subprocess. canonicalSinkAPI appends the +shell=True suffix; without it the
+    // two engines produce different labels for the same call and stop merging.
+    exists(API::CallNode c, string m |
+      m in ["run", "call", "Popen", "check_output", "check_call"] and
+      c = API::moduleImport("subprocess").getMember(m).getACall() and
+      c.getArgByName("shell").asExpr().(BooleanLiteral).booleanValue() = true and
+      node = c.getArg(0) and
+      api = "subprocess." + m + "+shell=True"
+    )
+    or
+    exists(string m | m in ["getoutput", "getstatusoutput"] |
+      node = API::moduleImport("subprocess").getMember(m).getACall().getArg(0) and
+      api = "subprocess." + m
+    )
+    or
+    node = API::moduleImport("asyncio").getMember("create_subprocess_shell").getACall().getArg(0) and
+    api = "asyncio.create_subprocess_shell"
+    or
+    exists(string m |
+      m in [
+          "execl", "execle", "execlp", "execv", "execve", "execvp", "execvpe",
+          "spawnl", "spawnle", "spawnlp", "spawnv", "spawnve", "spawnvp", "spawnvpe"
+        ] and
+      node = API::moduleImport("os").getMember(m).getACall().getArg(0) and
+      api = "os." + m
+    )
   )
   or
-  // eval/exec run attacker input as code -- code injection (INJECTION-CODE), a distinct
-  // class from shell command injection, matching the opengrep taxonomy so both engines
-  // agree on Python (the one language they both cover).
   cls = "code_injection" and
-  node = API::builtin(["eval", "exec"]).getACall().getArg(0)
+  exists(string m | m in ["eval", "exec"] |
+    node = API::builtin(m).getACall().getArg(0) and api = m
+  )
   or
   cls = "path_traversal" and
   (
-    node = API::builtin("open").getACall().getArg(0)
+    node = API::builtin("open").getACall().getArg(0) and api = "open"
     or
-    // os.open is a read/write open (not just delete); grouped with the delete-family sinks.
-    node = API::moduleImport("os").getMember(["remove", "unlink", "mkdir", "rmdir", "open"]).getACall().getArg(0)
+    // canonicalSinkAPI folds unlink into os.remove and makedirs into os.mkdir.
+    exists(string m | m in ["remove", "unlink"] |
+      node = API::moduleImport("os").getMember(m).getACall().getArg(0) and api = "os.remove"
+    )
     or
-    // io.open / codecs.open -- the same file-open sink under different modules.
-    node = API::moduleImport("io").getMember("open").getACall().getArg(0)
+    exists(string m | m in ["mkdir", "makedirs"] |
+      node = API::moduleImport("os").getMember(m).getACall().getArg(0) and api = "os.mkdir"
+    )
     or
-    node = API::moduleImport("codecs").getMember("open").getACall().getArg(0)
+    node = API::moduleImport("os").getMember("rmdir").getACall().getArg(0) and api = "os.rmdir"
     or
-    // pathlib.Path(tainted) -- the tainted path enters at construction; a later .read_text()/
-    // .write_text()/.open() on it is the read. This is the most common Python file-read shape and
-    // was previously found by NEITHER engine on a cross-file flow (OpenGrep is intra-file only).
-    node = API::moduleImport("pathlib").getMember("Path").getACall().getArg(0)
+    node = API::moduleImport("os").getMember("open").getACall().getArg(0) and api = "os.open"
     or
-    // shutil copy/move (first arg is the source path an attacker can point out of bounds).
-    node =
-      API::moduleImport("shutil")
-          .getMember(["copy", "copyfile", "copy2", "copytree", "move"])
-          .getACall()
-          .getArg(0)
+    node = API::moduleImport("io").getMember("open").getACall().getArg(0) and api = "io.open"
     or
-    // archive open (tarfile/zipfile) -- the archive path itself is a traversal-controllable read.
-    node = API::moduleImport("tarfile").getMember("open").getACall().getArg(0)
+    node = API::moduleImport("codecs").getMember("open").getACall().getArg(0) and api = "codecs.open"
     or
-    node = API::moduleImport("zipfile").getMember("ZipFile").getACall().getArg(0)
+    node = API::moduleImport("pathlib").getMember("Path").getACall().getArg(0) and
+    api = "pathlib.Path"
+    or
+    exists(string m | m in ["copy", "copyfile", "copy2", "copytree", "move"] |
+      node = API::moduleImport("shutil").getMember(m).getACall().getArg(0) and
+      api = "shutil." + m
+    )
+    or
+    node = API::moduleImport("tarfile").getMember("open").getACall().getArg(0) and
+    api = "tarfile.open"
+    or
+    node = API::moduleImport("zipfile").getMember("ZipFile").getACall().getArg(0) and
+    api = "zipfile.ZipFile"
   )
   or
   cls = "sqli" and
-  exists(DataFlow::CallCfgNode c |
-    c.getFunction().(DataFlow::AttrRead).getAttributeName() in
-      ["execute", "executescript", "executemany"] and
-    node = c.getArg(0)
+  exists(DataFlow::CallCfgNode c, string m |
+    m = c.getFunction().(DataFlow::AttrRead).getAttributeName() and
+    m in ["execute", "executescript", "executemany"] and
+    node = c.getArg(0) and
+    // canonicalSinkAPI labels these executescript / cursor.executemany / cursor.execute.
+    (
+      m = "executescript" and api = "executescript"
+      or
+      m = "executemany" and api = "cursor.executemany"
+      or
+      m = "execute" and api = "cursor.execute"
+    )
   )
 }
 
@@ -120,14 +190,14 @@ module McpTaintConfig implements DataFlow::ConfigSig {
     )
   }
 
-  predicate isSink(DataFlow::Node sink) { dangerousSink(sink, _) }
+  predicate isSink(DataFlow::Node sink) { dangerousSink(sink, _, _) }
 }
 
 module McpTaintFlow = TaintTracking::Global<McpTaintConfig>;
 
 import McpTaintFlow::PathGraph
 
-from McpTaintFlow::PathNode source, McpTaintFlow::PathNode sink, string cls
-where McpTaintFlow::flowPath(source, sink) and dangerousSink(sink.getNode(), cls)
+from McpTaintFlow::PathNode source, McpTaintFlow::PathNode sink, string cls, string api
+where McpTaintFlow::flowPath(source, sink) and dangerousSink(sink.getNode(), cls, api)
 select sink.getNode(), source, sink,
-  "MCP-TAINT[" + cls + "]: handler input reaches a " + cls + " sink."
+  "MCP-TAINT[" + cls + "] sink=" + api + ": handler input reaches a " + cls + " sink."
