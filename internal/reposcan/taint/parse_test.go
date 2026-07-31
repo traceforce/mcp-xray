@@ -100,17 +100,67 @@ func TestResultsToPathsRootsRelativePath(t *testing.T) {
 	}
 }
 
+// TestPathlibLabelFromClass pins the half of the pathlib label that canonicalSinkAPI cannot
+// decide on its own, because one line can be two different sinks and only the vuln class
+// tells them apart.
+//
+// The contract: whatever CodeQL's python pack emits for the same file:line, OpenGrep must
+// emit too, or sinkIdentity splits one vulnerability into two reports. The pack has no
+// read_text/write_text sink -- its only pathlib sink is the Path() construction.
+func TestPathlibLabelFromClass(t *testing.T) {
+	cases := []struct {
+		name, class, api, snippet, want string
+	}{
+		{"inline read is the Path node for CodeQL", "path_traversal", "pathlib.read_text",
+			`return Path(name).read_text()`, "pathlib.Path"},
+		{"inline write likewise", "path_traversal", "pathlib.write_text",
+			`Path(name).write_text(data)`, "pathlib.Path"},
+		{"open() enclosing a Path() argument stays open", "path_traversal", "open",
+			`with open(Path(base) / name) as f:`, "open"},
+		{"two-statement read has no Path( on the line", "path_traversal", "pathlib.read_text",
+			`return p.read_text()`, "pathlib.read_text"},
+		{"bare construction is already pathlib.Path", "path_traversal", "pathlib.Path",
+			`p = Path(name)`, "pathlib.Path"},
+		// The same line is a code_injection at eval AND a path_traversal at Path(). Only the
+		// path_traversal finding is corrected; the code_injection keeps the enclosing call.
+		{"eval wrapping an inline read keeps eval for code_injection", "code_injection", "eval",
+			`data = eval(Path(name).read_text())`, "eval"},
+		{"...and becomes pathlib.Path for the path_traversal on the same line", "path_traversal", "eval",
+			`data = eval(Path(name).read_text())`, "pathlib.Path"},
+		{"other classes are never touched", "command_injection", "os.system",
+			`os.system("cat " + str(Path(base) / name))`, "os.system"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := pathlibLabelFromClass(c.class, c.api, c.snippet); got != c.want {
+				t.Errorf("pathlibLabelFromClass(%q, %q, %q) = %q, want %q",
+					c.class, c.api, c.snippet, got, c.want)
+			}
+		})
+	}
+}
+
 func TestCanonicalSinkAPI(t *testing.T) {
 	cases := map[string]string{
 		`os.system("a" + b)`:              "os.system",
 		`subprocess.run(cmd, shell=True)`: "subprocess.run+shell=True",
 		`open(path)`:                      "open",
-		`Path(name).read_text()`:          "pathlib.read_text",
-		`p.write_text(data)`:              "pathlib.write_text",
-		`requests.get(url)`:               "requests.get",
-		`cur.execute(q)`:                  "cursor.execute",
-		`urllib.request.urlopen(u)`:       "urllib.urlopen",
-		`session.request("GET", url=u)`:   "http.request",
+		// The ENCLOSING call wins: here the sink is open() and Path() only builds its
+		// argument, which is exactly what CodeQL reports. A bare `Path(` test ordered above
+		// `open(` claimed this line for pathlib and split the finding across engines.
+		`with open(Path(base) / name) as f:`:  "open",
+		`data = eval(Path(name).read_text())`: "eval",
+		// The inline construction+read is a path_traversal at the Path() node for CodeQL, but
+		// that depends on the vuln class -- one line can be two sinks -- so it is corrected by
+		// pathlibLabelFromClass, not here. See TestPathlibLabelFromClass.
+		`Path(name).read_text()`: "pathlib.read_text",
+		// The bare two-statement read/write (no Path( on the line) keeps the precise label.
+		`p.read_text()`:                 "pathlib.read_text",
+		`p.write_text(data)`:            "pathlib.write_text",
+		`requests.get(url)`:             "requests.get",
+		`cur.execute(q)`:                "cursor.execute",
+		`urllib.request.urlopen(u)`:     "urllib.urlopen",
+		`session.request("GET", url=u)`: "http.request",
 		// sqlalchemy text() sinks must classify for any argument, not just literals,
 		// so cross-engine dedup (SinkAPI is part of pathID) stays stable.
 		`text(user_input)`:       "sqlalchemy.text",
@@ -119,6 +169,23 @@ func TestCanonicalSinkAPI(t *testing.T) {
 		`something_unrelated(x)`: "unknown_sink",
 		// Another object's .text() must NOT be mislabeled as the sqlalchemy.text sink.
 		`resp.text(x)`: "unknown_sink",
+		// Sinks the CodeQL Python pack selects but the opengrep rules do not: without an
+		// arm each falls through to "unknown_sink" (or, for the ones containing "open(",
+		// to a wrong label), and SinkAPI feeds the finding title and the dedup keys.
+		// `p = Path(name)` is the pack's sink node for the split pathlib form its own
+		// fixture (testdata/py-vuln read_split) exercises.
+		`p = Path(name)`:           "pathlib.Path",
+		`tarfile.open(p)`:          "tarfile.open", // must NOT fall through to "open"
+		`zipfile.ZipFile(p)`:       "zipfile.ZipFile",
+		`cur.executemany(q, rows)`: "cursor.executemany", // must NOT match .execute(
+		`os.remove(p)`:             "os.remove",
+		`os.unlink(p)`:             "os.remove",
+		`os.mkdir(p)`:              "os.mkdir",
+		`shutil.copy(a, b)`:        "shutil.copy",
+		`shutil.move(a, b)`:        "shutil.move",
+		`requests.put(u)`:          "http.put",
+		`requests.delete(u)`:       "http.delete",
+		`httpx.put(u)`:             "http.put",
 	}
 	for in, want := range cases {
 		if got := canonicalSinkAPI(in); got != want {
