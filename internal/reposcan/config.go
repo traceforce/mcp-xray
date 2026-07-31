@@ -14,6 +14,12 @@ type Config struct {
 	ExcludedPaths []string
 	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
 	CodeQLAllowBuild bool
+	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
+	// seconds. Zero means the caller said nothing: fall back to MCPXRAY_CODEQL_TIMEOUT,
+	// then to codeqlDefaultTimeoutSec. A target that exceeds the budget dies as an opaque
+	// `signal: killed` and contributes nothing, so this must be reachable without
+	// recompiling.
+	CodeQLTimeoutSec int
 }
 
 // DefaultConfig returns a configuration with sensible defaults

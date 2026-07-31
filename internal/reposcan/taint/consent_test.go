@@ -46,6 +46,24 @@ func TestDetectLangsHonoursExclude(t *testing.T) {
 	}
 }
 
+// TestDetectLangsNodeNextExtensions covers the other half of V44-2: langByExt carried
+// .mjs/.cjs but not their TypeScript twins, so a repo whose only sources use the NodeNext
+// .mts/.cts extensions was skipped entirely -- a silent zero, not an error. Exclusion is
+// covered above; extension coverage was not.
+func TestDetectLangsNodeNextExtensions(t *testing.T) {
+	for _, ext := range []string{".mts", ".cts", ".mjs", ".cjs", ".ts", ".js"} {
+		t.Run(ext, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "server"+ext), []byte("//x\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if got := DetectLangs(root, nil); !reflect.DeepEqual(got, []string{"typescript"}) {
+				t.Errorf("a repo whose only source is %s -> %v, want [typescript]", ext, got)
+			}
+		})
+	}
+}
+
 // Consent is flag-only and never prompts: repo-scan reaches it on the default path for
 // any repo containing Go, so a stdin read would stall a piped or unattended scan.
 func TestResolveGoBuildConsent(t *testing.T) {

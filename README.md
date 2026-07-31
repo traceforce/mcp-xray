@@ -116,6 +116,11 @@ TypeScript extract build-free (the target is never executed). Go has no build-fr
 compiles the target; that step runs only with `--codeql-allow-build` and is otherwise skipped with
 a warning; the scan never blocks on a prompt.
 
+Each language gets a time budget covering `database create` plus `analyze` — 600s by default.
+A target that exceeds it contributes nothing, so raise it for large repositories with
+`--codeql-timeout <seconds>` (or `MCPXRAY_CODEQL_TIMEOUT`); the flag wins when both are set.
+Exceeding the budget is reported as `timed out after Ns`, never as a clean zero.
+
 
 ## Output Format
 
