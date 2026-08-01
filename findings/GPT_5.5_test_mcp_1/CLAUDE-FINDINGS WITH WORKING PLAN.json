@@ -1,0 +1,239 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "AUTH-PRIVILEGE",
+              "shortDescription": {
+                "text": "Privilege escalation attempts"
+              }
+            },
+            {
+              "id": "INJECTION-SQL",
+              "shortDescription": {
+                "text": "INJECTION: Boolean-based injection in query should not return all users or bypass filtering."
+              }
+            },
+            {
+              "id": "AUTH-MISSING",
+              "shortDescription": {
+                "text": "AUTH: Unauthenticated caller should not be able to search the user database."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "AUTH-MISSING",
+          "level": "error",
+          "message": {
+            "text": "Unauthenticated caller should not be able to search the user database.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[{\\\"id\\\":3,\\\"username\\\":\\\"admin\\\",\\\"email\\\":\\\"admin@example.com\\\"}],\\\"count\\\":1,\\\"query\\\":\\\"admin@example.com\\\",\\\"field\\\":\\\"email\\\"}\"}]} [Verified: The tool returned real user records (admin username and email) without any authentication check, confirming that the user search endpoint is accessible to unauthenticated callers — a clear AUTH-MISSING vulnerability.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-PRIVILEGE",
+          "level": "warning",
+          "message": {
+            "text": "[Root cause of INJECTION-SQL] The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "originalRuleId": "INJECTION-SQL",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "warning",
+          "message": {
+            "text": "Boolean-based injection in query should not return all users or bypass filtering.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' OR '1'='1': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE username LIKE '%' OR '1'='1%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]} [Verified: The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-PRIVILEGE",
+          "level": "warning",
+          "message": {
+            "text": "[Root cause of INJECTION-SQL] The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "originalRuleId": "INJECTION-SQL",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "warning",
+          "message": {
+            "text": "UNION-based injection should not expose sensitive user table columns.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' UNION SELECT id,email,password_hash,api_key FROM users--': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE email LIKE '%' UNION SELECT id,email,password_hash,api_key FROM users--%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]} [Verified: The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-PRIVILEGE",
+          "level": "warning",
+          "message": {
+            "text": "[Root cause of INJECTION-SQL] The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "originalRuleId": "INJECTION-SQL",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "warning",
+          "message": {
+            "text": "Field-name injection should be rejected because only username and email are valid searchable fields.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"alice\\\",\\\"field\\\":\\\"username) OR 1=1--\\\"}\"}]} [Verified: The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "AUTH-PRIVILEGE",
+          "level": "warning",
+          "message": {
+            "text": "[Root cause of INJECTION-SQL] The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call."
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "originalRuleId": "INJECTION-SQL",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "warning",
+          "message": {
+            "text": "Sensitive column probing via field parameter should be blocked by field allowlisting.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"anything\\\",\\\"field\\\":\\\"password_hash\\\"}\"}]} [Verified: The server accepted 'password_hash' as a valid field parameter without rejecting it, indicating there is no allowlist restricting which columns can be searched. This field allowlist bypass is a real authorization/validation gap even though no sensitive data was returned in this call.]"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        }
+      ]
+    }
+  ]
+}

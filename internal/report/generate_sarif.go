@@ -156,6 +156,9 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		if finding.Fixed != "" {
 			properties["fixed"] = finding.Fixed
 		}
+		if finding.OriginalRuleId != "" {
+			properties["originalRuleId"] = finding.OriginalRuleId
+		}
 		if len(properties) > 0 {
 			result.Properties = properties
 		}

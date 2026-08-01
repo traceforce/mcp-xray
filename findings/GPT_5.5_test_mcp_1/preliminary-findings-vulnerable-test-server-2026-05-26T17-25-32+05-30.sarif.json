@@ -1,0 +1,113 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "INJECTION-SQL",
+              "shortDescription": {
+                "text": "INJECTION: Boolean-based injection in query should not return all users or bypass filtering."
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Boolean-based injection in query should not return all users or bypass filtering.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' OR '1'='1': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE username LIKE '%' OR '1'='1%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "UNION-based injection should not expose sensitive user table columns.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"error\\\":\\\"Database error\\\",\\\"details\\\":\\\"SQL Error near '' UNION SELECT id,email,password_hash,api_key FROM users--': syntax error in query SELECT id, username, email, role, is_admin FROM users WHERE email LIKE '%' UNION SELECT id,email,password_hash,api_key FROM users--%'\\\",\\\"hint\\\":\\\"Available columns: id, username, email, role, is_admin\\\",\\\"table\\\":\\\"users\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Field-name injection should be rejected because only username and email are valid searchable fields.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"alice\\\",\\\"field\\\":\\\"username) OR 1=1--\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-SQL",
+          "level": "error",
+          "message": {
+            "text": "Sensitive column probing via field parameter should be blocked by field allowlisting.. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"results\\\":[],\\\"count\\\":0,\\\"query\\\":\\\"anything\\\",\\\"field\\\":\\\"password_hash\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_GPT_5.5_test_mcp_1/working.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "vulnerable-test-server",
+            "mcpToolName": "search_users",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        }
+      ]
+    }
+  ]
+}
