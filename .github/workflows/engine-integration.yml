@@ -1,0 +1,32 @@
+name: engine-integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Guards the taint engine's real-engine behavior (rules load, source attribution, fatal
+# failures surface), which `make ci` cannot cover because it never installs opengrep.
+concurrency:
+  group: engine-integration-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  opengrep-taint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: bash scripts/install_opengrep.sh
+      - name: taint integration (real engine)
+        run: go test -run 'TestEngineIntegration|TestRunOpenGrepFatalOnBrokenRuleset' -v ./internal/reposcan/taint/...
+        env:
+          MCPXRAY_OPENGREP_BIN: ${{ github.workspace }}/bin/opengrep

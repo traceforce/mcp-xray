@@ -88,8 +88,17 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 ```
 **Detection Capabilities:**
 - **SCA**: Detects vulnerable dependencies using OSV API
-- **SAST**: Identifies unsafe command patterns and security anti-patterns
+- **SAST**: Taint analysis that traces MCP tool/handler inputs (sources) to dangerous
+  sinks — command injection, code injection, path traversal, SSRF, and SQL injection —
+  plus the existing unsafe-command pattern rules
 - **Secrets Detection**: Scans for hardcoded secrets and credentials
+
+The taint SAST uses the [OpenGrep](https://github.com/opengrep/opengrep) engine. Install
+the pinned, SHA-verified binary with `make install-opengrep` (Linux x86_64/arm64, macOS
+arm64/x86_64). On other platforms, install `opengrep` yourself and set
+`MCPXRAY_OPENGREP_BIN`. Taint analysis activates by installation: `repo-scan` runs it
+whenever the pinned engine is resolvable, and when the engine is absent it skips taint
+and still runs SCA, secrets, and the unsafe-command rules.
 
 
 ## Output Format

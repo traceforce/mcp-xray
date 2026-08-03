@@ -1,4 +1,4 @@
-.PHONY: all build install proto clean install-dependencies ci help
+.PHONY: all build install proto clean install-dependencies install-opengrep ci help
 
 DESTDIR = /usr/local/bin
 BINARY = mcpxray
@@ -22,6 +22,10 @@ else ifeq ($(OS),Linux)
 else
 	$(error Unsupported OS: $(OS). Install buf manually: https://buf.build/docs/installation)
 endif
+
+# Install the OpenGrep engine used by the repo-scan taint SAST (pinned + SHA-verified)
+install-opengrep:
+	bash scripts/install_opengrep.sh
 
 # Generate protobuf Go code
 proto:
@@ -56,4 +60,5 @@ help:
 	@echo "  proto         - Generate Go code from protobuf"
 	@echo "  clean         - Clean generated protobuf files and binary"
 	@echo "  install-dependencies - Install required dependencies (buf); supports macOS (brew) and Linux (go install)"
+	@echo "  install-opengrep     - Download the pinned OpenGrep engine for the repo-scan taint SAST"
 	@echo "  help          - Show this help message"

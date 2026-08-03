@@ -3,10 +3,12 @@ package reposcan
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"mcpxray/internal/reposcan/taint"
 	"mcpxray/internal/yararules"
 	"mcpxray/proto"
 )
@@ -114,6 +116,42 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	}
 
 	fmt.Printf("SAST found %d unsafe commands\n", len(allMatches))
-	// Convert matches to findings
-	return yararules.ToFindings(allMatches), nil
+	findings := yararules.ToFindings(allMatches)
+
+	// Taint engine runs in addition to the YARA scan above. It degrades quietly when
+	// the OpenGrep binary is absent, so existing YARA/SCA/secrets output is unaffected.
+	findings = append(findings, s.runTaintEngine(ctx)...)
+	return findings, nil
+}
+
+// runTaintEngine runs the OpenGrep source->sink taint engine. It activates by
+// installation: it runs whenever the pinned engine is resolvable (MCPXRAY_OPENGREP_BIN
+// or bin/opengrep next to the binary) and degrades quietly otherwise, so there is no
+// engine flag to keep in sync. Any failure returns no findings rather than aborting.
+func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
+	cfg := taint.DefaultConfig()
+	cfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
+	if s.config.MaxFileSize > 0 {
+		// Honor the user's --max-file-size for taint too (every other scanner respects it)
+		// instead of only the engine's own default. Clamp so the int64->int narrowing can
+		// never wrap to a small or negative byte cap on a 32-bit build.
+		maxBytes := s.config.MaxFileSize
+		if maxBytes > math.MaxInt {
+			maxBytes = math.MaxInt
+		}
+		cfg.MaxTargetBytes = int(maxBytes)
+	}
+	eng := taint.NewEngine(cfg)
+	if !eng.Available() {
+		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +
+			"(run `make install-opengrep` or set MCPXRAY_OPENGREP_BIN)")
+		return nil
+	}
+	paths, err := eng.Scan(ctx, s.repoPath)
+	if err != nil {
+		fmt.Printf("SAST taint engine error (skipping): %v\n", err)
+		return nil
+	}
+	fmt.Printf("SAST taint engine found %d taint paths\n", len(paths))
+	return taint.PathsToFindings(paths)
 }
