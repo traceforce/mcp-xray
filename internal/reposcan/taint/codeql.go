@@ -1,0 +1,849 @@
+package taint
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// CodeQL adds cross-file, interprocedural taint via the pinned bundle and the
+// version-controlled mcp_taint query packs. Python and JavaScript/TypeScript extract
+// build-free (source parsed, target never executed); Go has no build-free mode, so its
+// DB build compiles the target and is gated behind explicit consent (see consent.go).
+
+// our lang -> CodeQL language id; the pack lives under codeql/<cqLang>/. TypeScript
+// uses the javascript extractor (handles .ts and .js).
+var codeqlLangs = map[string]string{"python": "python", "go": "go", "typescript": "javascript"}
+
+var (
+	reTaintClass = regexp.MustCompile(`MCP-TAINT\[([a-z_]+)\]`)
+	// The message is `... sink=<api>: ...`; capture up to the ": " delimiter so an api that
+	// itself contains a colon (e.g. node:http.get) is not truncated at the first colon.
+	reSinkAPI = regexp.MustCompile(`sink=(\S+?):\s`)
+	// A named handler declaration + its param list: Python `def f(...)`, Go `func f(...)`
+	// or method `func (r T) f(...)`, and JS/TS `function f(...)` (incl. export/async).
+	reHandler = regexp.MustCompile(`\b(?:func\s+(?:\([^)]*\)\s*)?|def\s+|function\s+)([A-Za-z_$][\w$]*)\s*\(([^)]*)\)`)
+	// Same declaration but only up to the open paren, for a signature split across lines.
+	reHandlerName = regexp.MustCompile(`\b(?:func\s+(?:\([^)]*\)\s*)?|def\s+|function\s+)([A-Za-z_$][\w$]*)\s*\(`)
+	// JS/TS arrow handler assigned to a name: `const f = (args) =>` / `= async (args) =>`.
+	reArrowHandler = regexp.MustCompile(`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?\(([^)]*)\)\s*=>`)
+	// Go closure assigned to a name then registered separately (`h := func(ctx, in) {`,
+	// `var h = func(ctx, in) {`), the mcp-go `srv.AddTool(tool, h)` shape. Named here so
+	// the upward scan stops at the closure instead of walking on to the enclosing `main`.
+	// `:?=` matches `:=`/`=` but a struct field `Handler: func(...)` is not (it has `:`
+	// without `=`); `x := funcCall()` is not (`func\s*\(` needs `(` right after `func`).
+	reGoClosure = regexp.MustCompile(`\b(?:var\s+)?([A-Za-z_$][\w$]*)\s*:?=\s*func\s*\(([^)]*)\)`)
+	// JS/TS inline MCP registration `server.tool("name", (args) => {`: an anonymous callback
+	// whose tool-NAME string is the attribution, with the param on the same line.
+	reInlineHandler = regexp.MustCompile("\\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,\\s*(?:async\\s+)?(?:function\\s*)?\\(([^)]*)\\)")
+	// A JS/TS class or object-literal method declaration -- `async runCmd(args) {`,
+	// `public handle(req): void {`, `run_cmd(args) {`. Anchored and keyword-guarded (see
+	// notMethodKeyword) so a control statement like `if (cond) {` is never read as a handler.
+	reMethodDecl = regexp.MustCompile(`^\s*(?:(?:public|private|protected|static|readonly|async|get|set)\s+)*([A-Za-z_$][\w$]*)\s*\(([^)]*)\)\s*(?::[^{;]*)?\{\s*$`)
+	// A class body or object-literal opening ABOVE the source: we have left the handler's
+	// scope, so stop rather than walking into an unrelated earlier declaration.
+	reScopeBoundary = regexp.MustCompile(`^\s*(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+[A-Za-z_$]|^\s*(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*(?::[^=]*)?=\s*\{\s*$`)
+	// Registration calls that ENCLOSE a handler body. Includes the Go SDK / mcp-go
+	// AddTool|AddResource|AddPrompt|AddResourceTemplate forms, whose handler is a closure
+	// -- without them the upward scan runs past the registration and names the enclosing
+	// func (typically `main`) as the MCP tool.
+	reRegBoundary = regexp.MustCompile(`\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt|setRequestHandler|AddTool|AddResource|AddPrompt|AddResourceTemplate)\s*\(`)
+	reRegName     = regexp.MustCompile("\\.(?:tool|registerTool|resource|registerResource|prompt|registerPrompt)\\s*\\(\\s*[\"'`]([^\"'`]+)[\"'`]")
+	reIdent       = regexp.MustCompile(`^\s*([A-Za-z_$][\w$]*)`)
+	// A Go anonymous func literal opening a callback body on the registration line
+	// (`AddTool(tool, func(ctx, req) {`). Word-boundary anchored so it matches `func(` /
+	// `func (` but never a named `func main(` or an identifier ending in "func" (someFunc().
+	reFuncLit = regexp.MustCompile(`\bfunc\s*\(`)
+	// The OFFICIAL Go SDK carries the tool name in a STRUCT FIELD, not as a bare quoted
+	// first argument:
+	//
+	//	mcp.AddTool(s, &mcp.Tool{Name: "fetch_url"}, func(ctx, req, args) { ... })
+	//
+	// reRegName requires the string immediately after the open paren, so it cannot see this
+	// and the finding came back with tool name "unknown" -- newly visible, because the Go
+	// pack only recently started producing sources for literal-registered handlers.
+	//
+	// mark3labs' `newTool("run_cmd")` is deliberately NOT matched: that is a helper CALL
+	// whose argument is not reliably the tool name, so "unknown" stays the honest answer
+	// there (TestEnclosingHandlerGoOfficialSDKShapes pins it). A `Name:` struct field is
+	// unambiguous, which is why this one is safe to read.
+	reGoToolName = regexp.MustCompile(`\bName:\s*"([^"]+)"`)
+	// A Go func literal's parameter list, so the forward scan can recover a literal-registered
+	// handler's params the way it already does for JS callbacks
+	// (`func(ctx context.Context, req *mcp.CallToolRequest, args In) (...) {`).
+	//
+	// Deliberately NOT anchored to the line start: the official SDK's one-line form puts the
+	// literal after the tool struct on the same line as the registration
+	// (`mcp.AddTool(s, &mcp.Tool{Name: "x"}, func(ctx, req, args) {`). `\bfunc\s*\(` cannot
+	// match JS's `function (` -- "func" there is followed by "tion", not "(" -- so this stays
+	// Go-only despite running on every language's registrations.
+	reGoFuncLitOpen = regexp.MustCompile(`\bfunc\s*\(([^)]*)\)`)
+)
+
+// CodeQLConfig controls the CodeQL taint engine. Zero value is not usable; call
+// DefaultCodeQLConfig.
+type CodeQLConfig struct {
+	Bin          string // codeql executable
+	PackDir      string // dir containing <lang>/mcp_taint.ql
+	TimeoutSec   int
+	AllowGoBuild bool // consent to compile Go targets (see consent.go)
+}
+
+// codeqlDefaultTimeoutSec is the per-language budget covering database create AND analyze.
+// Large targets legitimately exceed it (a monorepo can spend the whole budget in
+// extraction alone), so it is overridable via MCPXRAY_CODEQL_TIMEOUT rather than being a
+// hard ceiling a user cannot move.
+const codeqlDefaultTimeoutSec = 600
+
+// codeqlTimeoutFromEnv reads MCPXRAY_CODEQL_TIMEOUT (seconds). A missing, unparseable, or
+// non-positive value yields the default -- a bad env var must not silently produce an
+// instantly-expired context, which would look like "0 taint paths".
+func codeqlTimeoutFromEnv() int {
+	if v := os.Getenv("MCPXRAY_CODEQL_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			return n
+		}
+	}
+	return codeqlDefaultTimeoutSec
+}
+
+// DefaultCodeQLConfig resolves the pinned bundle and packs. Zero value is not usable.
+func DefaultCodeQLConfig() CodeQLConfig {
+	return CodeQLConfig{Bin: findCodeQL(), PackDir: findPackDir(), TimeoutSec: codeqlTimeoutFromEnv()}
+}
+
+// CodeQLConfigFor resolves the default config, then lets an explicit per-language timeout
+// (the --codeql-timeout flag) win when overrideTimeoutSec > 0 -- the documented "flag wins
+// when both are set" contract. A zero or negative override means the caller said nothing,
+// so the env/default budget DefaultCodeQLConfig already resolved is kept; a bad flag can
+// never produce an instantly-expired budget. Extracted from sast.go so this precedence is
+// unit-tested rather than only exercised through a full engine scan.
+func CodeQLConfigFor(overrideTimeoutSec int) CodeQLConfig {
+	cfg := DefaultCodeQLConfig()
+	if overrideTimeoutSec > 0 {
+		cfg.TimeoutSec = overrideTimeoutSec
+	}
+	return cfg
+}
+
+// findCodeQL resolves the codeql executable only from an explicit, pinned source:
+// MCPXRAY_CODEQL_BIN (an exe or a bundle dir), then bin/codeql-bundle/codeql/codeql next
+// to the mcpxray binary. It deliberately does NOT fall back to a `codeql` on PATH, so
+// plain repo-scan never auto-activates cross-file analysis from an unrelated/unpinned
+// engine; to use one off PATH, set MCPXRAY_CODEQL_BIN to its full path (a bare name is
+// not PATH-resolved). "" when none is usable.
+func findCodeQL() string {
+	if b := os.Getenv("MCPXRAY_CODEQL_BIN"); b != "" {
+		// Absolutize against the current CWD (where isExec/Stat validate it) so a relative
+		// MCPXRAY_CODEQL_BIN can never later resolve against the scanned repo and run an
+		// attacker-planted binary (mirrors findOpengrep).
+		if abs, err := filepath.Abs(b); err == nil {
+			b = abs
+		}
+		if fi, err := os.Stat(b); err == nil && fi.IsDir() {
+			// Accept either the dir that directly holds the exe or a bundle root, whose
+			// standard layout nests it under codeql/ (<bundle>/codeql/<exe>).
+			for _, c := range []string{filepath.Join(b, codeqlExe()), filepath.Join(b, "codeql", codeqlExe())} {
+				if isExec(c) {
+					return c
+				}
+			}
+		} else if isExec(b) {
+			return b
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		if c := filepath.Join(filepath.Dir(exe), "bin", "codeql-bundle", "codeql", codeqlExe()); isExec(c) {
+			return c
+		}
+	}
+	return ""
+}
+
+// codeqlExe is the bundle's CLI filename for the current OS (codeql.exe on Windows),
+// so the bundle-dir and next-to-binary lookups resolve on every platform.
+func codeqlExe() string {
+	if runtime.GOOS == "windows" {
+		return "codeql.exe"
+	}
+	return "codeql"
+}
+
+// findPackDir resolves the query packs from MCPXRAY_CODEQL_PACKS or next to the mcpxray
+// binary. Returns "" (not a CWD-relative guess) when neither resolves, so Available() is
+// honestly false rather than self-activating from a ./codeql in the working directory.
+func findPackDir() string {
+	if d := os.Getenv("MCPXRAY_CODEQL_PACKS"); d != "" {
+		// Absolutize against the current CWD (where Available()'s Stat validates it) so a
+		// relative MCPXRAY_CODEQL_PACKS can't later resolve against the scanned repo and load
+		// attacker-planted query packs (mirrors findCodeQL / findOpengrep).
+		if abs, err := filepath.Abs(d); err == nil {
+			return abs
+		}
+		return d
+	}
+	if exe, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exe), "codeql")
+	}
+	return ""
+}
+
+// CodeQLEngine runs the CodeQL taint packs over a repo. Construct with NewCodeQLEngine.
+type CodeQLEngine struct{ cfg CodeQLConfig }
+
+// NewCodeQLEngine returns an engine bound to cfg.
+func NewCodeQLEngine(cfg CodeQLConfig) *CodeQLEngine { return &CodeQLEngine{cfg: cfg} }
+
+// Available reports whether the codeql binary and at least one query pack were resolved.
+func (e *CodeQLEngine) Available() bool {
+	if e.cfg.Bin == "" || e.cfg.PackDir == "" {
+		return false
+	}
+	if fi, err := os.Stat(e.cfg.PackDir); err != nil || !fi.IsDir() {
+		return false
+	}
+	// Require an actual pack. A directory that merely EXISTS would otherwise report
+	// available, and Scan would then skip every language (each fileExists(ql) misses) and
+	// return no paths and no error -- making a misconfigured MCPXRAY_CODEQL_PACKS
+	// indistinguishable from a clean deep scan.
+	for _, cqLang := range codeqlLangs {
+		if fileExists(filepath.Join(e.cfg.PackDir, cqLang, "mcp_taint.ql")) {
+			return true
+		}
+	}
+	return false
+}
+
+// Scan runs CodeQL for each supported language present in langs and returns the merged
+// paths plus a joined error for any language whose analysis FAILED. Languages that
+// succeed still contribute their paths; the error lets the caller distinguish "ran clean"
+// from "engine broke" so a failed analysis is never silently reported as zero findings.
+func (e *CodeQLEngine) Scan(ctx context.Context, repoPath string, langs []string) ([]PathRecord, error) {
+	if !e.Available() {
+		return nil, nil
+	}
+	// Backstop: never exec a relative engine path (findCodeQL already absolutizes). A
+	// relative bin could resolve against the scanned repo and run an attacker binary.
+	if !filepath.IsAbs(e.cfg.Bin) {
+		return nil, fmt.Errorf("codeql binary path must be absolute, got %q", e.cfg.Bin)
+	}
+	// Same backstop for the pack dir (joined into the query path below): findPackDir
+	// absolutizes, but a hand-built CodeQLConfig with a relative PackDir would otherwise
+	// load query packs from the scanned repo's CWD.
+	if !filepath.IsAbs(e.cfg.PackDir) {
+		return nil, fmt.Errorf("codeql pack dir must be absolute, got %q", e.cfg.PackDir)
+	}
+	root, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, err
+	}
+	// Resolve symlinks in the root, mirroring OpenGrep's Engine.Scan. CodeQL normally
+	// emits %SRCROOT%-relative URIs so this rarely matters, but if it ever emits an
+	// absolute URI under a symlinked root (macOS /tmp -> /private/tmp), withinRoot passes
+	// while relToRoot degrades Source/SinkFile to the bare basename -- which defeats
+	// dropExcludedPaths and can collapse two distinct same-basename findings via pathID.
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	var out []PathRecord
+	var errs []error
+	for _, lang := range langs {
+		cqLang, ok := codeqlLangs[lang]
+		if !ok {
+			continue
+		}
+		if lang == "go" && !e.cfg.AllowGoBuild {
+			continue // Go DB build compiles the target; skipped without consent.
+		}
+		ql := filepath.Join(e.cfg.PackDir, cqLang, "mcp_taint.ql")
+		if !fileExists(ql) {
+			// A language was DETECTED but its pack is absent -- a partial or misconfigured
+			// MCPXRAY_CODEQL_PACKS. Available() returns true when any one pack exists, so
+			// continuing silently here reports "found 0 taint paths" for a language that
+			// was never analysed. Available()'s own contract says that state must not be
+			// indistinguishable from a clean scan, so surface it.
+			errs = append(errs, fmt.Errorf("%s: no query pack at %s (language detected but not analysed)", lang, ql))
+			continue
+		}
+		sarif, err := e.runLang(ctx, root, cqLang, ql)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", lang, err))
+			continue
+		}
+		out = append(out, e.parseSarif(sarif, root)...)
+	}
+	return out, errors.Join(errs...)
+}
+
+// codeqlKillGrace is how long a codeql subprocess may run after its context is cancelled
+// before it is force-killed, so a hung run cannot outlive the deadline and block the
+// CombinedOutput read on its pipes.
+const codeqlKillGrace = 10 * time.Second
+
+// runLang builds a CodeQL DB and analyzes it. Failures return an error (with the
+// engine's own output) so a broken run is never silently reported as no findings.
+func (e *CodeQLEngine) runLang(ctx context.Context, root, cqLang, ql string) (*cqSarif, error) {
+	db, err := os.MkdirTemp("", "mcpxray-cqdb-*")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(db)
+	dbPath := filepath.Join(db, "db")
+	sarifPath := filepath.Join(db, "out.sarif")
+
+	timeout := e.cfg.TimeoutSec // default a partial Config so ctx isn't instantly expired
+	if timeout <= 0 {
+		timeout = codeqlDefaultTimeoutSec
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+	// Report the deadline as a deadline. Without this a language that exceeds the budget
+	// dies as an opaque "signal: killed" and contributes nothing -- unreadable in a scan
+	// log. runOpenGrep already distinguishes this case; mirror it.
+	deadline := func(stage string, err error, out []byte) error {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("%s timed out after %ds (raise CodeQLConfig.TimeoutSec or "+
+				"MCPXRAY_CODEQL_TIMEOUT for large targets)", stage, timeout)
+		}
+		return fmt.Errorf("%s: %w: %s", stage, err, tail(out))
+	}
+	createArgs := []string{"database", "create", dbPath, "--language=" + cqLang,
+		"--source-root=" + root, "--overwrite", "--quiet"}
+	if cqLang != "go" {
+		// Enforce build-free extraction for python/javascript by flag rather than relying
+		// on the default, so nothing in the target is executed. Go is the only build path,
+		// and it is gated by explicit consent (see consent.go).
+		createArgs = append(createArgs, "--build-mode=none")
+	}
+	create := exec.CommandContext(ctx, e.cfg.Bin, createArgs...)
+	create.WaitDelay = codeqlKillGrace
+	if o, err := create.CombinedOutput(); err != nil {
+		return nil, deadline("database create", err, o)
+	}
+	analyze := exec.CommandContext(ctx, e.cfg.Bin, "database", "analyze", dbPath, ql,
+		"--format=sarif-latest", "--output="+sarifPath,
+		"--search-path="+searchPath(e.cfg.Bin), "--rerun", "--quiet", "--threads=0")
+	analyze.WaitDelay = codeqlKillGrace
+	if o, err := analyze.CombinedOutput(); err != nil {
+		return nil, deadline("database analyze", err, o)
+	}
+	data, err := os.ReadFile(sarifPath)
+	if err != nil {
+		return nil, fmt.Errorf("read sarif: %w", err)
+	}
+	var s cqSarif
+	if err := json.Unmarshal(data, &s); err != nil {
+		return nil, fmt.Errorf("parse sarif: %w", err)
+	}
+	return &s, nil
+}
+
+// tail returns the last chunk of engine output for an error message.
+func tail(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	if len(s) > 200 {
+		return "..." + s[len(s)-200:]
+	}
+	return s
+}
+
+func (e *CodeQLEngine) parseSarif(s *cqSarif, root string) []PathRecord {
+	var out []PathRecord
+	// Cache each source file's lines so many results in one file don't re-read it.
+	fileLines := map[string][]string{}
+	for _, run := range s.Runs {
+		for _, r := range run.Results {
+			// CodeQL escapes [ ] in SARIF message text (brackets denote embedded links);
+			// unescape just those, not every backslash, so Windows paths and other escapes
+			// in the message aren't corrupted (which could break sink= parsing).
+			msg := strings.NewReplacer(`\[`, "[", `\]`, "]").Replace(r.Message.Text)
+			m := reTaintClass.FindStringSubmatch(msg)
+			if m == nil {
+				continue
+			}
+			vc := m[1]
+			nodes := threadNodes(r)
+			if len(nodes) == 0 {
+				continue
+			}
+			srcURI := normURI(nodes[0].uri)
+			sinkURI := normURI(nodes[len(nodes)-1].uri)
+			srcLine, sinkLine := nodes[0].line, nodes[len(nodes)-1].line
+			srcAbs := resolveInRoot(root, srcURI)
+			sinkAbs := resolveInRoot(root, sinkURI)
+			if !withinRoot(sinkAbs, root) || !withinRoot(srcAbs, root) {
+				continue
+			}
+			sinkSnippet := snippet(fileLines, sinkAbs, sinkLine, sinkLine)
+			sinkAPI := "unknown_sink"
+			if a := reSinkAPI.FindStringSubmatch(msg); a != nil {
+				sinkAPI = a[1]
+			} else if sinkSnippet != "" {
+				// Fallback for any result WITHOUT a sink= tag (all three packs emit one now,
+				// but a malformed or older SARIF may not). The sink node is the tainted
+				// ARGUMENT, so a call wrapped across lines leaves the api name on the line
+				// ABOVE (the call opens there) and the one-line snippet yields unknown_sink
+				// -- which also poisons pathID/sinkIdentity and defeats the cross-engine
+				// merge. Retry once over the sink line plus the line above. Never widen
+				// BELOW: the next line can be an unrelated statement whose api would be
+				// stolen (a path_traversal open() sink mislabelled with the following
+				// os.system) -- an honest unknown_sink beats a confidently wrong label.
+				sinkAPI = canonicalSinkAPI(sinkSnippet)
+				if sinkAPI == "unknown_sink" {
+					if wide := snippet(fileLines, sinkAbs, sinkLine-1, sinkLine); wide != "" {
+						if a := canonicalSinkAPI(wide); a != "unknown_sink" {
+							sinkAPI = a
+						}
+					}
+				}
+			}
+			fn, param := enclosingHandler(srcAbs, srcLine)
+			out = append(out, PathRecord{
+				VulnClass:      vc,
+				SourceFile:     relToRoot(srcAbs, root),
+				SourceLine:     srcLine,
+				SourceFunction: fn,
+				SourceParam:    param,
+				SinkFile:       relToRoot(sinkAbs, root),
+				SinkLine:       sinkLine,
+				SinkAPI:        sinkAPI,
+				Engine:         "codeql",
+				RuleID:         "mcp/taint",
+				IsCrossFile:    srcAbs != sinkAbs, // resolved paths: robust to file:// vs relative URIs
+				SinkSnippet:    sinkSnippet,
+			})
+		}
+	}
+	return out
+}
+
+// notMethodKeyword are control-flow keywords that reMethodDecl would otherwise capture
+// as a method name (`if (cond) {`, `catch (e) {`, ...).
+var notMethodKeyword = map[string]bool{
+	"if": true, "for": true, "while": true, "switch": true, "catch": true,
+	"do": true, "else": true, "try": true, "return": true, "with": true,
+	"function": true, "class": true,
+	// `func` guards a Go anonymous closure `func(ctx, in) {`: reMethodDecl runs before the
+	// registration-boundary check and would otherwise attribute the sink to a tool literally
+	// named "func" instead of stopping at the enclosing AddTool.
+	"func": true,
+	// `async` guards the anonymous TS callback of a multi-line registration:
+	//     server.registerTool(
+	//       "name", { schema },
+	//       async ({ url, headers }: any): Promise<ToolResult> => {
+	// reMethodDecl's optional-modifier group can match zero times, so it captured `async`
+	// itself as the method name -- findings were reported "in handler `async`". Excluding
+	// it lets the scan fall through to the enclosing registration, which names the tool.
+	"async": true,
+	// `await` and `yield` open parenthesised expressions in the same statement position.
+	"await": true, "yield": true,
+}
+
+// enclosingHandler scans upward from line for the nearest def/func declaration and
+// returns its name and first parameter. Best-effort (no AST): the SARIF region gives
+// only the source line, not the column, so on a multi-param handler this names the
+// first param, not necessarily the tainted one. Cross-engine merge therefore keys on
+// the sink identity (see MergePaths), not this param name.
+func enclosingHandler(file string, line int) (name, param string) {
+	data, err := os.ReadFile(file)
+	if err != nil || line <= 0 {
+		return "unknown", "unknown"
+	}
+	lines := strings.Split(string(data), "\n")
+	if line > len(lines) {
+		line = len(lines)
+	}
+	for i := line - 1; i >= 0; i-- {
+		ln := lines[i]
+		// Strongest signals first: a full named declaration, then an inline registration
+		// whose tool-name string and callback param are both on this line. Inline is tried
+		// before the boundary so the callback is named for its tool, not left "unknown".
+		if m := reHandler.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(m[2])
+		}
+		if m := reInlineHandler.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(m[2])
+		}
+		// A Go closure assigned to a name (`h := func(ctx, in) {`) -- named for the var so
+		// the scan stops here instead of reaching the enclosing `main`. Tried before the
+		// arrow check; neither pattern's regex matches the other.
+		if m := reGoClosure.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(m[2])
+		}
+		// A named arrow handler is tried before the boundary so one whose body itself
+		// calls a registration API (`const f = (a) => svc.resource(a)`) is named for the
+		// arrow rather than mistaken for a boundary.
+		if m := reArrowHandler.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(m[2])
+		}
+		// A class/object-literal method (`async runCmd(args) {`) -- the standard TS MCP
+		// handler shape, which carries no func/def/function keyword.
+		if m := reMethodDecl.FindStringSubmatch(ln); m != nil && !notMethodKeyword[m[1]] {
+			return m[1], firstParam(m[2])
+		}
+		// A registration call that ENCLOSES the source is the source's own boundary: stop
+		// so the scan never runs past it into a PRIOR tool (the false-accusation bug).
+		// Forms the inline regex can't parse (3-arg registerTool, multi-line,
+		// setRequestHandler) yield the tool name when present on this line, else "unknown".
+		if reRegBoundary.MatchString(ln) && enclosesSource(ln) {
+			// The official Go SDK's `&mcp.Tool{Name: "x"}` form, checked before the JS-shaped
+			// quoted-first-argument regex because the two cannot both match a line.
+			if m := reGoToolName.FindStringSubmatch(ln); m != nil {
+				return m[1], scanRegistration(lines, i, line).param
+			}
+			if m := reRegName.FindStringSubmatch(ln); m != nil {
+				// Name on the boundary line, callback params below (`server.tool("x",` then
+				// the arrow on the next line): recover the param by scanning forward.
+				return m[1], scanRegistration(lines, i, line).param
+			}
+			// Nothing on this line: a fully wrapped registration
+			//     server.registerTool(
+			//       "toolB",
+			//       { schema },
+			//       async ({ url }) => {
+			// Both the name string and the callback params sit BELOW the boundary, so read
+			// forward instead of giving up -- the same information the upward scan cannot
+			// see, in the same call.
+			r := scanRegistration(lines, i, line)
+			return r.name, r.param
+		}
+		// Leaving the enclosing class/object scope: report "unknown" rather than blaming
+		// whatever declaration happens to sit above it.
+		if reScopeBoundary.MatchString(ln) {
+			return "unknown", "unknown"
+		}
+		// A declaration whose signature is split across lines (`def f(` / `func f(`).
+		// reHandler only matches when the whole parameter list is on one line, so a
+		// wrapped signature reached here with the NAME recovered but the param given up
+		// on -- reporting `unknown` for a parameter OpenGrep names correctly. Join the
+		// continuation lines and recover it.
+		if m := reHandlerName.FindStringSubmatch(ln); m != nil {
+			return m[1], firstParam(joinSignature(lines, i))
+		}
+	}
+	return "unknown", "unknown"
+}
+
+// enclosesSource reports whether a matched MCP registration line plausibly encloses the
+// source below it rather than being a self-contained call within a handler body. A
+// boundary either carries its callback on the line (`=>` or `function`) or is left open
+// for the callback to continue below (ends with `(` or `,`); a call that closes on its
+// own line (`audit.tool("x");`) is an ordinary body call, not a boundary.
+func enclosesSource(ln string) bool {
+	if strings.Contains(ln, "=>") || strings.Contains(ln, "function") {
+		return true
+	}
+	t := strings.TrimSpace(ln)
+	t = strings.TrimSpace(strings.TrimRight(t, ";"))
+	// A Go anonymous func literal (mcp-go `AddTool(tool, func(ctx, req) {`). Go uses `func`,
+	// not `function`, and its one-line form ends in `{`, so without this the scan runs past
+	// the registration and misreports the enclosing func (`main`). Require the trailing `{`
+	// so a self-contained body call whose literal closes on the same line
+	// (`f("k", func(y){ return y })`) is NOT mistaken for a boundary.
+	if reFuncLit.MatchString(ln) && strings.HasSuffix(t, "{") {
+		return true
+	}
+	return strings.HasSuffix(t, "(") || strings.HasSuffix(t, ",")
+}
+
+// regAttr is what a forward scan of a multi-line registration recovered.
+type regAttr struct{ name, param string }
+
+var (
+	// The first quoted argument of a wrapped registration -- the tool name.
+	reRegNameLine = regexp.MustCompile("^\\s*[\"'`]([^\"'`]+)[\"'`]\\s*,?\\s*$")
+	// A callback opening on its own line: `async ({ url }: any) => {`, `(args) => {`,
+	// `function (args) {`, `async function (args) {`. The param list is captured.
+	reCallbackOpen = regexp.MustCompile(`^\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*(?::[^={;]*)?(?:=>)?\s*\{?\s*$`)
+	// A callback that is the LAST argument on a registration line whose first argument is
+	// not a string -- the dispatcher shape
+	//   this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+	// reInlineHandler cannot match it (it requires a quoted tool name first), so the
+	// param was left unknown even though it is right there on the line.
+	reTrailingCallback = regexp.MustCompile(`,\s*(?:async\s+)?(?:function\s*)?\(([^)]*)\)\s*(?::[^={;]*)?=>`)
+)
+
+// scanRegistration walks FORWARD from a multi-line registration boundary at lines[start]
+// to recover the tool name and the callback's first parameter, stopping at srcLine so it
+// can never read past the source it is attributing (which would pick up a LATER tool).
+//
+// Mirrors joinSignature: the information the upward scan needs is below the boundary, not
+// above it. Fields that are not found stay "unknown" -- degrade, never guess.
+func scanRegistration(lines []string, start, srcLine int) regAttr {
+	out := regAttr{name: "unknown", param: "unknown"}
+	end := start + sigMaxLines
+	if srcLine > 0 && srcLine < end {
+		end = srcLine // never cross the source line
+	}
+	for i := start; i < len(lines) && i < end; i++ {
+		ln := lines[i]
+		if out.name == "unknown" {
+			if m := reRegName.FindStringSubmatch(ln); m != nil {
+				out.name = m[1]
+			} else if m := reRegNameLine.FindStringSubmatch(ln); m != nil {
+				out.name = m[1]
+			} else if m := reGoToolName.FindStringSubmatch(ln); m != nil {
+				// The official Go SDK's `&mcp.Tool{Name: "x"}`, which can also sit on its own
+				// line in a wrapped registration.
+				out.name = m[1]
+			}
+		}
+		if out.param == "unknown" {
+			// Inline form first (`.tool("x", (a) => {` on one line), then a callback that
+			// opens on its own line after the name/schema arguments.
+			if m := reInlineHandler.FindStringSubmatch(ln); m != nil {
+				out.param = firstParam(m[2])
+			} else if m := reTrailingCallback.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				out.param = firstParam(m[1])
+			} else if m := reCallbackOpen.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				out.param = firstParam(m[1])
+			} else if m := reGoFuncLitOpen.FindStringSubmatch(ln); m != nil && strings.TrimSpace(m[1]) != "" {
+				// A Go func literal on its own line: `func(ctx, req, args In) (...) {`.
+				// reCallbackOpen cannot match it (that one expects the param list to open the
+				// line), so without this the literal-registered Go handler had no param.
+				out.param = firstParam(m[1])
+			}
+		}
+		if out.name != "unknown" && out.param != "unknown" {
+			break
+		}
+	}
+	return out
+}
+
+// sigMaxLines bounds how far a wrapped signature is followed. Real handler signatures
+// wrap over a handful of lines; a larger window would start swallowing the body when the
+// opening paren is never closed (minified or malformed source).
+const sigMaxLines = 40
+
+// joinSignature returns the parameter text of a declaration whose signature starts on
+// lines[start] and may wrap. It walks forward accumulating characters after the first
+// '(' until parens balance, so nested types keep their commas
+//
+//	def install(
+//	    install_dir: str,
+//	    opts: Dict[str, Any] = None,
+//	) -> str:
+//
+// yields "install_dir: str, opts: Dict[str, Any] = None,". Returns "" when the signature
+// does not close within sigMaxLines, which leaves the caller reporting "unknown" exactly
+// as before -- degrade, never guess.
+func joinSignature(lines []string, start int) string {
+	var b strings.Builder
+	depth, seen := 0, false
+	for i := start; i < len(lines) && i < start+sigMaxLines; i++ {
+		for _, r := range lines[i] {
+			switch r {
+			case '(':
+				depth++
+				if !seen {
+					// Opening paren of the signature itself: start capturing AFTER it.
+					seen = true
+					continue
+				}
+			case ')':
+				depth--
+				if depth == 0 {
+					return b.String()
+				}
+			}
+			if seen {
+				b.WriteRune(r)
+			}
+		}
+		if seen {
+			// Insert a space at each line break so a param list wrapped WITHOUT trailing
+			// commas cannot fuse two identifiers into one token across the wrap.
+			b.WriteRune(' ')
+		}
+	}
+	return ""
+}
+
+// firstParam returns the identifier of the first parameter in a signature's param
+// list, stripping any type annotation (`host: str` -> host, `url string` -> url).
+func firstParam(params string) string {
+	// A DESTRUCTURED object parameter -- `async ({ url, headers = {} }: any) =>`, the
+	// standard TS MCP handler shape -- has its real parameter names inside the braces.
+	// Without unwrapping, the leading `{ url` fails reIdent and the scan silently falls
+	// through to the SECOND field, reporting the wrong parameter rather than "unknown"
+	// (observed in the wild: `headers` reported where `url` was the tainted value). Only a
+	// LEADING `{` is a destructuring pattern; a `{` later in the list is an object TYPE or
+	// default on the first param (`(input: {url}, other)`), which must NOT be unwrapped.
+	if trimmed := strings.TrimSpace(params); strings.HasPrefix(trimmed, "{") {
+		if j := strings.LastIndex(trimmed, "}"); j > 0 {
+			if inner := strings.TrimSpace(trimmed[1:j]); inner != "" {
+				params = inner
+			}
+		}
+	}
+	for _, raw := range strings.Split(params, ",") {
+		p := strings.TrimSpace(strings.SplitN(raw, ":", 2)[0]) // python `name: T`
+		p = strings.TrimSpace(strings.SplitN(p, "=", 2)[0])    // JS default `headers = {}`
+		m := reIdent.FindStringSubmatch(p)
+		if m == nil {
+			continue
+		}
+		// Skip receivers and the injected Go context param: neither is ever the attacker-
+		// controlled value, so reporting them as the tainted parameter is always wrong.
+		// The context param is skipped by TYPE, not name, so the idiomatic `_ context.Context`
+		// / `c context.Context` / unnamed forms are all handled; a Python param literally
+		// named ctx carries no such type and is still returned.
+		switch {
+		case m[1] == "self" || m[1] == "cls":
+			continue
+		case strings.Contains(raw, "context.Context"):
+			continue
+		}
+		// A Go POINTER parameter is the SDK's request object (`req *mcp.CallToolRequest`),
+		// never the decoded tool input. The Go pack excludes it by type
+		// (`not p.getType()... instanceof PointerType`), so reporting it here contradicted
+		// the query that produced the finding: every official-SDK result named `req` where
+		// the source is the typed `args` struct that follows it.
+		//
+		// Matched on the TYPE, not anywhere in the text, so a Python default containing a
+		// multiplication (`b=2*3`) is not mistaken for a pointer.
+		if rest := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), m[1])); strings.HasPrefix(rest, "*") {
+			continue
+		}
+		return m[1] // handles go `name T` and bare `name`
+	}
+	return "unknown"
+}
+
+func searchPath(bin string) string {
+	// The bundle dir (parent of the codeql binary) ships the <lang>-all library packs, so
+	// it resolves query dependencies offline. Resolve symlinks first: a system install
+	// often links codeql into e.g. /usr/local/bin, whose dir has no qlpacks -- we need the
+	// real bundle dir the link points at.
+	if real, err := filepath.EvalSymlinks(bin); err == nil {
+		bin = real
+	}
+	return filepath.Dir(bin)
+}
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && !fi.IsDir()
+}
+
+// normURI turns a SARIF artifactLocation.uri into a plain path: strips a file:
+// scheme and percent-decodes it (CodeQL encodes spaces and other characters).
+func normURI(uri string) string {
+	if strings.HasPrefix(uri, "file:") {
+		if u, err := url.Parse(uri); err == nil && u.Path != "" {
+			// url.Parse already percent-decodes the path; decode once. A Windows URI
+			// yields "/C:/repo/x.py" -- drop the leading slash so the drive letter leads
+			// and filepath.IsAbs recognises it (otherwise resolveInRoot would join the
+			// whole absolute path under the scan root).
+			p := u.Path
+			if len(p) > 2 && p[0] == '/' && p[2] == ':' {
+				p = p[1:]
+			}
+			return p
+		}
+	}
+	if dec, err := url.PathUnescape(uri); err == nil {
+		return dec
+	}
+	return uri
+}
+
+// resolveInRoot joins a relative SARIF uri to the scan root; an absolute uri is used
+// as-is (withinRoot still confines it before any read).
+func resolveInRoot(root, uri string) string {
+	// filepath.IsAbs is GOOS-specific (false for "/etc/passwd" on Windows), so also treat a
+	// leading / or \ as absolute -- mirroring parse.go. Without this a POSIX-shaped absolute
+	// path would be joined under root on Windows, producing a bogus path that still passes
+	// the withinRoot confinement check.
+	if filepath.IsAbs(uri) || strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, `\`) {
+		return uri
+	}
+	return filepath.Join(root, uri)
+}
+
+type nodeLoc struct {
+	uri  string
+	line int
+}
+
+func threadNodes(r cqResult) []nodeLoc {
+	var out []nodeLoc
+	if len(r.CodeFlows) > 0 && len(r.CodeFlows[0].ThreadFlows) > 0 {
+		for _, tl := range r.CodeFlows[0].ThreadFlows[0].Locations {
+			pl := tl.Location.PhysicalLocation
+			if pl.ArtifactLocation.URI != "" && pl.Region.StartLine > 0 {
+				out = append(out, nodeLoc{pl.ArtifactLocation.URI, pl.Region.StartLine})
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	if len(r.Locations) > 0 {
+		pl := r.Locations[0].PhysicalLocation
+		if pl.ArtifactLocation.URI != "" && pl.Region.StartLine > 0 {
+			out = append(out, nodeLoc{pl.ArtifactLocation.URI, pl.Region.StartLine})
+		}
+	}
+	return out
+}
+
+// --- CodeQL SARIF (only the fields we consume) ---
+
+type cqSarif struct {
+	Runs []cqRun `json:"runs"`
+}
+
+type cqRun struct {
+	Results []cqResult `json:"results"`
+}
+
+type cqResult struct {
+	Message   cqText       `json:"message"`
+	Locations []cqLoc      `json:"locations"`
+	CodeFlows []cqCodeFlow `json:"codeFlows"`
+}
+
+type cqText struct {
+	Text string `json:"text"`
+}
+
+type cqLoc struct {
+	PhysicalLocation cqPhysical `json:"physicalLocation"`
+}
+
+type cqPhysical struct {
+	ArtifactLocation cqArtifact `json:"artifactLocation"`
+	Region           cqRegion   `json:"region"`
+}
+
+type cqArtifact struct {
+	URI string `json:"uri"`
+}
+
+type cqRegion struct {
+	StartLine int `json:"startLine"`
+}
+
+type cqCodeFlow struct {
+	ThreadFlows []cqThreadFlow `json:"threadFlows"`
+}
+
+type cqThreadFlow struct {
+	Locations []cqThreadLoc `json:"locations"`
+}
+
+type cqThreadLoc struct {
+	Location cqLoc `json:"location"`
+}

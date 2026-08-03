@@ -26,10 +26,14 @@ type PathRecord struct {
 // pathID is a stable identity for merge/dedup across engines. It includes the source
 // file (not just the sink) so two same-named handlers in different files reaching one
 // shared cross-file sink are not falsely deduped; the sink line disambiguates two sinks
-// of the same api in one function.
+// of the same api in one function. SourceLine is included so two distinct flows that share
+// a sink but originate on different lines -- common when the handler name is "unknown"
+// (setRequestHandler, multi-line registrations), which bypasses the sameFlow gate via this
+// exact-match fast path -- are not collapsed into one, dropping a finding. A genuine
+// cross-engine duplicate reported at different source lines still merges via sinkIdentity.
 func (p PathRecord) pathID() string {
 	return p.VulnClass + "|" + p.SourceFile + "|" + p.SinkFile + "|" + p.SourceFunction + "|" +
-		p.SinkAPI + "|" + p.SourceParam + "|" + strconv.Itoa(p.SinkLine)
+		p.SinkAPI + "|" + p.SourceParam + "|" + strconv.Itoa(p.SinkLine) + "|" + strconv.Itoa(p.SourceLine)
 }
 
 // --- OpenGrep JSON (only the fields we consume) ---

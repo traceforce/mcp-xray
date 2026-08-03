@@ -12,6 +12,14 @@ type Config struct {
 	// ExcludedPaths are path-segment patterns (files or directories) to exclude from
 	// scanning (e.g., ".venv", "node_modules", "cache").
 	ExcludedPaths []string
+	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
+	CodeQLAllowBuild bool
+	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
+	// seconds. Zero means the caller said nothing: fall back to MCPXRAY_CODEQL_TIMEOUT,
+	// then to codeqlDefaultTimeoutSec. A large target legitimately exceeds the default
+	// (reported as "timed out after Ns"), so the budget must be raisable without
+	// recompiling.
+	CodeQLTimeoutSec int
 }
 
 // DefaultConfig returns a configuration with sensible defaults
