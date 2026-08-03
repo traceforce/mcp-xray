@@ -12,6 +12,11 @@ type Config struct {
 	// ExcludedPaths are path-segment patterns (files or directories) to exclude from
 	// scanning (e.g., ".venv", "node_modules", "cache").
 	ExcludedPaths []string
+	// Root is the scan root. Exclude patterns are matched only against path segments
+	// BELOW it, so the name of a directory ABOVE the repo (a checkout under /tmp or
+	// ~/build) can never exclude the whole scan. Empty keeps the legacy whole-path
+	// behavior.
+	Root string
 	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
 	CodeQLAllowBuild bool
 	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
@@ -76,10 +81,28 @@ func DefaultConfig() *Config {
 	}
 }
 
-// ShouldExclude checks if a file path should be excluded based on the config
+// ShouldExclude checks if a file path should be excluded based on the config.
+// Matching is scoped to the part of the path BELOW Root: an exclude pattern must name
+// a directory or file inside the scanned repo. Without this, a repo checked out under
+// e.g. /tmp or ~/build matched the ancestor segment ("tmp", "build") and the entire
+// walk was skipped silently.
 func (c *Config) ShouldExclude(filePath string) bool {
+	// Scope to the repo: compare only the segments below the scan root. A path outside
+	// Root (rel starts with "..") falls back to whole-path matching rather than silently
+	// un-excluding it.
+	scoped := filePath
+	if c.Root != "" {
+		if rel, err := filepath.Rel(c.Root, filePath); err == nil &&
+			rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			scoped = rel
+		}
+	}
+
 	// Normalize path separators
-	normalizedPath := filepath.ToSlash(filepath.Clean(filePath))
+	normalizedPath := filepath.ToSlash(filepath.Clean(scoped))
+	if normalizedPath == "." {
+		return false // the scan root itself is never excluded
+	}
 	pathParts := strings.Split(normalizedPath, "/")
 
 	// Check each path segment against exclude patterns
