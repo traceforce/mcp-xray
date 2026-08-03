@@ -76,8 +76,17 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	var allMatches []yararules.UnsafeCommandMatch
 
 	err := filepath.Walk(s.repoPath, func(filePath string, info os.FileInfo, err error) error {
+		// Warn but continue when an ENTRY can't be walked or statted (e.g. permission
+		// denied): one bad path must not abort the scan, but the skip is surfaced so
+		// reduced coverage is not silent. The scan ROOT is different: if it cannot be
+		// read there is nothing to scan, and continuing would report a missing or
+		// unreadable repo as a clean zero-finding result with a valid SARIF and exit 0.
 		if err != nil {
-			return err
+			if filePath == s.repoPath {
+				return fmt.Errorf("cannot read scan root %s: %w", filePath, err)
+			}
+			fmt.Fprintf(os.Stderr, "reposcan: skipping %s: %v\n", filePath, err)
+			return nil
 		}
 
 		// Check if path should be excluded based on config
@@ -93,6 +102,12 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 			return nil
 		}
 
+		// Skip non-regular files (FIFOs, sockets, devices, symlinks). Reading a FIFO blocks
+		// forever and a socket/device errors; one such file must not hang or crash the scan.
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
 		// Skip files larger than configured max size
 		if info.Size() > s.config.MaxFileSize {
 			return nil
@@ -101,7 +116,9 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 		// Read file content
 		fileContent, err := os.ReadFile(filePath)
 		if err != nil {
-			return err
+			// Surface the skip so an unreadable file reduces coverage loudly, not silently.
+			fmt.Fprintf(os.Stderr, "reposcan: skipping unreadable %s: %v\n", filePath, err)
+			return nil
 		}
 
 		// Detect unsafe commands in this file
@@ -124,13 +141,19 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	return findings, nil
 }
 
-// runTaintEngine runs the OpenGrep source->sink taint engine. It activates by
-// installation: it runs whenever the pinned engine is resolvable (MCPXRAY_OPENGREP_BIN
-// or bin/opengrep next to the binary) and degrades quietly otherwise, so there is no
-// engine flag to keep in sync. Any failure returns no findings rather than aborting.
+// runTaintEngine runs every installed source->sink taint engine and merges their paths.
+// Engines activate by installation: OpenGrep (fast, intra-file) and CodeQL (deep,
+// cross-file) each run when their pinned binary is resolvable and degrade quietly
+// otherwise, so there is no engine flag at all -- installing an engine is what enables it.
+// Neither engine aborts the scan on failure: OpenGrep discards its results and reports
+// the error, while CodeQL keeps whatever paths the languages that succeeded produced and
+// reports the ones that failed.
 func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
-	cfg := taint.DefaultConfig()
-	cfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
+	var paths []taint.PathRecord
+
+	// OpenGrep: fast intra-file Python taint.
+	ocfg := taint.DefaultConfig()
+	ocfg.Excludes = s.config.ExcludedPaths // honor the same exclusions as SCA/secrets/YARA
 	if s.config.MaxFileSize > 0 {
 		// Honor the user's --max-file-size for taint too (every other scanner respects it)
 		// instead of only the engine's own default. Clamp so the int64->int narrowing can
@@ -139,19 +162,63 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 		if maxBytes > math.MaxInt {
 			maxBytes = math.MaxInt
 		}
-		cfg.MaxTargetBytes = int(maxBytes)
+		ocfg.MaxTargetBytes = int(maxBytes)
 	}
-	eng := taint.NewEngine(cfg)
-	if !eng.Available() {
-		fmt.Println("SAST taint engine (opengrep) not found; skipping taint analysis " +
+	if eng := taint.NewEngine(ocfg); eng.Available() {
+		if p, err := eng.Scan(ctx, s.repoPath); err != nil {
+			fmt.Printf("SAST opengrep error (skipping): %v\n", err)
+		} else {
+			fmt.Printf("SAST opengrep found %d taint paths\n", len(p))
+			paths = append(paths, p...)
+		}
+	} else {
+		// Names the engine, not "taint analysis": the CodeQL pass below may still run, and
+		// claiming taint was skipped while reporting CodeQL paths reads as a contradiction.
+		fmt.Println("SAST opengrep engine not found; skipping the fast intra-file pass " +
 			"(run `make install-opengrep` or set MCPXRAY_OPENGREP_BIN)")
-		return nil
 	}
-	paths, err := eng.Scan(ctx, s.repoPath)
-	if err != nil {
-		fmt.Printf("SAST taint engine error (skipping): %v\n", err)
-		return nil
+
+	// CodeQL: the deep cross-file/interprocedural pass (slower; builds a DB per language).
+	// Resolves the bin+packs once (Stat/Executable) and applies the --codeql-timeout
+	// override: an explicit flag (>0) wins over the env default, 0 keeps whatever was
+	// resolved. Precedence lives in CodeQLConfigFor so it is unit-tested, not just run here.
+	ccfg := taint.CodeQLConfigFor(s.config.CodeQLTimeoutSec)
+	if !taint.NewCodeQLEngine(ccfg).Available() {
+		fmt.Println("SAST codeql engine not available (needs the codeql binary and query packs); " +
+			"skipping (run `make install-codeql`, or set MCPXRAY_CODEQL_BIN / MCPXRAY_CODEQL_PACKS)")
+	} else {
+		// Pass exclusions into DETECTION, not just result-filtering: a language living only
+		// in an excluded dir must not trigger the Go consent warning, and must not be
+		// extracted/compiled by `database create` under --codeql-allow-build.
+		langs := taint.DetectLangs(s.repoPath, s.config.ShouldExclude)
+		ccfg.AllowGoBuild = taint.ResolveGoBuildConsent(langs, s.config.CodeQLAllowBuild)
+		// Keep any partial results, but surface an analysis failure loudly instead of
+		// letting a broken CodeQL run read as a clean "found 0 taint paths".
+		p, err := taint.NewCodeQLEngine(ccfg).Scan(ctx, s.repoPath, langs)
+		p = s.dropExcludedPaths(p) // CodeQL has no engine-side exclude; honor it here
+		paths = append(paths, p...)
+		// Report the failure FIRST so a partial result is never read as a complete one,
+		// then always report a count -- a genuine clean run must be visibly distinct from
+		// the engine never having run.
+		if err != nil {
+			fmt.Printf("SAST codeql analysis failed (results may be incomplete): %v\n", err)
+		}
+		fmt.Printf("SAST codeql found %d taint paths\n", len(p))
 	}
-	fmt.Printf("SAST taint engine found %d taint paths\n", len(paths))
-	return taint.PathsToFindings(paths)
+
+	return taint.PathsToFindings(taint.MergePaths(paths))
+}
+
+// dropExcludedPaths removes taint paths whose sink or source file is under a configured
+// excluded path, so CodeQL honors the same exclusions as opengrep/SCA/secrets (its
+// extraction has no engine-side exclude, so its results are filtered here).
+func (s *SASTScanner) dropExcludedPaths(paths []taint.PathRecord) []taint.PathRecord {
+	out := paths[:0]
+	for _, p := range paths {
+		if s.config.ShouldExclude(p.SinkFile) || s.config.ShouldExclude(p.SourceFile) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }

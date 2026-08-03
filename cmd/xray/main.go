@@ -208,11 +208,15 @@ func NewRepoScanCommand() *cobra.Command {
 			enableCVE, _ := cmd.Flags().GetBool("cve")
 			enableSecrets, _ := cmd.Flags().GetBool("secrets")
 			enableSAST, _ := cmd.Flags().GetBool("sast")
+			codeqlAllowBuild, _ := cmd.Flags().GetBool("codeql-allow-build")
+			codeqlTimeout, _ := cmd.Flags().GetInt("codeql-timeout")
 
 			// Build config; ExcludedPaths is filled in below from the flags.
 			config := &reposcan.Config{
-				MaxFileSize: 10 * 1024 * 1024, // 10MB default
-				Root:        repoPath,         // scope excludes to the repo, not its parents
+				MaxFileSize:      10 * 1024 * 1024, // 10MB default
+				Root:             repoPath,         // scope excludes to the repo, not its parents
+				CodeQLAllowBuild: codeqlAllowBuild,
+				CodeQLTimeoutSec: codeqlTimeout,
 			}
 
 			// Apply max file size if specified
@@ -311,6 +315,8 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Bool("cve", false, "Run CVE/SCA scan (software composition analysis)")
 	cmd.Flags().Bool("secrets", false, "Run secrets scan")
 	cmd.Flags().Bool("sast", false, "Run SAST scan (static application security testing)")
+	cmd.Flags().Bool("codeql-allow-build", false, "Allow CodeQL to build a Go database (runs the Go toolchain, which can execute build-time code; only for trusted repos)")
+	cmd.Flags().Int("codeql-timeout", 0, "Per-language CodeQL budget in seconds, covering database create + analyze (0 = MCPXRAY_CODEQL_TIMEOUT, else 600). Raise for large repositories.")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
 	return cmd

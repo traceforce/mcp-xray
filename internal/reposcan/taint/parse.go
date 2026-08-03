@@ -58,6 +58,7 @@ func resultsToPaths(out *ogOutput, root string) []PathRecord {
 			}
 		}
 		sinkAPI = shellSuffixFromClass(vc, sinkAPI)
+		sinkAPI = pathlibLabelFromClass(vc, sinkAPI, sinkSnippet)
 		rec := PathRecord{
 			VulnClass:      vc,
 			SourceFile:     rel,
@@ -130,6 +131,39 @@ func shellSuffixFromClass(vulnClass, api string) string {
 	}
 	if shelledSubprocessFns[api] {
 		return api + "+shell=True"
+	}
+	return api
+}
+
+// pathlibLabelFromClass aligns the INLINE `Path(x).read_text()` / `.write_text()` form with
+// the CodeQL pack, which has no read_text/write_text sink at all: its only pathlib sink is
+// the `Path(...)` construction, so it labels that line `pathlib.Path`.
+//
+// This cannot live in canonicalSinkAPI's switch, because the same line can be two different
+// sinks at once and only the vuln class distinguishes them:
+//
+//	data = eval(Path(name).read_text())
+//
+// is a code_injection at `eval` AND a path_traversal at the Path() construction. The switch
+// sees one line and must pick one answer; it picks the enclosing call (`eval`), which is
+// right for the code_injection finding. For the path_traversal finding on that same line the
+// sink really is the Path() construction, and that is what this corrects.
+//
+// Only path_traversal is touched, and only when the inline read/write shape is present -- a
+// line like `open(Path(base) / name)` has no read_text/write_text and keeps its `open`
+// label, matching CodeQL.
+//
+// SinkAPI is part of sinkIdentity, so a disagreement here splits one vulnerability into two
+// reports. TestSinkAPILabelParity pins the pair.
+func pathlibLabelFromClass(vulnClass, api, snippet string) string {
+	if vulnClass != "path_traversal" {
+		return api
+	}
+	if !strings.Contains(snippet, "Path(") {
+		return api
+	}
+	if strings.Contains(snippet, ".read_text(") || strings.Contains(snippet, ".write_text(") {
+		return "pathlib.Path"
 	}
 	return api
 }
@@ -231,21 +265,29 @@ func canonicalSinkAPI(code string) string {
 		return "os.open"
 	case strings.Contains(c, "codecs.open("):
 		return "codecs.open"
-	case strings.Contains(c, ".read_text("):
-		return "pathlib.read_text"
-	case strings.Contains(c, ".write_text("):
-		return "pathlib.write_text"
-	// Path(tainted) construction: the CodeQL pack's path_traversal sink node for the
-	// two-statement `p = Path(x); p.read_text()` form, where the read is on another line.
-	// After the read_text/write_text arms so the inline form keeps its precise label.
-	case strings.Contains(c, "Path("):
-		return "pathlib.Path"
+	// The ENCLOSING call wins. A snippet is one line and a line can mention several sink
+	// names, so the arms below are ordered outermost-first: `open(Path(base) / name)` is an
+	// open() sink whose argument merely happens to be built with Path(), and CodeQL labels
+	// it `open`. A bare `Path(` test placed above `open(` claimed that line for pathlib and
+	// split the finding across engines -- one vulnerability reported twice, which is the
+	// failure sinkIdentity exists to prevent.
+	//
+	// `Path(` is therefore LAST of this group: it only claims a line where nothing encloses
+	// it, i.e. the two-statement `p = Path(x)` form whose read is on another line.
+	// The inline `Path(x).read_text()` form is handled by pathlibLabelFromClass, which needs
+	// the vuln class to decide and so cannot live in this switch.
 	case strings.Contains(c, "open("):
 		return "open"
 	case strings.Contains(c, "eval("):
 		return "eval"
 	case strings.Contains(c, "exec("):
 		return "exec"
+	case strings.Contains(c, ".read_text("):
+		return "pathlib.read_text"
+	case strings.Contains(c, ".write_text("):
+		return "pathlib.write_text"
+	case strings.Contains(c, "Path("):
+		return "pathlib.Path"
 	// Checked last so a specific sink wrapping a text() arg (requests.get(text(u)),
 	// session.execute(text(q))) is labeled by that sink; only a standalone sqlalchemy.text
 	// or a bare `from sqlalchemy import text` call lands here.

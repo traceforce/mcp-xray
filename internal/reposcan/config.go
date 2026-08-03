@@ -17,6 +17,14 @@ type Config struct {
 	// ~/build) can never exclude the whole scan. Empty keeps the legacy whole-path
 	// behavior.
 	Root string
+	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
+	CodeQLAllowBuild bool
+	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
+	// seconds. Zero means the caller said nothing: fall back to MCPXRAY_CODEQL_TIMEOUT,
+	// then to codeqlDefaultTimeoutSec. A large target legitimately exceeds the default
+	// (reported as "timed out after Ns"), so the budget must be raisable without
+	// recompiling.
+	CodeQLTimeoutSec int
 }
 
 // DefaultConfig returns a configuration with sensible defaults
