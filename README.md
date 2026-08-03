@@ -88,9 +88,38 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 ```
 **Detection Capabilities:**
 - **SCA**: Detects vulnerable dependencies using OSV API
-- **SAST**: Identifies unsafe command patterns and security anti-patterns
+- **SAST**: Taint analysis that traces MCP tool/handler inputs (sources) to dangerous
+  sinks — command injection, code injection, path traversal, SSRF, and SQL injection —
+  plus the existing unsafe-command pattern rules
 - **Secrets Detection**: Scans for hardcoded secrets and credentials
 
+The taint SAST uses the [OpenGrep](https://github.com/opengrep/opengrep) engine. Install
+the pinned, SHA-verified binary with `make install-opengrep` (Linux x86_64/arm64, macOS
+arm64/x86_64). On other platforms, install `opengrep` yourself and set
+`MCPXRAY_OPENGREP_BIN`. Taint analysis activates by installation: `repo-scan` runs it
+whenever the pinned engine is resolvable, and when the engine is absent it skips taint
+and still runs SCA, secrets, and the unsafe-command rules.
+
+For cross-file, interprocedural taint on Go and TypeScript (and Python), install the CodeQL
+engine. It activates by installation too, and its findings are merged with OpenGrep's:
+
+```bash
+make install-codeql                        # pinned CodeQL bundle (Linux x86_64, macOS, Windows)
+./mcpxray repo-scan <repo>                 # every installed engine runs; results merged
+```
+
+CodeQL builds a database per language, so a scan takes noticeably longer once the bundle is
+installed; that cost is the price of cross-file analysis. To drop back to the fast intra-file
+pass, uninstall the engine the way you installed it: remove the bundle from `make install-codeql`
+(it lives next to the binary), or unset `MCPXRAY_CODEQL_BIN` if you pointed it at one. Python and
+TypeScript extract build-free (the target is never executed). Go has no build-free mode, so CodeQL
+compiles the target; that step runs only with `--codeql-allow-build` and is otherwise skipped with
+a warning; the scan never blocks on a prompt.
+
+Each language gets a time budget covering `database create` plus `analyze` — 600s by default.
+A target that exceeds it contributes nothing, so raise it for large repositories with
+`--codeql-timeout <seconds>` (or `MCPXRAY_CODEQL_TIMEOUT`); the flag wins when both are set.
+Exceeding the budget is reported as `timed out after Ns`, never as a clean zero.
 
 ## Output Format
 

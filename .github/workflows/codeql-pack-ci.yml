@@ -1,0 +1,88 @@
+name: codeql-pack-ci
+
+# Determinism gate for the CodeQL query packs: install the SHA-pinned bundle, assert it
+# ships the pinned library-pack versions, compile all three packs, then run the real
+# SARIF -> parser integration test. Downloads ~810 MB on purpose (no cache), so it runs
+# only when the packs/adapter/installer change.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    # Include this workflow itself -- it holds the *_ALL_VERSION pins, so a pin-bump
+    # can never merge on a check that never ran.
+    paths:
+      - 'codeql/**'
+      - 'scripts/install_codeql.sh'
+      - 'scripts/install_opengrep.sh'
+      # The real-engine gates live across the whole taint package (adapter, parser, tests,
+      # fixtures), so any change there must re-run them -- not just codeql.go.
+      - 'internal/reposcan/taint/**'
+      - '.github/workflows/codeql-pack-ci.yml'
+  pull_request:
+    paths:
+      - 'codeql/**'
+      - 'scripts/install_codeql.sh'
+      - 'scripts/install_opengrep.sh'
+      - 'internal/reposcan/taint/**'
+      - '.github/workflows/codeql-pack-ci.yml'
+
+permissions:
+  contents: read
+
+# Serialize per ref and cancel superseded runs: each job is an uncached ~810 MB / 20-min
+# download, so three quick pushes must not fan out into three concurrent jobs.
+concurrency:
+  group: codeql-pack-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GO_ALL_VERSION: '7.1.2'
+      PYTHON_ALL_VERSION: '7.1.2'
+      JAVASCRIPT_ALL_VERSION: '2.7.2'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      # Deliberately uncached: the SHA-256 pin in install_codeql.sh is the supply-chain
+      # control, re-verified on every run. Do NOT add actions/cache for the bundle -- it
+      # would restore an unverified copy and silently disable that check.
+      - name: Install pinned CodeQL bundle
+        run: bash scripts/install_codeql.sh
+      - name: Assert bundle ships the pinned library-pack versions
+        run: |
+          set -euo pipefail
+          ROOT="bin/codeql-bundle/codeql"
+          for pack_ver in "go-all/${GO_ALL_VERSION}" "python-all/${PYTHON_ALL_VERSION}" "javascript-all/${JAVASCRIPT_ALL_VERSION}"; do
+            if [[ ! -d "${ROOT}/qlpacks/codeql/${pack_ver}" ]]; then
+              echo "[FATAL] bundle does not ship codeql/${pack_ver}; pin drift."
+              exit 1
+            fi
+            echo "[*] verified codeql/${pack_ver}"
+          done
+      - name: Compile query packs
+        run: |
+          set -euo pipefail
+          ROOT="bin/codeql-bundle/codeql"
+          for pack in python go javascript; do
+            "${ROOT}/codeql" query compile --search-path="${ROOT}" "codeql/${pack}/mcp_taint.ql"
+          done
+      # The two label-parity gates (V43-4) need BOTH engines, so install OpenGrep too.
+      - name: Install pinned OpenGrep engine
+        run: bash scripts/install_opengrep.sh
+      # Runs every real-engine gate: the Python/JS parser contract, the Go official-SDK gate
+      # (V43-1), the JS sqli receiver-precision gate (V43-5), and the two cross-engine
+      # label-parity gates (V43-4). The runner ships node and this job installs Go and
+      # OpenGrep, which these gates need; leaving them out let a pack/adapter regression they
+      # were written to catch ship green.
+      - name: CodeQL taint integration (real SARIF -> parser contract; Python, JS, Go, sqli precision, cross-engine parity)
+        run: go test -run 'TestCodeQLIntegration$|TestCodeQLIntegrationJS$|TestCodeQLIntegrationGoOfficialSDK$|TestCodeQLSqliReceiverPrecision$|TestSinkAPILabelParity$|TestMergeCorroboratesOnParityFixture$' -v ./internal/reposcan/taint/...
+        env:
+          MCPXRAY_CODEQL_BIN: ${{ github.workspace }}/bin/codeql-bundle
+          MCPXRAY_OPENGREP_BIN: ${{ github.workspace }}/bin/opengrep

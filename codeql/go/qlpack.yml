@@ -1,0 +1,14 @@
+name: traceforce/mcp-codeql-go
+version: 0.1.0
+# The MCP taint query pack (Go). Deterministic: MCP SDK arg-accessor sources
+# (RequireString/GetArguments/...) + static per-class sinks + CodeQL's
+# interprocedural taint. codeql/go-all is provided offline by the CodeQL bundle
+# at analyze time (the adapter passes --search-path to the bundle).
+#
+# Version pin = the exact go-all shipped in the pinned bundle (v2.25.6). NOTE:
+# `--search-path` resolution does NOT enforce this constraint (it binds whatever
+# go-all the bundle ships), so the real determinism levers are (1) the SHA-pinned
+# bundle in scripts/install_codeql.sh and (2) the version-assert in
+# .github/workflows/codeql-pack-ci.yml. This line documents the tested version.
+dependencies:
+  codeql/go-all: 7.1.2
