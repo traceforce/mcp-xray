@@ -431,10 +431,23 @@ func NewPentestCommand() *cobra.Command {
 
 			// Run pentest
 			ctx := context.Background()
-			findings, err := pentestTool.Pentest(ctx, testPlanPath)
-			if err != nil {
-				fmt.Printf("Error running pentest: %v\n", err)
-				os.Exit(1)
+			mode, _ := cmd.Flags().GetString("mode")
+			var findings []*proto.Finding
+
+			if mode == "agent" {
+				// Agent mode: adaptive LLM-driven pentest
+				findings, err = pentestTool.RunAgentMode(ctx)
+				if err != nil {
+					fmt.Printf("Error running agent pentest: %v\n", err)
+					os.Exit(1)
+				}
+			} else {
+				// Plan mode (default): static test plan execution
+				findings, err = pentestTool.Pentest(ctx, testPlanPath)
+				if err != nil {
+					fmt.Printf("Error running pentest: %v\n", err)
+					os.Exit(1)
+				}
 			}
 
 			// If using directory mode, always merge all per-tool test plans and write merged file
@@ -493,6 +506,7 @@ func NewPentestCommand() *cobra.Command {
 	}
 	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
 	cmd.Flags().Int("llm-max-retries", 3, "Maximum number of retries on transient LLM errors (rate limits, timeouts, 5xx), 0 = no retries")
+	cmd.Flags().String("mode", "plan", "Pentest mode: 'plan' (static test plan execution) or 'agent' (adaptive LLM-driven pentest)")
 	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
 	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
