@@ -9,8 +9,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/joho/godotenv"
+	"github.com/tmc/langchaingo/llms"
+	"github.com/tmc/langchaingo/llms/anthropic"
+	"github.com/tmc/langchaingo/llms/openai"
+	"github.com/zalando/go-keyring"
+	"golang.org/x/term"
 )
 
 const (
@@ -26,59 +30,109 @@ const (
 )
 
 type LLMClient struct {
-	ChatClient ChatClient
-	llmType    int
-	timeout    time.Duration
+	model   llms.Model
+	llmType int
+	timeout time.Duration
 }
 
 const (
-	MAX_TOKENS_ANTHROPIC = 12000
-	MAX_TOKENS_OPENAI    = 12000
-	MAX_TOKENS_AWS       = 2048
+	MAX_TOKENS = 12000
 )
 
-// NewLLMClientFromEnvWithModel creates a new LLM client from environment variables
+// resolveAPIKey checks environment variables, then the OS keyring.
+// If neither is found, it interactively prompts the user, then saves to the keyring.
+func resolveAPIKey(providerName string, envVarName string) (string, error) {
+	// 1. Check environment variable
+	if key := os.Getenv(envVarName); key != "" {
+		return key, nil
+	}
+
+	// 2. Check OS keyring
+	key, err := keyring.Get("mcpxray", providerName)
+	if err == nil && key != "" {
+		return key, nil
+	}
+
+	// 3. Interactively prompt
+	fmt.Printf("API Key for %s (%s) not found in environment or keyring.\n", providerName, envVarName)
+	fmt.Printf("Please enter your API Key: ")
+
+	// Read securely if it's a terminal, otherwise fallback
+	var input string
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			return "", fmt.Errorf("failed to read password: %w", err)
+		}
+		input = string(bytePassword)
+		fmt.Println() // Print newline after hidden input
+	} else {
+		_, err := fmt.Scanln(&input)
+		if err != nil {
+			return "", fmt.Errorf("failed to read input: %w", err)
+		}
+	}
+
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", errors.New("empty API key provided")
+	}
+
+	// 4. Save to keyring
+	err = keyring.Set("mcpxray", providerName, input)
+	if err != nil {
+		fmt.Printf("Warning: Failed to save key to keyring: %v\n", err)
+	} else {
+		fmt.Printf("Successfully saved %s API key to secure keyring.\n", providerName)
+	}
+
+	return input, nil
+}
+
+// NewLLMClientFromEnvWithModel creates a new LLM client using langchaingo
 func NewLLMClientFromEnvWithModel(model string, timeout time.Duration, maxRetries int) (*LLMClient, error) {
 	if model == "" {
 		return nil, errors.New("model is required")
 	}
 
-	// Try to load environment variables from .env file. Ignores error if .env doesn't exist as we
-	// will try to load from the environment variables directly
 	_ = godotenv.Load()
 
+	var llmModel llms.Model
+	var err error
 	llmType := LLM_TYPE_UNKNOWN
-	var chatClient ChatClient
+
 	if strings.HasPrefix(strings.ToLower(model), "claude-") {
 		llmType = LLM_TYPE_ANTHROPIC
-		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if apiKey == "" {
-			return nil, errors.New("To use Anthropic models, the Environment variable ANTHROPIC_API_KEY is required")
+		apiKey, resolveErr := resolveAPIKey("Anthropic", "ANTHROPIC_API_KEY")
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
-		chatClient = NewAnthropicClient(apiKey, model, maxRetries)
-	} else if strings.HasPrefix(strings.ToLower(model), "gpt-") {
+		llmModel, err = anthropic.New(
+			anthropic.WithModel(model),
+			anthropic.WithToken(apiKey),
+		)
+	} else if strings.HasPrefix(strings.ToLower(model), "gpt-") || strings.HasPrefix(strings.ToLower(model), "o1-") {
 		llmType = LLM_TYPE_OPENAI
-		apiKey := os.Getenv("OPENAI_API_KEY")
-		if apiKey == "" {
-			return nil, errors.New("To use OpenAI models, the Environment variable OPENAI_API_KEY is required")
+		apiKey, resolveErr := resolveAPIKey("OpenAI", "OPENAI_API_KEY")
+		if resolveErr != nil {
+			return nil, resolveErr
 		}
-		chatClient = NewOpenAIClient(apiKey, model, maxRetries)
-	} else if strings.HasPrefix(strings.ToLower(model), "arn:aws:bedrock:") && strings.Contains(strings.ToLower(model), "llama") {
-		llmType = LLM_TYPE_AWS
-		cfg, err := config.LoadDefaultConfig(context.Background())
-		if err != nil {
-			return nil, fmt.Errorf("To use AWS models, the AWS config must be loaded: %w", err)
-		}
-		chatClient = NewBedrockLlamaClient(cfg, model, maxRetries)
+		llmModel, err = openai.New(
+			openai.WithModel(model),
+			openai.WithToken(apiKey),
+		)
 	} else {
-		example := "arn:aws:bedrock:us-east-2:522814721969:inference-profile/us.meta.llama3-2-1b-instruct-v1:0"
-		return nil, fmt.Errorf("Unsupported LLM model: %v. If you are using an AWS model, it must be an Meta Llama inference profile ARN starting with 'arn:aws:bedrock:' (e.g. %v)", model, example)
+		return nil, fmt.Errorf("Unsupported LLM model provider prefix: %v", model)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize langchaingo client: %w", err)
 	}
 
 	return &LLMClient{
-		ChatClient: chatClient,
-		llmType:    llmType,
-		timeout:    timeout,
+		model:   llmModel,
+		llmType: llmType,
+		timeout: timeout,
 	}, nil
 }
 
@@ -87,7 +141,7 @@ func (c *LLMClient) GetType() int {
 	return c.llmType
 }
 
-// CallLLM calls the LLM API
+// CallLLM calls the LLM API using langchaingo
 func (c *LLMClient) CallLLM(ctx context.Context, userPrompt string, outputFormat int) (string, error) {
 	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
 Analyze the provided tool information and return a JSON array of security findings.
@@ -100,14 +154,24 @@ Each finding must have: severity, rule_id, title, message, and optionally catego
 Return ONLY valid YAML, no markdown formatting, no code fences.`
 	}
 
-	content, err := c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
-		{Role: "user", Content: userPrompt},
-	})
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+
+	messages := []llms.MessageContent{
+		llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt),
+		llms.TextParts(llms.ChatMessageTypeHuman, userPrompt),
+	}
+
+	resp, err := c.model.GenerateContent(ctx, messages, llms.WithMaxTokens(MAX_TOKENS))
 	if err != nil {
 		return "", err
 	}
 
-	// Check if response is empty
+	if len(resp.Choices) == 0 {
+		return "", fmt.Errorf("LLM returned no choices")
+	}
+
+	content := resp.Choices[0].Content
 	if content == "" {
 		return "", fmt.Errorf("LLM returned empty response")
 	}
@@ -119,14 +183,12 @@ Return ONLY valid YAML, no markdown formatting, no code fences.`
 	}
 	fmt.Printf("LLM response (first 1000 bytes): \n%s\n", preview)
 
-	// Strip markdown code fences if present - use the specified format
 	content = c.stripMarkdownCodeFences(content, outputFormat)
 
 	if outputFormat == OutputFormatYAML {
 		content = sanitizeYAMLUnicodeEscapes(content)
 	}
 
-	// Check again after trimming
 	if content == "" {
 		return "", fmt.Errorf("LLM response is empty after trimming markdown")
 	}
