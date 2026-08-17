@@ -95,10 +95,10 @@ Scan the codebase for vulnerabilities; use when you own or can change the code.
 
 The taint SAST uses the [OpenGrep](https://github.com/opengrep/opengrep) engine. Install
 the pinned, SHA-verified binary with `make install-opengrep` (Linux x86_64/arm64, macOS
-arm64/x86_64). On other platforms, install `opengrep` yourself and set
-`MCPXRAY_OPENGREP_BIN`. Taint analysis activates by installation: `repo-scan` runs it
-whenever the pinned engine is resolvable, and when the engine is absent it skips taint
-and still runs SCA, secrets, and the unsafe-command rules.
+arm64/x86_64, Windows x86_64 under git-bash). On other platforms, install `opengrep`
+yourself and set `MCPXRAY_OPENGREP_BIN`. Taint analysis activates by installation:
+`repo-scan` runs it whenever the pinned engine is resolvable, and when the engine is
+absent it skips taint and still runs SCA, secrets, and the unsafe-command rules.
 
 For cross-file, interprocedural taint on Go and TypeScript (and Python), install the CodeQL
 engine. It activates by installation too, and its findings are merged with OpenGrep's:
@@ -120,6 +120,25 @@ Each language gets a time budget covering `database create` plus `analyze` — 6
 A target that exceeds it contributes nothing, so raise it for large repositories with
 `--codeql-timeout <seconds>` (or `MCPXRAY_CODEQL_TIMEOUT`); the flag wins when both are set.
 Exceeding the budget is reported as `timed out after Ns`, never as a clean zero.
+
+#### Monorepo / Target Resolution
+
+By default, `repo-scan` treats the whole repository path as the scan boundary. For a monorepo containing multiple independent MCP servers, or one server mixed in with unrelated clients/SDKs/shared libraries, that can mean unrelated findings (scanning the root) or missed shared components (scanning one directory by hand). `--target-resolution` detects the MCP server(s) actually present and scopes the scan to the selected one plus the shared components it depends on.
+
+```bash
+# Detect MCP server targets in the repository and print them, without scanning
+./mcpxray repo-scan /path/to/monorepo --list-targets
+
+# Scan a specific detected target by name
+./mcpxray repo-scan /path/to/monorepo --target-resolution --target "Fabric MCP"
+
+# If there's exactly one detected target, it's selected automatically
+./mcpxray repo-scan /path/to/monorepo --target-resolution
+```
+
+If more than one target is found and `--target` isn't given, `repo-scan` prompts interactively when run from a terminal, or exits with the list of discovered targets (and the exact `--target` value to pass) when run non-interactively, e.g. in CI. A plain `repo-scan` (no target-resolution flags at all) still scans the whole repository exactly as before, but if it detects two or more possible targets it prints a one-line notice pointing at `--target-resolution --list-targets` so a monorepo isn't scanned as one flat unit by accident.
+
+This is opt-in: without `--target-resolution` (or `--list-targets`), `repo-scan` behaves exactly as before. Target detection covers Go, Node/npm (including `workspace:`/`file:`/`link:` protocol dependencies), Python (Poetry and `uv` workspace path/source dependencies), .NET (`ProjectReference`), Java (Maven `pom.xml` modules), and Rust (Cargo workspaces) projects.
 
 ## Output Format
 

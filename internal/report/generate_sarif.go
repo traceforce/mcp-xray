@@ -3,7 +3,9 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"mcpxray/internal/metadata"
 	"mcpxray/proto"
@@ -17,8 +19,9 @@ type SARIFReport struct {
 }
 
 type Run struct {
-	Tool    Tool     `json:"tool"`
-	Results []Result `json:"results"`
+	Tool       Tool                   `json:"tool"`
+	Results    []Result               `json:"results"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
 }
 
 type Tool struct {
@@ -67,7 +70,87 @@ type Message struct {
 	Text string `json:"text"`
 }
 
+// GenerateSarifWithProperties is the additive reporting path used by the
+// multi-target planner. The input findings are still the original scanner
+// findings; properties carry attribution/fingerprint/context separately.
+// runProperties, when non-nil, is attached to the SARIF Run object so
+// target summaries, scan plans and execution records are visible in output
+// even when a target produces zero findings.
+func GenerateSarifWithProperties(findings []*proto.Finding, properties []map[string]interface{}, repoRoot string, runProperties map[string]interface{}) ([]byte, error) {
+	return generateSarifWithProperties(findings, nil, properties, repoRoot, runProperties)
+}
+
+// GenerateSarif builds a SARIF report from findings. Used by config-scan,
+// pentest, verify, and the legacy (no target-resolution) repo-scan path.
 func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
+	return generateSarifWithProperties(findings, nil, nil, "", nil)
+}
+
+// GenerateSarifForTarget builds a SARIF report the same way GenerateSarif
+// does, additionally tagging each result with how it relates to a resolved
+// target-resolution target (internal/targetresolve): "direct" for a finding
+// inside the selected server's own directory, "test-dependent" for a finding
+// inside a test/tooling project that depends on the server rather than the
+// reverse (targetresolve.InclusionTestDependent), "shared-dependency" for a
+// finding inside any other included directory (a workspace-local dependency
+// the server needs), and "repo-level" for anything else (or a finding with
+// no file path at all). This is additive -- GenerateSarif's own signature
+// and output are untouched, so config-scan, pentest, and verify require no
+// changes.
+//
+// reasons maps a cleaned included directory to why it was included
+// (targetresolve.Target.IncludedReasons); a nil or empty map degrades
+// gracefully to the original direct/shared-dependency/repo-level behavior
+// (every included root not equal to primaryRoot is reported as
+// "shared-dependency", as before).
+func GenerateSarifForTarget(findings []*proto.Finding, primaryRoot string, includedRoots []string, reasons map[string]string) ([]byte, error) {
+	primaryRoot = filepath.Clean(primaryRoot)
+	cleanedIncluded := make([]string, len(includedRoots))
+	for i, r := range includedRoots {
+		cleanedIncluded[i] = filepath.Clean(r)
+	}
+
+	relation := func(findingFile string) string {
+		if findingFile == "" {
+			return "repo-level"
+		}
+		cleaned := filepath.Clean(findingFile)
+		if isWithinRoot(cleaned, primaryRoot) {
+			return "direct"
+		}
+		for _, root := range cleanedIncluded {
+			if isWithinRoot(cleaned, root) {
+				reason := reasons[root]
+				if reason == "" {
+					reason = reasons[filepath.ToSlash(root)]
+				}
+				if reason == "test-dependent" {
+					return "test-dependent"
+				}
+				return "shared-dependency"
+			}
+		}
+		return "repo-level"
+	}
+
+	return generateSarifWithProperties(findings, relation, nil, "", nil)
+}
+
+// isWithinRoot reports whether path is root itself or lives under it.
+func isWithinRoot(path, root string) bool {
+	path, root = filepath.ToSlash(filepath.Clean(path)), filepath.ToSlash(filepath.Clean(root))
+	return path == root || strings.HasPrefix(path, root+"/")
+}
+
+// generateSarif is the shared implementation behind GenerateSarif and
+// GenerateSarifForTarget. relation is nil for the plain (non-target-scoped)
+// path; when non-nil, it is called with each finding's File to compute a
+// "targetRelation" SARIF property.
+func generateSarif(findings []*proto.Finding, relation func(findingFile string) string) ([]byte, error) {
+	return generateSarifWithProperties(findings, relation, nil, "", nil)
+}
+
+func generateSarifWithProperties(findings []*proto.Finding, relation func(findingFile string) string, additional []map[string]interface{}, repoRoot string, runProperties map[string]interface{}) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -86,21 +169,30 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		}
 	}
 
-	// Convert rules map to slice
+	// Convert rules map to slice, sorted by ID so the output is deterministic
+	// across runs (Go map iteration order is randomized per-process).
 	rules := make([]ReportingRule, 0, len(ruleMap))
 	for _, rule := range ruleMap {
 		rules = append(rules, *rule)
 	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].ID < rules[j].ID
+	})
 
-	// sort rules by severity. The proto values are in descending order.
-	sort.Slice(findings, func(i, j int) bool {
-		return findings[i].Severity > findings[j].Severity
+	// Sort a copy by severity (descending; proto values are in descending order)
+	// rather than the caller's slice in place -- callers such as the pentest
+	// flow reuse the same slice immediately after this call and should not see
+	// their argument silently reordered as a side effect of report generation.
+	sorted := make([]*proto.Finding, len(findings))
+	copy(sorted, findings)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Severity > sorted[j].Severity
 	})
 
 	// Convert findings to results
-	results := make([]Result, 0, len(findings))
-	for i := range findings {
-		finding := findings[i]
+	results := make([]Result, 0, len(sorted))
+	for i := range sorted {
+		finding := sorted[i]
 
 		result := Result{
 			RuleID: finding.RuleId,
@@ -119,10 +211,16 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 
 		// Add location if file is specified
 		if finding.File != "" {
+			uri := finding.File
+			if repoRoot != "" {
+				if rel, err := filepath.Rel(repoRoot, finding.File); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					uri = filepath.ToSlash(rel)
+				}
+			}
 			location := Location{
 				PhysicalLocation: PhysicalLocation{
 					ArtifactLocation: ArtifactLocation{
-						URI: finding.File,
+						URI: uri,
 					},
 				},
 			}
@@ -156,6 +254,14 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		if finding.Fixed != "" {
 			properties["fixed"] = finding.Fixed
 		}
+		if relation != nil {
+			properties["targetRelation"] = relation(finding.File)
+		}
+		if additional != nil && i < len(additional) {
+			for key, value := range additional[i] {
+				properties[key] = value
+			}
+		}
 		if len(properties) > 0 {
 			result.Properties = properties
 		}
@@ -164,22 +270,22 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 	}
 
 	// Build the SARIF report
+	run := Run{
+		Tool: Tool{
+			Driver: Driver{
+				Name:           metadata.Name,
+				Version:        metadata.Version,
+				InformationURI: metadata.InformationURI,
+				Rules:          rules,
+			},
+		},
+		Results:    results,
+		Properties: runProperties,
+	}
 	report := SARIFReport{
 		Version: "2.1.0",
 		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-		Runs: []Run{
-			{
-				Tool: Tool{
-					Driver: Driver{
-						Name:           metadata.Name,
-						Version:        metadata.Version,
-						InformationURI: metadata.InformationURI,
-						Rules:          rules,
-					},
-				},
-				Results: results,
-			},
-		},
+		Runs:    []Run{run},
 	}
 
 	// Marshal to JSON
