@@ -2,6 +2,7 @@ package reposcan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/ossf/osv-schema/bindings/go/osvschema"
 	cvss "github.com/pandatix/go-cvss/31"
 )
+
+// ErrUnsupportedInput distinguishes a valid scan invocation with no
+// dependency input understood by OSV from an actual scanner failure.
+var ErrUnsupportedInput = errors.New("unsupported SCA input")
+
+func IsUnsupportedScanError(err error) bool { return errors.Is(err, ErrUnsupportedInput) }
 
 type SCAScanner struct {
 	repoPath string
@@ -38,10 +45,20 @@ func (s *SCAScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	}
 
 	results, err := osvscanner.DoScan(actions)
-	if err != nil {
-		// Note: DoScan may return a "vulnerabilities found" error in some configs,
-		// so you might want to treat that as non-fatal and just read results.
+	// osvscanner.ErrVulnerabilitiesFound is not a scan failure: DoScan computes
+	// it from the already-populated results purely to signal "there's
+	// something here" (the same convention the osv-scanner CLI uses via exit
+	// code 1), and returns it alongside the real, valid results. Treating it
+	// as fatal here would discard every genuine finding and abort the whole
+	// scan on the one input a security scanner exists to catch.
+	if err != nil && !errors.Is(err, osvscanner.ErrVulnerabilitiesFound) {
+		// Preserve the existing engine invocation and conversion, but do not
+		// turn an execution failure into a successful zero-finding result.
+		if strings.Contains(strings.ToLower(err.Error()), "no packages found in scan") {
+			return nil, fmt.Errorf("%w: %v", ErrUnsupportedInput, err)
+		}
 		log.Printf("scan error: %v", err)
+		return nil, fmt.Errorf("osv scan failed: %w", err)
 	}
 
 	// Normalize the results into a list of Findings
