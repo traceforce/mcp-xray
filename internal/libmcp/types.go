@@ -18,8 +18,15 @@ type MCPServerConfig struct {
 	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
 }
 
+// EnrichedTool wraps an MCP tool with classified action labels
+// (read, write, delete, and/or unknown).
+type EnrichedTool struct {
+	Actions []string  `json:"permission_type"`
+	Tool    *mcp.Tool `json:"tool"`
+}
+
 // ServerToolsData represents tools data for a single server
 type ServerToolsData struct {
-	Server string      `json:"server"`
-	Tools  []*mcp.Tool `json:"tools"`
+	Server string         `json:"server"`
+	Tools  []EnrichedTool `json:"tools"`
 }

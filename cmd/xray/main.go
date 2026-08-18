@@ -15,6 +15,7 @@ import (
 	"time"
 
 	configscan "mcpxray/internal/configscan"
+	"mcpxray/internal/libmcp"
 	"mcpxray/internal/pentest"
 	"mcpxray/internal/report"
 	reposcan "mcpxray/internal/reposcan"
@@ -39,51 +40,14 @@ func NewConfigScanCommand() *cobra.Command {
 		Run: func(cmd *cobra.Command, args []string) {
 			scanKnownConfigs, _ := cmd.Flags().GetBool("scan-known-configs")
 
-			var configPaths []string
-
-			if scanKnownConfigs {
-				fmt.Println("Scanning all known MCP config paths")
-				allPaths, err := configscan.GetAllKnownConfigPaths()
-				if err != nil {
-					fmt.Printf("Error getting known config paths: %v\n", err)
-					os.Exit(1)
-				}
-
-				// Filter to only existing files
-				for _, path := range allPaths {
-					if fileInfo, err := os.Stat(path); err == nil && !fileInfo.IsDir() {
-						configPaths = append(configPaths, path)
-						fmt.Printf("Found config: %s\n", path)
-					}
-				}
-
-				if len(configPaths) == 0 {
-					fmt.Println("No known config files found")
-					os.Exit(0)
-				}
-			} else {
-				if len(args) == 0 {
-					fmt.Println("Error: config file path is required when --scan-known-configs is not set")
-					os.Exit(1)
-				}
-				configPath := args[0]
-
-				// Validate that configPath is a file, not a directory
-				fileInfo, err := os.Stat(configPath)
-				if err != nil {
-					if os.IsNotExist(err) {
-						fmt.Printf("Error: config file does not exist: %s\n", configPath)
-					} else {
-						fmt.Printf("Error: cannot access config file: %s\n", err)
-					}
-					os.Exit(1)
-				}
-				if fileInfo.IsDir() {
-					fmt.Printf("Error: config path must be a file, not a directory: %s\n", configPath)
-					os.Exit(1)
-				}
-
-				configPaths = []string{configPath}
+			configPaths, err := resolveConfigPaths(scanKnownConfigs, args)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			if len(configPaths) == 0 {
+				fmt.Println("No known config files found")
+				os.Exit(0)
 			}
 
 			analyzerType, _ := cmd.Flags().GetString("analyzer-type")
@@ -187,6 +151,116 @@ func NewConfigScanCommand() *cobra.Command {
 	cmd.Flags().Bool("scan-known-configs", false, "Scan all known MCP config paths")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	return cmd
+}
+
+// resolveConfigPaths determines which MCP config files to operate on, either
+// from --scan-known-configs (returning all existing known configs) or from one
+// or more positional arguments. It returns an empty slice with no error when
+// --scan-known-configs is set but no known configs exist.
+func resolveConfigPaths(scanKnownConfigs bool, args []string) ([]string, error) {
+	if scanKnownConfigs {
+		fmt.Println("Scanning all known MCP config paths")
+		allPaths, err := configscan.GetAllKnownConfigPaths()
+		if err != nil {
+			return nil, fmt.Errorf("error getting known config paths: %v", err)
+		}
+
+		var configPaths []string
+		// Filter to only existing files
+		for _, path := range allPaths {
+			if fileInfo, err := os.Stat(path); err == nil && !fileInfo.IsDir() {
+				configPaths = append(configPaths, path)
+				fmt.Printf("Found config: %s\n", path)
+			}
+		}
+		return configPaths, nil
+	}
+
+	if len(args) == 0 {
+		return nil, fmt.Errorf("config file path is required when --scan-known-configs is not set")
+	}
+
+	// Validate that each configPath is a file, not a directory
+	var configPaths []string
+	for _, configPath := range args {
+		fileInfo, err := os.Stat(configPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, fmt.Errorf("config file does not exist: %s", configPath)
+			}
+			return nil, fmt.Errorf("cannot access config file: %s", err)
+		}
+		if fileInfo.IsDir() {
+			return nil, fmt.Errorf("config path must be a file, not a directory: %s", configPath)
+		}
+		configPaths = append(configPaths, configPath)
+	}
+
+	return configPaths, nil
+}
+
+func NewDumpToolsCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "dump-tools [config-file...]",
+		Short: "List the tools exposed by MCP servers without running any scan",
+		Long:  "Connect to the MCP servers defined in one or more configuration files and write their tool definitions to a single JSON file. No security scanning or analysis is performed. Multiple config files can be passed as arguments, or use --scan-known-configs to dump tools from all known config paths.",
+		Args:  cobra.ArbitraryArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			scanKnownConfigs, _ := cmd.Flags().GetBool("scan-known-configs")
+
+			configPaths, err := resolveConfigPaths(scanKnownConfigs, args)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+				os.Exit(1)
+			}
+			if len(configPaths) == 0 {
+				fmt.Println("No known config files found")
+				os.Exit(0)
+			}
+
+			toolsOutputFile, _ := cmd.Flags().GetString("tools-output")
+			// Set default tools output file if not provided
+			if toolsOutputFile == "" {
+				timestamp := time.Now().Format(time.RFC3339)
+				toolsOutputFile = fmt.Sprintf("tools_summary_%s.json", strings.ReplaceAll(timestamp, ":", "-"))
+			}
+
+			ctx := context.Background()
+			// Aggregate tools across all config files so nothing is overwritten.
+			allToolsData := []libmcp.ServerToolsData{}
+
+			for _, configPath := range configPaths {
+				fmt.Printf("\nDumping tools: %s\n", configPath)
+				scanner := configscan.NewToolsScannerForDump(configPath)
+				serverToolsData, connectionFindings, err := scanner.DumpTools(ctx)
+				if err != nil {
+					fmt.Printf("Warning: Error dumping tools for %s: %v\n", configPath, err)
+					continue
+				}
+
+				allToolsData = append(allToolsData, serverToolsData...)
+
+				// Surface connection/listing problems without turning them into a scan.
+				for _, finding := range connectionFindings {
+					fmt.Printf("Warning: %s\n", finding.Message)
+				}
+			}
+
+			if err := configscan.WriteToolsJSON(toolsOutputFile, allToolsData); err != nil {
+				fmt.Printf("Error writing tools file: %v\n", err)
+				os.Exit(1)
+			}
+
+			totalTools := 0
+			for _, sd := range allToolsData {
+				totalTools += len(sd.Tools)
+			}
+			fmt.Printf("\nDumped %d tools from %d server(s) to %s\n", totalTools, len(allToolsData), toolsOutputFile)
+		},
+	}
+	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
+	cmd.Flags().Bool("scan-known-configs", false, "Dump tools from all known MCP config paths")
 	return cmd
 }
 
@@ -579,6 +653,7 @@ func NewVerifyCommand() *cobra.Command {
 
 func init() {
 	rootCmd.AddCommand(NewConfigScanCommand())
+	rootCmd.AddCommand(NewDumpToolsCommand())
 	rootCmd.AddCommand(NewRepoScanCommand())
 	rootCmd.AddCommand(NewPentestCommand())
 	rootCmd.AddCommand(NewVerifyCommand())

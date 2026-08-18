@@ -58,6 +58,43 @@ Scan MCP configs for security issues; run before pentest to baseline your setup.
 - **Secrets Detection**: Scans for exposed credentials, API keys, and sensitive information
 - **Tool Analysis**: Analyzes tool descriptions using Token Analyzer (default) or LLM Analyzer for risks including arbitrary execution, injection vulnerabilities, authorization bypass, and information disclosure
 
+### Dump Tools
+
+Connect to the MCP servers and dump their tool definitions to a JSON file, without running any security scanning or analysis. Useful for inspecting the tools a server exposes or capturing a tools inventory for later use.
+
+```bash
+# Dump tools for a specific MCP config file.
+# A single config file may define multiple MCP servers under "mcpServers" -
+# tools for all of them are dumped.
+./mcpxray dump-tools /path/to/mcp/config.json
+
+# Dump tools from multiple config files at once. Tools from every server across
+# all files are aggregated into a single output file.
+./mcpxray dump-tools /path/to/config-a.json /path/to/config-b.json
+
+# Dump tools from all known MCP config paths (Cursor, Claude, Windsurf)
+./mcpxray dump-tools --scan-known-configs
+
+# Specify a custom output file
+./mcpxray dump-tools /path/to/mcp/config.json --tools-output custom-tools.json
+```
+
+Unlike `config-scan`, this command performs no connection, secrets, or tool analysis — it only lists tools and writes them to the tools JSON file (`tools_summary_<timestamp>.json` by default). The output is a single JSON array with one entry per server. Each tool is wrapped with classified actions derived from MCP annotations (`readOnlyHint` / `destructiveHint`) and name/description keywords:
+
+```json
+{
+  "server": "notion",
+  "tools": [
+    {
+      "actions": ["read"],
+      "tool": { "name": "API-get-self", "description": "...", "annotations": { "readOnlyHint": true } }
+    }
+  ]
+}
+```
+
+Possible `actions` values are `read`, `write`, `delete`, and `unknown` (when no signal matches). A tool may have more than one action. The same enrichment is included in the tools summary written by `config-scan`. Connection or listing failures are printed as warnings.
+
 ### Pentest
 
 Execute security test plans by making actual tool calls against MCP servers. LLMs are required to run the pentest. Run this before actual deployment in production.
