@@ -42,7 +42,8 @@ type registryManifestHit struct {
 // server.json -- a real MCP registry manifest always describes at least one
 // way to obtain or reach the server.
 func isValidRegistryManifest(doc map[string]interface{}) bool {
-	if _, hasName := doc["name"].(string); !hasName {
+	name, hasName := doc["name"].(string)
+	if !hasName || strings.TrimSpace(name) == "" {
 		return false
 	}
 	if arr, ok := doc["packages"].([]interface{}); ok && len(arr) > 0 {

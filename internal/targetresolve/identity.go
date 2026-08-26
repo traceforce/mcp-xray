@@ -108,13 +108,25 @@ func inferOwnershipRoot(repoRoot string, p *Project) (string, []string, bool) {
 	return start, []string{"conservative manifest/project directory boundary"}, false
 }
 
+// hasOwnershipBoundary reports whether dir contains a genuine MCP registry
+// manifest. A directory merely containing a file NAMED server.json is not
+// enough -- registry discovery (registry_manifest.go) already rejects
+// malformed or unrelated server.json files via isValidRegistryManifest, and
+// this boundary check must apply the exact same validation. Without it, any
+// unrelated server.json sitting in a common ancestor directory would give
+// every nested project underneath it the same ComponentID, and
+// mergeTargetsByComponent (graph.go) would silently collapse independent
+// servers into a single target.
 func hasOwnershipBoundary(dir string) bool {
-	for _, name := range []string{"server.json", "component.json"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
-			return true
-		}
+	data, err := os.ReadFile(filepath.Join(dir, "server.json"))
+	if err != nil {
+		return false
 	}
-	return false
+	var doc map[string]interface{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return false
+	}
+	return isValidRegistryManifest(doc)
 }
 
 func uniqueSorted(values []string) []string {

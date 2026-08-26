@@ -49,6 +49,16 @@ func TestIsValidRegistryManifest(t *testing.T) {
 			doc:  map[string]interface{}{"port": float64(8080), "host": "localhost"},
 			want: false,
 		},
+		{
+			name: "blank name",
+			doc:  map[string]interface{}{"name": "", "packages": []interface{}{map[string]interface{}{}}},
+			want: false,
+		},
+		{
+			name: "whitespace-only name",
+			doc:  map[string]interface{}{"name": "   ", "packages": []interface{}{map[string]interface{}{}}},
+			want: false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -174,6 +184,26 @@ func TestApplyRegistryManifestSignals_MalformedManifestIgnored(t *testing.T) {
 	}
 	if len(projects) != 0 {
 		t.Fatalf("expected a malformed server.json to be ignored, got %d projects: %+v", len(projects), projects)
+	}
+}
+
+func TestApplyRegistryManifestSignals_BlankNameManifestIgnored(t *testing.T) {
+	// A server.json with a blank "name" is structurally malformed per the
+	// registry schema (a real manifest always has a real name) and must not
+	// promote its directory to RoleMCPServer, same as any other malformed
+	// manifest (TestApplyRegistryManifestSignals_MalformedManifestIgnored).
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "not-a-server", "server.json"), `{
+  "name": "",
+  "packages": [ { "registryType": "npm", "identifier": "x" } ]
+}`)
+
+	projects, err := applyRegistryManifestSignals(root, nil)
+	if err != nil {
+		t.Fatalf("applyRegistryManifestSignals returned error: %v", err)
+	}
+	if len(projects) != 0 {
+		t.Fatalf("expected a blank-name server.json to be ignored, got %d projects: %+v", len(projects), projects)
 	}
 }
 

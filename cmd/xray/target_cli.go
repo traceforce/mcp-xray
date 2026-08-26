@@ -28,7 +28,7 @@ func printDiscoveredTargets(targets []*targetresolve.Target, allProjects []*targ
 		return
 	}
 	fmt.Println("Discovered MCP targets:")
-	fmt.Println("  (repo-level files — CI, scripts, configs — are included in every scan)")
+	fmt.Println("  (repo-level files — CI, scripts, configs — are included with --include-repo-global)")
 	for i, t := range targets {
 		componentNote := ""
 		if extra := len(t.Included) - 1; extra > 0 {

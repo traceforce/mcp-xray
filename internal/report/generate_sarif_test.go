@@ -279,6 +279,86 @@ func TestGenerateSarifWithProperties_PerFindingProperties(t *testing.T) {
 	}
 }
 
+// TestGenerateSarifWithProperties_PropertiesStayWithTheirFinding is the
+// regression test for the bug where generateSarifWithProperties sorted
+// findings by severity but indexed the parallel "additional" per-finding
+// property slice by post-sort position, silently attaching one finding's
+// fingerprint/targetIds/etc. to a different finding whenever severities
+// differ. additional[i] must always describe findings[i], regardless of
+// where findings[i] ends up in the output after severity sorting.
+func TestGenerateSarifWithProperties_PropertiesStayWithTheirFinding(t *testing.T) {
+	findings := []*proto.Finding{
+		{RuleId: "low-rule", Severity: proto.RiskSeverity_RISK_SEVERITY_LOW, File: "low.go"},
+		{RuleId: "critical-rule", Severity: proto.RiskSeverity_RISK_SEVERITY_CRITICAL, File: "critical.go"},
+		{RuleId: "medium-rule", Severity: proto.RiskSeverity_RISK_SEVERITY_MEDIUM, File: "medium.go"},
+	}
+	props := []map[string]interface{}{
+		{"fingerprint": "fp-for-low"},
+		{"fingerprint": "fp-for-critical"},
+		{"fingerprint": "fp-for-medium"},
+	}
+	want := map[string]string{
+		"low-rule":      "fp-for-low",
+		"critical-rule": "fp-for-critical",
+		"medium-rule":   "fp-for-medium",
+	}
+
+	out, err := GenerateSarifWithProperties(findings, props, "", nil)
+	if err != nil {
+		t.Fatalf("GenerateSarifWithProperties returned error: %v", err)
+	}
+	var parsed SARIFReport
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal SARIF output: %v", err)
+	}
+	if len(parsed.Runs[0].Results) != len(findings) {
+		t.Fatalf("expected %d results, got %d", len(findings), len(parsed.Runs[0].Results))
+	}
+	seen := map[string]bool{}
+	for _, result := range parsed.Runs[0].Results {
+		seen[result.RuleID] = true
+		gotFP, _ := result.Properties["fingerprint"].(string)
+		if gotFP != want[result.RuleID] {
+			t.Errorf("result %s: fingerprint = %q, want %q (properties attached to the wrong finding)", result.RuleID, gotFP, want[result.RuleID])
+		}
+	}
+	for ruleID := range want {
+		if !seen[ruleID] {
+			t.Errorf("expected a result for %s, but it was missing from the output", ruleID)
+		}
+	}
+}
+
+// TestGenerateSarifWithProperties_EqualSeverityKeepsOriginalOrder locks in
+// that the severity sort is stable: findings with equal severity keep their
+// original relative order rather than shuffling on ties.
+func TestGenerateSarifWithProperties_EqualSeverityKeepsOriginalOrder(t *testing.T) {
+	findings := []*proto.Finding{
+		{RuleId: "first", Severity: proto.RiskSeverity_RISK_SEVERITY_MEDIUM},
+		{RuleId: "second", Severity: proto.RiskSeverity_RISK_SEVERITY_MEDIUM},
+		{RuleId: "third", Severity: proto.RiskSeverity_RISK_SEVERITY_MEDIUM},
+	}
+	out, err := GenerateSarifWithProperties(findings, nil, "", nil)
+	if err != nil {
+		t.Fatalf("GenerateSarifWithProperties returned error: %v", err)
+	}
+	var parsed SARIFReport
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal SARIF output: %v", err)
+	}
+	if len(parsed.Runs[0].Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(parsed.Runs[0].Results))
+	}
+	got := []string{parsed.Runs[0].Results[0].RuleID, parsed.Runs[0].Results[1].RuleID, parsed.Runs[0].Results[2].RuleID}
+	want := []string{"first", "second", "third"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("result order = %v, want %v (equal-severity findings should keep their original order)", got, want)
+			break
+		}
+	}
+}
+
 func TestGenerateSarif_LegacyPathNoRunProperties(t *testing.T) {
 	out, err := GenerateSarif(sampleFindings())
 	if err != nil {

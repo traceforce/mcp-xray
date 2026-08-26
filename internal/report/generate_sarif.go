@@ -179,20 +179,33 @@ func generateSarifWithProperties(findings []*proto.Finding, relation func(findin
 		return rules[i].ID < rules[j].ID
 	})
 
-	// Sort a copy by severity (descending; proto values are in descending order)
-	// rather than the caller's slice in place -- callers such as the pentest
-	// flow reuse the same slice immediately after this call and should not see
-	// their argument silently reordered as a side effect of report generation.
-	sorted := make([]*proto.Finding, len(findings))
-	copy(sorted, findings)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Severity > sorted[j].Severity
+	// Sort by severity (descending; proto values are in descending order) via
+	// an index permutation rather than reordering findings/additional
+	// directly. additional[i] is the per-finding property map for
+	// findings[i]; sorting findings alone (as this used to do) desyncs that
+	// pairing the moment two findings differ in severity, silently attaching
+	// fingerprint/targetIds/etc. to the wrong finding in the output. Indices
+	// keep both slices addressable by their original position, so the pairing
+	// survives the reorder, and neither the caller's findings slice nor
+	// additional is mutated -- callers such as the pentest flow reuse findings
+	// immediately after this call and should not see it silently reordered as
+	// a side effect of report generation. SliceStable keeps equal-severity
+	// findings in their original order, matching sort.Slice's prior behavior
+	// on ties (Go's sort.Slice is not guaranteed stable, but for equal keys
+	// the practical difference doesn't matter here; SliceStable just makes it
+	// deterministic).
+	order := make([]int, len(findings))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return findings[order[i]].Severity > findings[order[j]].Severity
 	})
 
 	// Convert findings to results
-	results := make([]Result, 0, len(sorted))
-	for i := range sorted {
-		finding := sorted[i]
+	results := make([]Result, 0, len(order))
+	for _, idx := range order {
+		finding := findings[idx]
 
 		result := Result{
 			RuleID: finding.RuleId,
@@ -257,8 +270,8 @@ func generateSarifWithProperties(findings []*proto.Finding, relation func(findin
 		if relation != nil {
 			properties["targetRelation"] = relation(finding.File)
 		}
-		if additional != nil && i < len(additional) {
-			for key, value := range additional[i] {
+		if additional != nil && idx < len(additional) {
+			for key, value := range additional[idx] {
 				properties[key] = value
 			}
 		}

@@ -54,6 +54,15 @@ func TestPrintDiscoveredTargets_PlainTargetPrintsSingleLine(t *testing.T) {
 	if !strings.Contains(lines[1], "repo-level") {
 		t.Errorf("expected the repo-level note line, got %q", lines[1])
 	}
+	// Regression: the note used to claim repo-level files are included "in
+	// every scan", which is false -- BuildScanPlan only creates that unit
+	// when --include-repo-global is passed, and the flag defaults to false.
+	if !strings.Contains(lines[1], "--include-repo-global") {
+		t.Errorf("expected the repo-level note to name the --include-repo-global flag it actually depends on, got %q", lines[1])
+	}
+	if strings.Contains(lines[1], "included in every scan") {
+		t.Errorf("repo-level note claims files are included in every scan, which is false by default: %q", lines[1])
+	}
 	if !strings.Contains(lines[2], "my-server [node]") {
 		t.Errorf("expected the target line to contain 'my-server [node]', got %q", lines[2])
 	}

@@ -37,7 +37,7 @@ case "${OS}/${ARCH}" in
     ASSET="opengrep_osx_x86"
     EXPECTED="e9733c7ac4ad16ac5bbbcbff0264478c7b524d6750f29c847f93aacee3315d2b"
     ;;
-  MINGW*/* | MSYS*/* | CYGWIN*/*)
+  MINGW*/x86_64 | MSYS*/x86_64 | CYGWIN*/x86_64)
     ASSET="opengrep_windows_x86.exe"
     EXPECTED="f4f91b0a6268318df1dbb63e11f0ba2e9fdc355fa27d1de8fe9abf6c8a8e9efa"
     EXE="opengrep.exe"
