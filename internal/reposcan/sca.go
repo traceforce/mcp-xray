@@ -94,6 +94,25 @@ func (s *SCAScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	return findings, nil
 }
 
+// ScanRootOwnFiles runs SCA over exactly root's own direct files, with no
+// recursion into any subdirectory. It exists for the workspace-root
+// dependency fallback (targetresolve.ScanUnit.FallbackLockfiles): a target
+// whose own scan scope has no lockfile of its own can still have its
+// dependencies checked against a lockfile that lives at the repository root
+// (e.g. an npm/yarn/pnpm or Cargo workspace's shared lockfile), without
+// re-scanning any other target's own directory or turning into a broader
+// repo-wide scan.
+func ScanRootOwnFiles(root string) ([]*proto.Finding, error) {
+	results, err := runOSVScan([]string{root}, false)
+	if err != nil {
+		if isUnsupportedOSVInput(err) {
+			return nil, fmt.Errorf("%w: no packages found in scan", ErrUnsupportedInput)
+		}
+		return nil, fmt.Errorf("osv scan failed: %w", err)
+	}
+	return FromOSV(results), nil
+}
+
 // runOSVScan invokes osv-scanner over dirs and treats
 // osvscanner.ErrVulnerabilitiesFound as success: DoScan computes it from the
 // already-populated results purely to signal "there's something here" (the

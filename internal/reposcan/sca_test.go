@@ -139,6 +139,23 @@ func contains(values []string, target string) bool {
 	return false
 }
 
+// TestScanRootOwnFiles_EmptyDirReportsUnsupported confirms ScanRootOwnFiles
+// (the workspace-root dependency fallback's entry point) reports
+// ErrUnsupportedInput -- not a hard error -- for a directory with nothing
+// osv-scanner can extract package information from. This runs fast and
+// network-free: an empty directory has zero files to extract from, so
+// osv-scanner never reaches a vulnerability-database lookup.
+func TestScanRootOwnFiles_EmptyDirReportsUnsupported(t *testing.T) {
+	root := t.TempDir()
+	findings, err := ScanRootOwnFiles(root)
+	if len(findings) != 0 {
+		t.Errorf("expected no findings from an empty directory, got %v", findings)
+	}
+	if !IsUnsupportedScanError(err) {
+		t.Errorf("expected an unsupported-input error for an empty directory, got %v", err)
+	}
+}
+
 func TestIsUnsupportedOSVInput(t *testing.T) {
 	cases := []struct {
 		name string

@@ -178,6 +178,166 @@ func TestBuildScanPlan_NestedForeignExcludeDoesNotAffectRepoGlobalUnit(t *testin
 	}
 }
 
+// TestWorkspaceRootFallback_TriggersWhenUnitHasNoOwnLockfile reproduces the
+// real npm/yarn/pnpm workspace shape found in twilio-labs/mcp during
+// benchmarking: two separate targets, each with its own package.json but no
+// lockfile of its own -- only the workspace root's package-lock.json pins
+// exact dependency versions. Both units should fall back to it, and the
+// resulting finding ownership should credit both targets, not neither.
+func TestWorkspaceRootFallback_TriggersWhenUnitHasNoOwnLockfile(t *testing.T) {
+	root := t.TempDir()
+	mcpDir := filepath.Join(root, "packages", "mcp")
+	otherDir := filepath.Join(root, "packages", "openapi-mcp-server")
+	for _, dir := range []string{mcpDir, otherDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mcpProject := &Project{ID: "p-mcp", Name: "mcp", Dir: mcpDir, OwnershipRoot: mcpDir, ComponentID: "c-mcp", Ecosystem: "node"}
+	otherProject := &Project{ID: "p-other", Name: "openapi-mcp-server", Dir: otherDir, OwnershipRoot: otherDir, ComponentID: "c-other", Ecosystem: "node"}
+	mcpTarget := &Target{ID: "t-mcp", Name: "mcp", Project: mcpProject, Included: []*Project{mcpProject}, IncludedReasons: map[string]InclusionReason{mcpDir: InclusionPrimary}, ComponentID: "c-mcp"}
+	otherTarget := &Target{ID: "t-other", Name: "openapi-mcp-server", Project: otherProject, Included: []*Project{otherProject}, IncludedReasons: map[string]InclusionReason{otherDir: InclusionPrimary}, ComponentID: "c-other"}
+
+	resolution := &Resolution{
+		RepoRoot: root,
+		Projects: []*Project{mcpProject, otherProject},
+		Targets:  []*Target{mcpTarget, otherTarget},
+		Inventory: []InventoryEntry{
+			{Path: "package-lock.json", Lockfile: true},
+		},
+	}
+	plan, err := BuildScanPlan(resolution, PlanOptions{AllTargets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units) != 2 {
+		t.Fatalf("scan units = %d, want 2", len(plan.Units))
+	}
+	for _, unit := range plan.Units {
+		if len(unit.FallbackLockfiles) != 1 || unit.FallbackLockfiles[0] != "package-lock.json" {
+			t.Errorf("unit %s: FallbackLockfiles = %v, want [\"package-lock.json\"]", unit.RelativeRoot, unit.FallbackLockfiles)
+		}
+	}
+	fo := plan.FileOwnership["package-lock.json"]
+	if fo == nil {
+		t.Fatal("expected plan.FileOwnership[\"package-lock.json\"] to be set")
+	}
+	if fo.Relation != RelationWorkspaceRoot {
+		t.Errorf("Relation = %q, want %q", fo.Relation, RelationWorkspaceRoot)
+	}
+	if len(fo.TargetIDs) != 2 || fo.TargetIDs[0] != "t-mcp" || fo.TargetIDs[1] != "t-other" {
+		t.Errorf("TargetIDs = %v, want both t-mcp and t-other", fo.TargetIDs)
+	}
+}
+
+// TestWorkspaceRootFallback_NoTriggerWhenUnitHasOwnLockfile is the negative
+// regression matching aws-mcp's shape in the same benchmarking session: each
+// target manages its own dependencies independently (its own uv.lock), so a
+// root-level lockfile must never be treated as a fallback source even when
+// one happens to exist.
+func TestWorkspaceRootFallback_NoTriggerWhenUnitHasOwnLockfile(t *testing.T) {
+	root := t.TempDir()
+	serverDir := filepath.Join(root, "server")
+	if err := os.MkdirAll(serverDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := &Project{ID: "p-server", Name: "server", Dir: serverDir, OwnershipRoot: serverDir, ComponentID: "c-server", Ecosystem: "python"}
+	target := &Target{ID: "t-server", Name: "server", Project: project, Included: []*Project{project}, IncludedReasons: map[string]InclusionReason{serverDir: InclusionPrimary}}
+
+	resolution := &Resolution{
+		RepoRoot: root,
+		Projects: []*Project{project},
+		Targets:  []*Target{target},
+		Inventory: []InventoryEntry{
+			{Path: filepath.ToSlash(filepath.Join("server", "uv.lock")), Lockfile: true},
+			{Path: "requirements.txt", Lockfile: true}, // an unrelated root-level lockfile
+		},
+	}
+	plan, err := BuildScanPlan(resolution, PlanOptions{AllTargets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units) != 1 {
+		t.Fatalf("scan units = %d, want 1", len(plan.Units))
+	}
+	if len(plan.Units[0].FallbackLockfiles) != 0 {
+		t.Errorf("expected no fallback when the unit already has its own lockfile, got %v", plan.Units[0].FallbackLockfiles)
+	}
+}
+
+// TestWorkspaceRootFallback_EcosystemMismatchNeverFallsBack proves a
+// Python target with no lockfile of its own is never backed by an unrelated
+// Node lockfile that happens to sit at the repository root.
+func TestWorkspaceRootFallback_EcosystemMismatchNeverFallsBack(t *testing.T) {
+	root := t.TempDir()
+	pyDir := filepath.Join(root, "pyserver")
+	if err := os.MkdirAll(pyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := &Project{ID: "p-py", Name: "pyserver", Dir: pyDir, OwnershipRoot: pyDir, ComponentID: "c-py", Ecosystem: "python"}
+	target := &Target{ID: "t-py", Name: "pyserver", Project: project, Included: []*Project{project}, IncludedReasons: map[string]InclusionReason{pyDir: InclusionPrimary}}
+
+	resolution := &Resolution{
+		RepoRoot:  root,
+		Projects:  []*Project{project},
+		Targets:   []*Target{target},
+		Inventory: []InventoryEntry{{Path: "package-lock.json", Lockfile: true}},
+	}
+	plan, err := BuildScanPlan(resolution, PlanOptions{AllTargets: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units[0].FallbackLockfiles) != 0 {
+		t.Errorf("expected no fallback across mismatched ecosystems, got %v", plan.Units[0].FallbackLockfiles)
+	}
+}
+
+// TestWorkspaceRootFallback_ExcludedOwnLockfileStillTriggersFallback proves
+// unitHasOwnLockfile respects the unit's own finalized exclusions: a
+// lockfile that only exists inside a foreign nested project (already pruned
+// by nestedForeignExcludes) must not count as "the unit has its own
+// lockfile" -- that file will never actually reach the scanner.
+func TestWorkspaceRootFallback_ExcludedOwnLockfileStillTriggersFallback(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "app")
+	foreignDir := filepath.Join(root, "app", "vendor", "foreign")
+	for _, dir := range []string{appDir, foreignDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appProject := &Project{ID: "p-app", Name: "app", Dir: appDir, OwnershipRoot: appDir, ComponentID: "c-app", Ecosystem: "node"}
+	foreignProject := &Project{ID: "p-foreign", Name: "foreign", Dir: foreignDir, OwnershipRoot: foreignDir, ComponentID: "c-foreign", Ecosystem: "node", Role: RoleUnrelated}
+	target := &Target{ID: "t-app", Name: "app", Project: appProject, Included: []*Project{appProject}, IncludedReasons: map[string]InclusionReason{appDir: InclusionPrimary}}
+
+	resolution := &Resolution{
+		RepoRoot: root,
+		Projects: []*Project{appProject, foreignProject},
+		Targets:  []*Target{target},
+		Inventory: []InventoryEntry{
+			{Path: filepath.ToSlash(filepath.Join("app", "vendor", "foreign", "package-lock.json")), Lockfile: true},
+			{Path: "package-lock.json", Lockfile: true},
+		},
+	}
+	plan, err := BuildScanPlan(resolution, PlanOptions{TargetIDs: []string{"t-app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unit := plan.Units[0]
+	excludesForeign := false
+	for _, excluded := range unit.ExcludedDirs {
+		if excluded == filepath.ToSlash(filepath.Join("vendor", "foreign")) {
+			excludesForeign = true
+		}
+	}
+	if !excludesForeign {
+		t.Fatalf("expected the foreign nested project to be excluded, got ExcludedDirs=%v", unit.ExcludedDirs)
+	}
+	if len(unit.FallbackLockfiles) != 1 || unit.FallbackLockfiles[0] != "package-lock.json" {
+		t.Errorf("expected the excluded nested lockfile to NOT count as the unit's own, so it should fall back to the root; got FallbackLockfiles=%v", unit.FallbackLockfiles)
+	}
+}
+
 func TestBuildComponentRelations(t *testing.T) {
 	dirA := filepath.Join(string(filepath.Separator), "repo", "a")
 	dirB := filepath.Join(string(filepath.Separator), "repo", "b")

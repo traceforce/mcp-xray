@@ -410,9 +410,13 @@ func NewRepoScanCommand() *cobra.Command {
 			var scanFailures []string
 			var executions []reposcan.ScannerExecution
 			rawCountByTarget := make(map[string]int)
+			needsWorkspaceRootFallback := false
 			for _, unit := range plan.Units {
 				cfg := &reposcan.Config{MaxFileSize: baseMaxFileSize, Root: unit.Root, ExcludedPaths: baseExcludes, ExcludedDirs: unit.ExcludedDirs, CodeQLAllowBuild: codeqlAllowBuild, CodeQLTimeoutSec: codeqlTimeout}
 				runUnitSCA := runCVE && (filepath.Clean(unit.Root) != filepath.Clean(resolution.RepoRoot) || hasDirectRelation(unit))
+				if runUnitSCA && len(unit.FallbackLockfiles) > 0 {
+					needsWorkspaceRootFallback = true
+				}
 				inputSummary := fmt.Sprintf("root=%s manifests=%d lockfiles=%d files=%d", unit.RelativeRoot, len(unit.Manifests), len(unit.Lockfiles), len(unit.Files))
 				detailed := reposcan.ScanDetailed(ctx, unit.Root, cfg, reposcan.ScannerSelection{SCA: runUnitSCA, Secrets: runSecrets, SAST: runSAST}, unit.ID, inputSummary)
 				executions = append(executions, detailed.Executions...)
@@ -448,6 +452,20 @@ func NewRepoScanCommand() *cobra.Command {
 					attributed = append(attributed, af)
 					for _, tid := range fo.TargetIDs {
 						rawCountByTarget[tid]++
+					}
+				}
+			}
+			if needsWorkspaceRootFallback {
+				fallbackFindings, fallbackErr := reposcan.ScanRootOwnFiles(resolution.RepoRoot)
+				if fallbackErr != nil && !reposcan.IsUnsupportedScanError(fallbackErr) {
+					scanFailures = append(scanFailures, "osv workspace-root dependency check: "+fallbackErr.Error())
+				} else if fallbackErr == nil {
+					fallbackAttributed := attributeWorkspaceRootFallback(fallbackFindings, resolution.RepoRoot, plan)
+					attributed = append(attributed, fallbackAttributed...)
+					for _, af := range fallbackAttributed {
+						for _, tid := range af.TargetIDs {
+							rawCountByTarget[tid]++
+						}
 					}
 				}
 			}
@@ -599,6 +617,37 @@ func repoRelativeSlash(repoRoot, absPath string) string {
 // them it could not be satisfied.
 func explicitTargetRequested(targetFlag string, targetIDs []string, allTargets bool) bool {
 	return targetFlag != "" || len(targetIDs) > 0 || allTargets
+}
+
+// attributeWorkspaceRootFallback converts SCA findings from the shared
+// workspace-root dependency check (reposcan.ScanRootOwnFiles) into
+// attributed findings, using plan's precomputed file ownership -- populated
+// ahead of time by targetresolve's applyWorkspaceRootFallbackOwnership --
+// to credit them to whichever target(s) actually needed the fallback.
+// ScanRootOwnFiles only ever scans repoRoot's own direct files, so every
+// result should already have a registered owner; a finding that somehow
+// doesn't is skipped rather than silently joining the report unowned.
+func attributeWorkspaceRootFallback(findings []*proto.Finding, repoRoot string, plan *targetresolve.ScanPlan) []aggregation.AttributedFinding {
+	var attributed []aggregation.AttributedFinding
+	for _, finding := range findings {
+		relPath := finding.File
+		if rel, err := filepath.Rel(repoRoot, finding.File); err == nil {
+			relPath = filepath.ToSlash(rel)
+		}
+		fo := targetresolve.LookupFileOwnership(plan, relPath)
+		if len(fo.TargetIDs) == 0 {
+			continue
+		}
+		attributed = append(attributed, aggregation.AttributedFinding{
+			Finding:      finding,
+			TargetIDs:    fo.TargetIDs,
+			ComponentIDs: fo.ComponentIDs,
+			ScanUnitID:   "workspace-root-fallback",
+			Relation:     fo.Relation,
+			Context:      fo.Context,
+		})
+	}
+	return attributed
 }
 
 func hasDirectRelation(unit *targetresolve.ScanUnit) bool {

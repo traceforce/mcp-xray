@@ -4,6 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"mcpxray/internal/targetresolve"
+	"mcpxray/proto"
 )
 
 func mustWriteTempFile(t *testing.T, dir, name string) string {
@@ -126,6 +129,47 @@ func TestExplicitTargetRequested(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: explicitTargetRequested(%q, %v, %v) = %v, want %v", tc.name, tc.targetFlag, tc.targetIDs, tc.allTargets, got, tc.want)
 		}
+	}
+}
+
+// TestAttributeWorkspaceRootFallback proves two things at once: a finding
+// from a registered workspace-root fallback path is correctly credited to
+// every target plan.FileOwnership says relies on it, and a finding whose
+// path was NOT registered (shouldn't happen in practice -- ScanRootOwnFiles
+// only ever scans the repo root's own direct files -- but must never
+// silently join the report as an unowned repo-global finding) is skipped.
+func TestAttributeWorkspaceRootFallback(t *testing.T) {
+	repoRoot := t.TempDir()
+	plan := &targetresolve.ScanPlan{
+		FileOwnership: map[string]*targetresolve.FileOwnership{
+			"package-lock.json": {
+				TargetIDs:    []string{"t-a", "t-b"},
+				ComponentIDs: []string{"c-a", "c-b"},
+				Relation:     targetresolve.RelationWorkspaceRoot,
+				Context:      "production",
+			},
+		},
+	}
+	owned := &proto.Finding{Tool: "osv", RuleId: "CVE-1", File: filepath.Join(repoRoot, "package-lock.json"), Package: "lodash", Version: "4.17.15"}
+	unowned := &proto.Finding{Tool: "osv", RuleId: "CVE-2", File: filepath.Join(repoRoot, "unrelated-file.json"), Package: "foo", Version: "1.0.0"}
+
+	got := attributeWorkspaceRootFallback([]*proto.Finding{owned, unowned}, repoRoot, plan)
+
+	if len(got) != 1 {
+		t.Fatalf("attributed = %d findings, want 1 (the unregistered path must be skipped)", len(got))
+	}
+	af := got[0]
+	if af.Finding != owned {
+		t.Errorf("expected the attributed finding to be the registered one")
+	}
+	if af.Relation != targetresolve.RelationWorkspaceRoot {
+		t.Errorf("Relation = %q, want %q", af.Relation, targetresolve.RelationWorkspaceRoot)
+	}
+	if len(af.TargetIDs) != 2 || af.TargetIDs[0] != "t-a" || af.TargetIDs[1] != "t-b" {
+		t.Errorf("TargetIDs = %v, want both t-a and t-b", af.TargetIDs)
+	}
+	if af.ScanUnitID != "workspace-root-fallback" {
+		t.Errorf("ScanUnitID = %q, want %q", af.ScanUnitID, "workspace-root-fallback")
 	}
 }
 

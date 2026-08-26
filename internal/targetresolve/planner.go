@@ -14,6 +14,12 @@ const (
 	RelationShared           = "shared"
 	RelationCompanion        = "companion"
 	RelationRepositoryGlobal = "repository-global"
+
+	// RelationWorkspaceRoot marks a finding that came from a workspace-level
+	// dependency file at the repository root (e.g. a shared package-lock.json
+	// backing several npm/yarn/pnpm workspace members) rather than from the
+	// target's own directory. See ScanUnit.FallbackLockfiles.
+	RelationWorkspaceRoot = "workspace-root-dependency"
 )
 
 // ScanUnit is one physical scanner invocation. A unit may be attributed to
@@ -28,6 +34,20 @@ type ScanUnit struct {
 	Files        []string          `json:"files,omitempty"`
 	Manifests    []string          `json:"manifests,omitempty"`
 	Lockfiles    []string          `json:"lockfiles,omitempty"`
+
+	// FallbackLockfiles is the set of repo-root-level lockfile paths (repo-
+	// relative POSIX, always a file directly in the repository root) that
+	// dependency scanning should additionally check on this unit's behalf,
+	// because the unit's own scope -- respecting its own exclusions -- has no
+	// lockfile of its own for an ecosystem it actually uses. This is the
+	// shared-workspace-lockfile pattern: an npm/yarn/pnpm or Cargo workspace
+	// member's own package.json/Cargo.toml declares dependencies, but only
+	// the workspace root's own lockfile pins their exact resolved versions,
+	// so a scan scoped to just the member's own directory has nothing to
+	// resolve exact versions from. Always empty for the repository-global
+	// unit itself (it already covers the repo root directly) and for any
+	// unit whose own scope already has a matching lockfile.
+	FallbackLockfiles []string `json:"fallbackLockfiles,omitempty"`
 }
 
 type PlanOptions struct {
@@ -184,12 +204,37 @@ func matchesManifest(name string) bool {
 	return strings.HasSuffix(name, ".csproj")
 }
 func matchesLockfile(name string) bool {
-	for _, value := range []string{"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Pipfile.lock", "gradle.lockfile", "Cargo.lock", "packages.lock.json"} {
+	for _, value := range []string{"go.sum", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Pipfile.lock", "uv.lock", "gradle.lockfile", "Cargo.lock", "packages.lock.json"} {
 		if name == value {
 			return true
 		}
 	}
 	return strings.HasSuffix(name, "requirements.txt")
+}
+
+// lockfileEcosystem returns which Project.Ecosystem value a lockfile
+// basename belongs to, mirroring matchesLockfile's own list so the two never
+// drift apart. Returns "" for a name matchesLockfile wouldn't recognize as a
+// lockfile at all.
+func lockfileEcosystem(name string) string {
+	switch name {
+	case "go.sum":
+		return "go"
+	case "package-lock.json", "yarn.lock", "pnpm-lock.yaml":
+		return "node"
+	case "poetry.lock", "Pipfile.lock", "uv.lock":
+		return "python"
+	case "gradle.lockfile":
+		return "java"
+	case "Cargo.lock":
+		return "rust"
+	case "packages.lock.json":
+		return "dotnet"
+	}
+	if strings.HasSuffix(name, "requirements.txt") {
+		return "python"
+	}
+	return ""
 }
 
 // BuildInventoryForResolution enriches the deterministic inventory with the
@@ -351,6 +396,9 @@ func BuildScanPlan(resolution *Resolution, options PlanOptions) (*ScanPlan, erro
 			}
 		}
 		unit.ExcludedDirs = uniqueSorted(unit.ExcludedDirs)
+		if filepath.Clean(unit.Root) != filepath.Clean(resolution.RepoRoot) {
+			unit.FallbackLockfiles = workspaceRootFallbackLockfiles(resolution, unit)
+		}
 		plan.Units = append(plan.Units, unit)
 	}
 	sort.Slice(plan.Units, func(i, j int) bool { return plan.Units[i].ID < plan.Units[j].ID })
@@ -372,6 +420,7 @@ func BuildScanPlan(resolution *Resolution, options PlanOptions) (*ScanPlan, erro
 
 	plan.ComponentRelations = buildComponentRelations(selected)
 	plan.FileOwnership = buildFileOwnership(resolution, plan.ComponentRelations, selected)
+	applyWorkspaceRootFallbackOwnership(plan, selected)
 
 	return plan, nil
 }
@@ -583,6 +632,130 @@ func unitFiles(repoRoot, root string, inventory []InventoryEntry) ([]string, []s
 		}
 	}
 	return files, manifests, lockfiles
+}
+// unitEcosystems returns the set of Project.Ecosystem values for every
+// project whose ownership root is exactly unitRoot -- i.e. which
+// ecosystem(s) this physical scan unit actually represents.
+func unitEcosystems(projects []*Project, unitRoot string) map[string]bool {
+	result := make(map[string]bool)
+	clean := filepath.Clean(unitRoot)
+	for _, p := range projects {
+		root := p.OwnershipRoot
+		if root == "" {
+			root = p.Dir
+		}
+		if filepath.Clean(root) == clean && p.Ecosystem != "" {
+			result[p.Ecosystem] = true
+		}
+	}
+	return result
+}
+
+// isExcludedFromUnit reports whether abs (an absolute path already known to
+// be within unit.Root) falls under one of unit's own finalized ExcludedDirs.
+func isExcludedFromUnit(unit *ScanUnit, abs string) bool {
+	rel, err := filepath.Rel(unit.Root, abs)
+	if err != nil {
+		return false
+	}
+	rel = filepath.ToSlash(rel)
+	for _, excluded := range unit.ExcludedDirs {
+		if rel == excluded || strings.HasPrefix(rel, excluded+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// unitHasOwnLockfile reports whether unit's own scan scope -- respecting its
+// own (already-finalized) exclusions -- contains at least one lockfile of
+// its own. A lockfile that only exists because of a foreign nested project
+// unit.ExcludedDirs already prunes does not count: that file will never
+// actually reach the scanner.
+func unitHasOwnLockfile(repoRoot string, unit *ScanUnit, inventory []InventoryEntry) bool {
+	for _, entry := range inventory {
+		if !entry.Lockfile {
+			continue
+		}
+		abs := filepath.Join(repoRoot, filepath.FromSlash(entry.Path))
+		if !within(abs, unit.Root) {
+			continue
+		}
+		if isExcludedFromUnit(unit, abs) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// workspaceRootFallbackLockfiles returns the repo-root-level lockfile
+// path(s) that should back up unit's own SCA scope, or nil when unit already
+// has its own lockfile (the common case) or the repository root has no
+// lockfile matching an ecosystem unit actually uses. Evidenced by real
+// npm/yarn/pnpm workspaces, where every member's package.json shares one
+// package-lock.json at the workspace root; Cargo workspaces follow the same
+// pattern with one root Cargo.lock. Matching is ecosystem-aware so a Python
+// unit is never backed by an unrelated root-level package-lock.json.
+func workspaceRootFallbackLockfiles(resolution *Resolution, unit *ScanUnit) []string {
+	ecosystems := unitEcosystems(resolution.Projects, unit.Root)
+	if len(ecosystems) == 0 {
+		return nil
+	}
+	if unitHasOwnLockfile(resolution.RepoRoot, unit, resolution.Inventory) {
+		return nil
+	}
+	var fallback []string
+	for _, entry := range resolution.Inventory {
+		if !entry.Lockfile || filepath.ToSlash(filepath.Dir(entry.Path)) != "." {
+			continue // only the repository root's own direct files qualify
+		}
+		eco := lockfileEcosystem(filepath.Base(entry.Path))
+		if eco != "" && ecosystems[eco] {
+			fallback = append(fallback, entry.Path)
+		}
+	}
+	sort.Strings(fallback)
+	return fallback
+}
+
+// applyWorkspaceRootFallbackOwnership attributes each workspace-root
+// fallback lockfile (ScanUnit.FallbackLockfiles) to every target that relies
+// on it, merging into whatever buildFileOwnership already computed. Without
+// this, a finding from a repo-root lockfile would be attributed as
+// unowned/repository-global purely because the file itself sits outside
+// every target's own directory tree, even though it was fetched specifically
+// on a target's behalf.
+func applyWorkspaceRootFallbackOwnership(plan *ScanPlan, selected []*Target) {
+	targetComponent := make(map[string]string, len(selected))
+	for _, t := range selected {
+		targetComponent[t.ID] = t.ComponentID
+	}
+	for _, unit := range plan.Units {
+		if len(unit.FallbackLockfiles) == 0 {
+			continue
+		}
+		var targetIDs, componentIDs []string
+		for _, tid := range unit.TargetIDs {
+			targetIDs = appendUniqueStr(targetIDs, tid)
+			if cid := targetComponent[tid]; cid != "" {
+				componentIDs = appendUniqueStr(componentIDs, cid)
+			}
+		}
+		for _, path := range unit.FallbackLockfiles {
+			fo := &FileOwnership{Relation: RelationWorkspaceRoot, Context: contextForPathLocal(path)}
+			if existing := plan.FileOwnership[path]; existing != nil {
+				fo.TargetIDs = appendUniqueStr(append([]string{}, existing.TargetIDs...), targetIDs...)
+				fo.ComponentIDs = appendUniqueStr(append([]string{}, existing.ComponentIDs...), componentIDs...)
+			} else {
+				fo.TargetIDs = targetIDs
+				fo.ComponentIDs = componentIDs
+			}
+			sort.Strings(fo.TargetIDs)
+			sort.Strings(fo.ComponentIDs)
+			plan.FileOwnership[path] = fo
+		}
+	}
 }
 
 func generatedRelativeExcludes(repoRoot string, options PlanOptions) []string {
