@@ -62,6 +62,122 @@ func TestBuildScanPlanSharedUnitAndResidualScope(t *testing.T) {
 	}
 }
 
+// TestBuildScanPlan_ExcludesNestedForeignProject reproduces the reported
+// flaw directly: selecting a target rooted at appDir must not also scan an
+// unrelated project that happens to live in a subdirectory of appDir.
+func TestBuildScanPlan_ExcludesNestedForeignProject(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "app")
+	foreignDir := filepath.Join(root, "app", "tools", "other")
+	for _, dir := range []string{appDir, foreignDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appProject := &Project{ID: "p-app", Name: "app", Dir: appDir, OwnershipRoot: appDir, ComponentID: "c-app"}
+	foreignProject := &Project{ID: "p-foreign", Name: "other", Dir: foreignDir, OwnershipRoot: foreignDir, ComponentID: "c-foreign", Role: RoleUnrelated}
+	target := &Target{ID: "t-app", Name: "app", Project: appProject, Included: []*Project{appProject}, IncludedReasons: map[string]InclusionReason{appDir: InclusionPrimary}}
+
+	resolution := &Resolution{RepoRoot: root, Projects: []*Project{appProject, foreignProject}, Targets: []*Target{target}}
+	plan, err := BuildScanPlan(resolution, PlanOptions{TargetIDs: []string{"t-app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units) != 1 {
+		t.Fatalf("scan units = %d, want 1", len(plan.Units))
+	}
+	unit := plan.Units[0]
+	want := filepath.ToSlash(filepath.Join("tools", "other"))
+	found := false
+	for _, excluded := range unit.ExcludedDirs {
+		if excluded == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected unit.ExcludedDirs to contain %q, got %v", want, unit.ExcludedDirs)
+	}
+}
+
+// TestBuildScanPlan_DoesNotExcludeLegitimateNestedSharedComponent is the
+// regression check for the case nestedForeignExcludes must NOT touch: a
+// shared component nested inside the primary project's own directory tree,
+// genuinely included in the same target, must remain scanned. dropNestedRoots
+// folds the shared component's own unit into the primary's here (same as
+// TestBuildScanPlanSharedUnitAndResidualScope's top-level "shared" case, just
+// nested instead of a sibling), so this also proves nestedForeignExcludes
+// correctly recognizes an included project even after its own separate unit
+// was dropped.
+func TestBuildScanPlan_DoesNotExcludeLegitimateNestedSharedComponent(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "app")
+	sharedDir := filepath.Join(root, "app", "vendor", "shared-lib")
+	for _, dir := range []string{appDir, sharedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appProject := &Project{ID: "p-app", Name: "app", Dir: appDir, OwnershipRoot: appDir, ComponentID: "c-app"}
+	sharedProject := &Project{ID: "p-shared", Name: "shared-lib", Dir: sharedDir, OwnershipRoot: sharedDir, ComponentID: "c-shared"}
+	target := &Target{ID: "t-app", Name: "app", Project: appProject, Included: []*Project{appProject, sharedProject}, IncludedReasons: map[string]InclusionReason{appDir: InclusionPrimary, sharedDir: InclusionSharedDependency}}
+
+	resolution := &Resolution{RepoRoot: root, Projects: []*Project{appProject, sharedProject}, Targets: []*Target{target}}
+	plan, err := BuildScanPlan(resolution, PlanOptions{TargetIDs: []string{"t-app"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units) != 1 {
+		t.Fatalf("scan units = %d, want 1 (dropNestedRoots should fold the nested shared component into the app unit)", len(plan.Units))
+	}
+	unwanted := filepath.ToSlash(filepath.Join("vendor", "shared-lib"))
+	for _, excluded := range plan.Units[0].ExcludedDirs {
+		if excluded == unwanted {
+			t.Errorf("legitimately included shared component %q must not be excluded, got ExcludedDirs=%v", unwanted, plan.Units[0].ExcludedDirs)
+		}
+	}
+}
+
+// TestBuildScanPlan_NestedForeignExcludeDoesNotAffectRepoGlobalUnit confirms
+// the repository-global unit keeps its own, deliberately different exclusion
+// rule (RepoLevelExcludesForScanUnits: only the scheduled roots) rather than
+// also applying nestedForeignExcludes -- a repo-global scan is documented to
+// intentionally still cover other discovered-but-unselected projects.
+func TestBuildScanPlan_NestedForeignExcludeDoesNotAffectRepoGlobalUnit(t *testing.T) {
+	root := t.TempDir()
+	appDir := filepath.Join(root, "app")
+	foreignDir := filepath.Join(root, "app", "tools", "other")
+	for _, dir := range []string{appDir, foreignDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appProject := &Project{ID: "p-app", Name: "app", Dir: appDir, OwnershipRoot: appDir, ComponentID: "c-app"}
+	foreignProject := &Project{ID: "p-foreign", Name: "other", Dir: foreignDir, OwnershipRoot: foreignDir, ComponentID: "c-foreign", Role: RoleUnrelated}
+	target := &Target{ID: "t-app", Name: "app", Project: appProject, Included: []*Project{appProject}, IncludedReasons: map[string]InclusionReason{appDir: InclusionPrimary}}
+
+	resolution := &Resolution{RepoRoot: root, Projects: []*Project{appProject, foreignProject}, Targets: []*Target{target}}
+	plan, err := BuildScanPlan(resolution, PlanOptions{TargetIDs: []string{"t-app"}, IncludeRepoGlobal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Units) != 2 {
+		t.Fatalf("scan units = %d, want 2 (app, global)", len(plan.Units))
+	}
+	for _, unit := range plan.Units {
+		if unit.Root != root {
+			continue
+		}
+		// The global unit excludes the one scheduled root ("app") and
+		// nothing else -- in particular NOT "app/tools/other", which is
+		// nested inside an excluded directory already and, per the
+		// repo-global unit's own documented semantics, is not the kind of
+		// exclusion this unit applies at all.
+		if len(unit.ExcludedDirs) != 1 || unit.ExcludedDirs[0] != "app" {
+			t.Errorf("expected the global unit to exclude only [\"app\"], got %v", unit.ExcludedDirs)
+		}
+	}
+}
+
 func TestBuildComponentRelations(t *testing.T) {
 	dirA := filepath.Join(string(filepath.Separator), "repo", "a")
 	dirB := filepath.Join(string(filepath.Separator), "repo", "b")

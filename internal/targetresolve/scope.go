@@ -41,11 +41,13 @@ func (t *Target) ScanRoots() []string {
 // manifestAndLockfilePatterns is the list of file basenames (some
 // wildcarded) DiscoveredManifests recognizes across all 6 supported
 // ecosystems. Purely informational: this list is never consulted by the
-// underlying SCA scanner (internal/reposcan/sca.go), which still receives
-// only a directory Root and does its own independent, ecosystem-agnostic
-// manifest discovery via osv-scanner's recursive walk (see sca.go's
-// DirectoryPaths/Recursive:true). This exists so callers like --list-targets
-// can show which dependency files a target's scope actually contains.
+// underlying SCA scanner (internal/reposcan/sca.go), which does its own
+// independent, ecosystem-agnostic manifest discovery via osv-scanner's own
+// recursive walk of whatever directories it's given (sca.go only decides
+// directory BOUNDARIES from Root/ExcludedDirs -- see splitScanRoots -- never
+// which files inside them are manifests). This list exists so callers like
+// --list-targets can show which dependency files a target's scope actually
+// contains.
 var manifestAndLockfilePatterns = []string{
 	"go.mod", "go.sum",
 	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
@@ -169,6 +171,51 @@ func RepoLevelExcludesForScanUnits(repoRoot string, roots []string) []string {
 	}
 	sort.Strings(dirs)
 	return dirs
+}
+
+// nestedForeignExcludes returns the paths, relative to unitRoot, of every
+// discovered project's ownership root that is physically nested inside
+// unitRoot but is not in includedRoots. Without this, a scanner recursing
+// over unitRoot also walks into and reports findings for any other project
+// that merely happens to live in a subdirectory -- e.g. an unrelated tool
+// nested inside a selected target's own directory tree.
+//
+// A foreign root nested inside another foreign root is collapsed to just the
+// outer one via dropNestedRoots: Config.ShouldExclude's prefix match already
+// covers the inner one, so listing both would be redundant.
+func nestedForeignExcludes(unitRoot string, includedRoots map[string]bool, allProjects []*Project) []string {
+	cleanUnitRoot := filepath.Clean(unitRoot)
+	var foreign []string
+	seen := make(map[string]bool)
+	for _, p := range allProjects {
+		root := p.OwnershipRoot
+		if root == "" {
+			root = p.Dir
+		}
+		root = filepath.Clean(root)
+		if root == cleanUnitRoot || includedRoots[root] {
+			continue
+		}
+		if !strings.HasPrefix(root, cleanUnitRoot+string(filepath.Separator)) {
+			continue // not nested inside this unit at all
+		}
+		if !seen[root] {
+			seen[root] = true
+			foreign = append(foreign, root)
+		}
+	}
+	foreign = dropNestedRoots(foreign)
+
+	rels := make([]string, 0, len(foreign))
+	for _, abs := range foreign {
+		rel, err := filepath.Rel(cleanUnitRoot, abs)
+		if err != nil || rel == "." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		rels = append(rels, filepath.ToSlash(rel))
+	}
+	sort.Strings(rels)
+	return rels
 }
 
 // dropNestedRoots removes any path that is a subdirectory of another path

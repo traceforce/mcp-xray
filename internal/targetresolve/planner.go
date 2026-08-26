@@ -306,11 +306,41 @@ func BuildScanPlan(resolution *Resolution, options PlanOptions) (*ScanPlan, erro
 		unit.ExcludedDirs = RepoLevelExcludesForScanUnits(resolution.RepoRoot, roots)
 		units[id] = unit
 	}
+	// Every ownership root any selected target actually includes, repo-wide
+	// -- not just the ones the current unit itself serves. A project nested
+	// inside one unit's root can legitimately belong to a DIFFERENT selected
+	// target (e.g. two selected targets where one's directory sits inside
+	// the other's), and dropNestedRoots above may already have folded that
+	// project's own unit into this one; using the repo-wide set here means
+	// nestedForeignExcludes below can never exclude something the caller
+	// actually asked to scan, no matter how the units were folded together.
+	allIncludedRoots := make(map[string]bool)
+	for _, target := range selected {
+		for _, project := range target.Included {
+			root := project.OwnershipRoot
+			if root == "" {
+				root = project.Dir
+			}
+			allIncludedRoots[filepath.Clean(root)] = true
+		}
+	}
+
 	for _, unit := range units {
 		unit.TargetIDs = uniqueSorted(unit.TargetIDs)
 		unit.ExcludedDirs = uniqueSorted(unit.ExcludedDirs)
 		unit.Files, unit.Manifests, unit.Lockfiles = unitFiles(resolution.RepoRoot, unit.Root, resolution.Inventory)
 		unit.ExcludedDirs = append(unit.ExcludedDirs, generatedRelativeExcludes(unit.Root, options)...)
+		if filepath.Clean(unit.Root) != filepath.Clean(resolution.RepoRoot) {
+			// The repository-global residual unit (Root == RepoRoot) has its
+			// own, deliberately different exclusion rule immediately above
+			// (RepoLevelExcludesForScanUnits): it excludes only the
+			// currently-scheduled roots, so OTHER discovered-but-unselected
+			// projects remain visible to a repo-global scan by design. This
+			// nested-foreign check is narrower and only for a normal unit:
+			// something else discovered inside THIS unit's own directory
+			// tree that no selected target actually needs.
+			unit.ExcludedDirs = append(unit.ExcludedDirs, nestedForeignExcludes(unit.Root, allIncludedRoots, resolution.Projects)...)
+		}
 		for _, excluded := range resolution.Excluded {
 			abs := filepath.Join(resolution.RepoRoot, filepath.FromSlash(excluded))
 			if within(abs, unit.Root) {
@@ -554,6 +584,7 @@ func unitFiles(repoRoot, root string, inventory []InventoryEntry) ([]string, []s
 	}
 	return files, manifests, lockfiles
 }
+
 func generatedRelativeExcludes(repoRoot string, options PlanOptions) []string {
 	var result []string
 	for _, value := range append([]string{options.OutputPath}, options.OutputDirs...) {

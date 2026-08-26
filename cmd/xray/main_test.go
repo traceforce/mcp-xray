@@ -107,6 +107,28 @@ func TestExecutionScannerMatches(t *testing.T) {
 	}
 }
 
+func TestExplicitTargetRequested(t *testing.T) {
+	cases := []struct {
+		name       string
+		targetFlag string
+		targetIDs  []string
+		allTargets bool
+		want       bool
+	}{
+		{"nothing requested", "", nil, false, false},
+		{"target name requested", "my-server", nil, false, true},
+		{"target id requested", "", []string{"t-1"}, false, true},
+		{"all targets requested", "", nil, true, true},
+		{"empty target-id slice is not a request", "", []string{}, false, false},
+	}
+	for _, tc := range cases {
+		got := explicitTargetRequested(tc.targetFlag, tc.targetIDs, tc.allTargets)
+		if got != tc.want {
+			t.Errorf("%s: explicitTargetRequested(%q, %v, %v) = %v, want %v", tc.name, tc.targetFlag, tc.targetIDs, tc.allTargets, got, tc.want)
+		}
+	}
+}
+
 func TestRepoRelativeSlash(t *testing.T) {
 	cases := []struct {
 		root, abs string

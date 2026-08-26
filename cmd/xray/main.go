@@ -361,17 +361,22 @@ func NewRepoScanCommand() *cobra.Command {
 				return
 			}
 
-			if len(resolution.Targets) == 0 {
-				fmt.Println("No MCP server detected; scanning the full repository")
-				runLegacyFullRepoScan()
-				return
-			}
-
 			targetFlag, _ := cmd.Flags().GetString("target")
 			targetIDs, _ := cmd.Flags().GetStringArray("target-id")
 			allTargets, _ := cmd.Flags().GetBool("all-targets")
 			includeRepoGlobal, _ := cmd.Flags().GetBool("include-repo-global")
 			explainScope, _ := cmd.Flags().GetBool("explain-scope")
+
+			if len(resolution.Targets) == 0 {
+				if explicitTargetRequested(targetFlag, targetIDs, allTargets) {
+					fmt.Println("No requested MCP target was discovered; the repository has no discoverable MCP server targets to scan.")
+					os.Exit(1)
+				}
+				fmt.Println("No MCP server detected; scanning the full repository")
+				runLegacyFullRepoScan()
+				return
+			}
+
 			if targetFlag != "" {
 				for _, candidate := range resolution.Targets {
 					if candidate.Name == targetFlag {
@@ -584,6 +589,16 @@ func repoRelativeSlash(repoRoot, absPath string) string {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.ToSlash(absPath)
+}
+
+// explicitTargetRequested reports whether the user asked to scan a specific
+// target selection (by name, by id, or all of them) rather than merely
+// opting into target-resolution's informational/explain-scope machinery.
+// When true and resolution finds zero targets, silently falling back to a
+// full-repo scan would ignore the user's actual request instead of telling
+// them it could not be satisfied.
+func explicitTargetRequested(targetFlag string, targetIDs []string, allTargets bool) bool {
+	return targetFlag != "" || len(targetIDs) > 0 || allTargets
 }
 
 func hasDirectRelation(unit *targetresolve.ScanUnit) bool {
