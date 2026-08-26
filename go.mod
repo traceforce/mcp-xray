@@ -9,13 +9,16 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/bedrockruntime v1.47.1
 	github.com/google/osv-scanner/v2 v2.3.0
 	github.com/joho/godotenv v1.5.1
+	github.com/mattn/go-isatty v0.0.20
 	github.com/modelcontextprotocol/go-sdk v1.3.1
 	github.com/openai/openai-go/v3 v3.12.0
 	github.com/ossf/osv-schema/bindings/go v0.0.0-20251112210320-9fb6c8870ac1
 	github.com/pandatix/go-cvss v0.6.2
+	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
 	github.com/zricethezav/gitleaks/v8 v8.30.0
+	golang.org/x/mod v0.29.0
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -143,7 +146,6 @@ require (
 	github.com/magiconair/properties v1.8.9 // indirect
 	github.com/masahiro331/go-ext4-filesystem v0.0.0-20240620024024-ca14e6327bbd // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
 	github.com/mattn/go-shellwords v1.0.12 // indirect
 	github.com/mholt/archives v0.1.5 // indirect
@@ -171,7 +173,6 @@ require (
 	github.com/opencontainers/selinux v1.13.0 // indirect
 	github.com/owenrumney/go-sarif/v3 v3.3.0 // indirect
 	github.com/package-url/packageurl-go v0.1.3 // indirect
-	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
 	github.com/pjbgf/sha1cd v0.4.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -241,7 +242,6 @@ require (
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
-	golang.org/x/mod v0.29.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.18.0 // indirect

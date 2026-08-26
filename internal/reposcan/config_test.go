@@ -64,3 +64,69 @@ func TestShouldExcludeLegacyWithoutRoot(t *testing.T) {
 		t.Error("without Root, an in-repo match must still work")
 	}
 }
+
+// TestShouldExcludeExcludedDirs covers the ExcludedDirs field: full relative
+// directory paths excluded by prefix match, used by the repo-level scan to
+// skip all project directories without the false-positive risk of segment-
+// based matching (e.g. a project named "api" should not exclude unrelated
+// paths that happen to contain an "api" segment).
+func TestShouldExcludeExcludedDirs(t *testing.T) {
+	cfg := &Config{
+		Root:         "/repo",
+		ExcludedDirs: []string{"servers/server-a", "packages/shared"},
+	}
+
+	// Files inside an excluded directory are excluded.
+	for _, path := range []string{
+		"/repo/servers/server-a/main.go",
+		"/repo/servers/server-a/src/handler.py",
+		"/repo/packages/shared/util.js",
+	} {
+		if !cfg.ShouldExclude(path) {
+			t.Errorf("expected %q to be excluded by ExcludedDirs", path)
+		}
+	}
+
+	// The excluded directory itself is excluded.
+	if !cfg.ShouldExclude("/repo/servers/server-a") {
+		t.Error("the excluded directory entry itself must be excluded")
+	}
+
+	// Files NOT inside an excluded directory are NOT excluded.
+	for _, path := range []string{
+		"/repo/Dockerfile",
+		"/repo/.github/workflows/ci.yml",
+		"/repo/scripts/deploy.sh",
+		"/repo/servers/server-b/main.go",
+	} {
+		if cfg.ShouldExclude(path) {
+			t.Errorf("expected %q to NOT be excluded by ExcludedDirs", path)
+		}
+	}
+
+	// An ExcludedDirs entry of "." is silently ignored (the scan root itself
+	// is never excluded, matching the existing ExcludedPaths behavior).
+	dotCfg := &Config{Root: "/repo", ExcludedDirs: []string{"."}}
+	if dotCfg.ShouldExclude("/repo/server.py") {
+		t.Error("ExcludedDirs entry '.' must not exclude files at the scan root")
+	}
+}
+
+// TestShouldExcludeExcludedDirsAndPathsCoexist proves that ExcludedDirs and
+// ExcludedPaths fire independently — a path excluded by either is excluded.
+func TestShouldExcludeExcludedDirsAndPathsCoexist(t *testing.T) {
+	cfg := &Config{
+		Root:          "/repo",
+		ExcludedPaths: []string{"node_modules"},
+		ExcludedDirs:  []string{"servers/server-a"},
+	}
+	if !cfg.ShouldExclude("/repo/servers/server-a/main.go") {
+		t.Error("ExcludedDirs should fire")
+	}
+	if !cfg.ShouldExclude("/repo/scripts/node_modules/dep.js") {
+		t.Error("ExcludedPaths should fire even when ExcludedDirs is set")
+	}
+	if cfg.ShouldExclude("/repo/scripts/deploy.sh") {
+		t.Error("file matching neither ExcludedDirs nor ExcludedPaths should not be excluded")
+	}
+}
