@@ -4,7 +4,7 @@
 
 MCP X-Ray is a unified open-source security scanning and penetration testing solution for Model Context Protocol (MCP) servers. It generates production-ready [SARIF reports](https://sarifweb.azurewebsites.net/) for seamless integration with security tooling and CI/CD pipelines. Scan results can be optionally uploaded to [Traceforce Atlas](https://atlas.traceforce.co) for centralized security management and tracking. Atlas has over 600 MCPs in its registry, providing a comprehensive security assessment database for the MCP ecosystem.
 
-![Atlas Registry](images/registry.png)
+For securing AI agent skills, Traceforce also provides [Skill X-Ray](https://github.com/traceforce/skill-xray), an open-source static security scanner that analyzes skill packages for malicious or risky behavior before installation, without executing them.
 
 ## Installation
 
