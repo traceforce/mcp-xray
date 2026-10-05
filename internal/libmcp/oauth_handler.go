@@ -146,7 +146,19 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 
 	verifier, challenge := makePKCE()
 	state := randB64URL(16)
-	authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, clientID, scopeStr, challenge, state)
+	resource := prm.Resource
+	if resource == "" {
+		resource = o.MCPUrl
+	}
+
+	authURL := o.buildAuthURL(
+		asmd.AuthorizationEndpoint,
+		clientID,
+		scopeStr,
+		challenge,
+		state,
+		resource,
+	)
 
 	if !o.useLocalRedirectServer() {
 		fmt.Println("4) Redirect URI is a custom scheme (e.g. cursor://); callback will go to Cursor.")
@@ -182,7 +194,14 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
+	tok := o.exchangeCode(
+		asmd.TokenEndpoint,
+		clientID,
+		clientSecret,
+		code,
+		verifier,
+		resource,
+	)
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
@@ -328,7 +347,9 @@ func makePKCE() (verifier, challenge string) {
 	return
 }
 
-func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state string) string {
+func (o *OAuthConfig) buildAuthURL(
+	authEP, clientID, scope, codeChallenge, state, resource string,
+) string {
 	u, _ := url.Parse(authEP)
 	q := u.Query()
 	q.Set("response_type", "code")
@@ -339,13 +360,15 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	q.Set("code_challenge_method", "S256")
 	q.Set("state", state)
 	// MCP recommends RFC8707 resource indicator
-	q.Set("resource", o.MCPUrl)
+	q.Set("resource", resource)
 
 	u.RawQuery = q.Encode()
 	return u.String()
 }
 
-func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) TokenResponse {
+func (o *OAuthConfig) exchangeCode(
+	tokenEP, clientID, clientSecret, code, codeVerifier, resource string,
+) TokenResponse {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -353,7 +376,7 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	data.Set("code", code)
 	data.Set("redirect_uri", o.redirectURI())
 	data.Set("code_verifier", codeVerifier)
-	data.Set("resource", o.MCPUrl)
+	data.Set("resource", resource)
 
 	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
