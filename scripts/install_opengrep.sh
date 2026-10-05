@@ -11,7 +11,12 @@ REPO="opengrep/opengrep"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE"
 mkdir -p bin
-DEST="bin/opengrep"
+
+# Windows works under git-bash/MSYS where uname reports MINGW/MSYS/CYGWIN, same
+# detection install_codeql.sh already relies on. EXE picks the opengrep.exe name
+# there so it lands where the Go resolver (opengrepExe() in taint/opengrep.go)
+# looks for it next to the mcpxray binary.
+EXE="opengrep"
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -32,15 +37,21 @@ case "${OS}/${ARCH}" in
     ASSET="opengrep_osx_x86"
     EXPECTED="e9733c7ac4ad16ac5bbbcbff0264478c7b524d6750f29c847f93aacee3315d2b"
     ;;
+  MINGW*/x86_64 | MSYS*/x86_64 | CYGWIN*/x86_64)
+    ASSET="opengrep_windows_x86.exe"
+    EXPECTED="f4f91b0a6268318df1dbb63e11f0ba2e9fdc355fa27d1de8fe9abf6c8a8e9efa"
+    EXE="opengrep.exe"
+    ;;
   *)
     echo "[!] no pinned OpenGrep asset for ${OS}/${ARCH}." >&2
     echo "    Install opengrep manually and set MCPXRAY_OPENGREP_BIN to its path." >&2
     exit 1
     ;;
 esac
+DEST="bin/${EXE}"
 
-# Linux ships sha256sum; macOS ships `shasum -a 256`. Support both so the Darwin assets
-# above actually verify.
+# Linux/git-bash ship sha256sum; macOS ships `shasum -a 256`. Support both so
+# every pinned asset above actually verifies.
 sha256() {
   if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$1" | awk '{print $1}'

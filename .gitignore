@@ -8,6 +8,30 @@
 *.so
 *.dylib
 
+# Generated archives
+*.zip
+dist/
+
+# Generated scan reports
+*.sarif.json
+/report/
+/reportMS/
+
+# Validation evidence (scan comparison outputs, proposals, helper scripts)
+evidence/
+
+# Downloaded MCP server checkouts
+downloaded-mcp-servers/
+aws/
+bos/
+gh/
+madi/
+mcp/
+oracle/
+rush/
+twil/
+wald/
+
 # Test binary, built with `go test -c`
 *.test
 
