@@ -1,0 +1,365 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "mcpxray",
+          "version": "1.0.2",
+          "informationUri": "https://github.com/traceforce/mcpxray",
+          "rules": [
+            {
+              "id": "INJECTION-CODE",
+              "shortDescription": {
+                "text": "INJECTION: Template injection in property values"
+              }
+            },
+            {
+              "id": "SSRF-LOCALHOST",
+              "shortDescription": {
+                "text": "SSRF: Localhost access via cover URL"
+              }
+            },
+            {
+              "id": "SSRF-PRIVATE-IP",
+              "shortDescription": {
+                "text": "SSRF: Private IP range access via icon URL"
+              }
+            },
+            {
+              "id": "INPUT-OVERSIZE",
+              "shortDescription": {
+                "text": "INPUT_VALIDATION: Oversized property title (5MB)"
+              }
+            },
+            {
+              "id": "INPUT-FORMAT",
+              "shortDescription": {
+                "text": "INPUT_VALIDATION: Invalid command enum value"
+              }
+            },
+            {
+              "id": "OUTPUT-SCHEMA",
+              "shortDescription": {
+                "text": "OUTPUT_VALIDATION: Invalid property type to trigger schema errors"
+              }
+            },
+            {
+              "id": "INFO-STACK",
+              "shortDescription": {
+                "text": "INFO_DISCLOSURE: Check for stack trace leakage (malformed JSON in properties)"
+              }
+            },
+            {
+              "id": "SSRF-METADATA",
+              "shortDescription": {
+                "text": "SSRF: AWS metadata service access via cover URL"
+              }
+            },
+            {
+              "id": "INPUT-SPECIAL",
+              "shortDescription": {
+                "text": "INPUT_VALIDATION: Special characters in property names and values"
+              }
+            },
+            {
+              "id": "INFO-VERSION",
+              "shortDescription": {
+                "text": "INFO_DISCLOSURE: Check for version information disclosure (invalid command)"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "OUTPUT-SCHEMA",
+          "level": "error",
+          "message": {
+            "text": "Invalid property type to trigger schema errors. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "SSRF-METADATA",
+          "level": "error",
+          "message": {
+            "text": "AWS metadata service access via cover URL. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "SSRF-METADATA",
+          "level": "error",
+          "message": {
+            "text": "GCP metadata service access via icon URL. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "SSRF-LOCALHOST",
+          "level": "error",
+          "message": {
+            "text": "Localhost access via cover URL. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "SSRF-PRIVATE-IP",
+          "level": "error",
+          "message": {
+            "text": "Private IP range access via icon URL. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INFO-STACK",
+          "level": "error",
+          "message": {
+            "text": "Check for stack trace leakage (malformed JSON in properties). Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INPUT-SPECIAL",
+          "level": "error",
+          "message": {
+            "text": "Special characters in property names and values. Expected error but got success. Details: {\"content\":[{\"type\":\"text\",\"text\":\"{\\\"page_id\\\":\\\"31b8a967-7b72-81a0-909c-d77548f7c21f\\\"}\"}]}"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INJECTION-CODE",
+          "level": "warning",
+          "message": {
+            "text": "Argument substitution failed: argument \"properties\": unknown DSL or variable: \"7*7\""
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INPUT-OVERSIZE",
+          "level": "warning",
+          "message": {
+            "text": "Argument substitution failed: argument \"content_updates\": unknown DSL or variable: \"listOf(101, '{\\\"old_str\\\":\\\"test\\\",\\\"new_str\\\":\\\"replacement\\\"\""
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INPUT-OVERSIZE",
+          "level": "note",
+          "message": {
+            "text": "Oversized content replacement (10MB). Failed to call tool: calling \"tools/call\": sending \"tools/call\": failed to connect: Request Entity Too Large. Details: "
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INPUT-FORMAT",
+          "level": "note",
+          "message": {
+            "text": "Invalid command enum value. Failed to call tool: calling \"tools/call\": MCP error -32602: Invalid arguments for tool notion-update-page: [\n  {\n    \"received\": \"delete_all_pages\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"update_properties\",\n      \"update_content\",\n      \"replace_content\",\n      \"apply_template\",\n      \"update_verification\"\n    ],\n    \"path\": [\n      \"command\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'update_properties' | 'update_content' | 'replace_content' | 'apply_template' | 'update_verification', received 'delete_all_pages'\"\n  }\n]. Details: "
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INPUT-OVERSIZE",
+          "level": "note",
+          "message": {
+            "text": "Oversized property title (5MB). Failed to call tool: calling \"tools/call\": sending \"tools/call\": failed to connect: Request Entity Too Large. Details: "
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        },
+        {
+          "ruleId": "INFO-VERSION",
+          "level": "note",
+          "message": {
+            "text": "Check for version information disclosure (invalid command). Failed to call tool: calling \"tools/call\": MCP error -32602: Invalid arguments for tool notion-update-page: [\n  {\n    \"received\": \"get_version_info\",\n    \"code\": \"invalid_enum_value\",\n    \"options\": [\n      \"update_properties\",\n      \"update_content\",\n      \"replace_content\",\n      \"apply_template\",\n      \"update_verification\"\n    ],\n    \"path\": [\n      \"command\"\n    ],\n    \"message\": \"Invalid enum value. Expected 'update_properties' | 'update_content' | 'replace_content' | 'apply_template' | 'update_verification', received 'get_version_info'\"\n  }\n]. Details: "
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "pentest_plans_2026-03-15T21-24-00-07-00/pentest_plan_notion_notion-update-page_2026-03-15T21:24:10-07:00.yaml"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "mcpServerName": "notion",
+            "mcpToolName": "notion-update-page",
+            "tool": "pentest",
+            "type": "PENTEST"
+          }
+        }
+      ]
+    }
+  ]
+}
