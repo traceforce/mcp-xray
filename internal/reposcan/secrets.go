@@ -52,6 +52,12 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 			return nil
 		}
 
+		// Skip non-regular files (FIFOs, sockets, devices, symlinks), as the SAST walk does.
+		// Reading a FIFO blocks forever and a dangling symlink fails the whole walk.
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+
 		// Skip files larger than configured max size
 		if info.Size() > s.config.MaxFileSize {
 			return nil
