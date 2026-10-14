@@ -67,6 +67,9 @@ func (s *SecretsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 		findings := detector.DetectString(string(fileContent))
 		for _, finding := range findings {
 			finding.File = filePath
+			// DetectString counts lines from 0; SARIF and editors count from 1.
+			finding.StartLine++
+			finding.EndLine++
 			allFindings = append(allFindings, finding)
 		}
 		return nil
