@@ -3,7 +3,9 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"mcpxray/internal/metadata"
 	"mcpxray/proto"
@@ -17,8 +19,9 @@ type SARIFReport struct {
 }
 
 type Run struct {
-	Tool    Tool     `json:"tool"`
-	Results []Result `json:"results"`
+	Tool       Tool                   `json:"tool"`
+	Results    []Result               `json:"results"`
+	Properties map[string]interface{} `json:"properties,omitempty"`
 }
 
 type Tool struct {
@@ -67,7 +70,16 @@ type Message struct {
 	Text string `json:"text"`
 }
 
+// GenerateSarif builds a SARIF report from findings.
 func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
+	return GenerateSarifWithProperties(findings, nil, "", nil)
+}
+
+// GenerateSarifWithProperties builds a SARIF report in which
+// resultProperties[i] is merged into the properties of findings[i]'s result
+// and runProperties, when non-nil, is attached to the run. A finding's file
+// under repoRoot is reported repository-relative.
+func GenerateSarifWithProperties(findings []*proto.Finding, resultProperties []map[string]interface{}, repoRoot string, runProperties map[string]interface{}) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -86,21 +98,32 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		}
 	}
 
-	// Convert rules map to slice
+	// Convert rules map to slice, sorted by ID so the output is deterministic
+	// across runs (Go map iteration order is randomized per-process).
 	rules := make([]ReportingRule, 0, len(ruleMap))
 	for _, rule := range ruleMap {
 		rules = append(rules, *rule)
 	}
+	sort.Slice(rules, func(i, j int) bool {
+		return rules[i].ID < rules[j].ID
+	})
 
-	// sort rules by severity. The proto values are in descending order.
-	sort.Slice(findings, func(i, j int) bool {
-		return findings[i].Severity > findings[j].Severity
+	// Order results by severity (descending; the proto values are in
+	// descending order) through an index permutation, which keeps
+	// resultProperties[i] paired with findings[i] and leaves the caller's
+	// slices unmodified. Equal severities keep their input order.
+	order := make([]int, len(findings))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return findings[order[i]].Severity > findings[order[j]].Severity
 	})
 
 	// Convert findings to results
-	results := make([]Result, 0, len(findings))
-	for i := range findings {
-		finding := findings[i]
+	results := make([]Result, 0, len(order))
+	for _, idx := range order {
+		finding := findings[idx]
 
 		result := Result{
 			RuleID: finding.RuleId,
@@ -119,10 +142,16 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 
 		// Add location if file is specified
 		if finding.File != "" {
+			uri := finding.File
+			if repoRoot != "" {
+				if rel, err := filepath.Rel(repoRoot, finding.File); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+					uri = filepath.ToSlash(rel)
+				}
+			}
 			location := Location{
 				PhysicalLocation: PhysicalLocation{
 					ArtifactLocation: ArtifactLocation{
-						URI: finding.File,
+						URI: uri,
 					},
 				},
 			}
@@ -156,6 +185,11 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		if finding.Fixed != "" {
 			properties["fixed"] = finding.Fixed
 		}
+		if idx < len(resultProperties) {
+			for key, value := range resultProperties[idx] {
+				properties[key] = value
+			}
+		}
 		if len(properties) > 0 {
 			result.Properties = properties
 		}
@@ -164,22 +198,22 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 	}
 
 	// Build the SARIF report
+	run := Run{
+		Tool: Tool{
+			Driver: Driver{
+				Name:           metadata.Name,
+				Version:        metadata.Version,
+				InformationURI: metadata.InformationURI,
+				Rules:          rules,
+			},
+		},
+		Results:    results,
+		Properties: runProperties,
+	}
 	report := SARIFReport{
 		Version: "2.1.0",
 		Schema:  "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-		Runs: []Run{
-			{
-				Tool: Tool{
-					Driver: Driver{
-						Name:           metadata.Name,
-						Version:        metadata.Version,
-						InformationURI: metadata.InformationURI,
-						Rules:          rules,
-					},
-				},
-				Results: results,
-			},
-		},
+		Runs:    []Run{run},
 	}
 
 	// Marshal to JSON

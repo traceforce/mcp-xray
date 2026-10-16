@@ -122,6 +122,38 @@ A target that exceeds it contributes nothing, so raise it for large repositories
 `--codeql-timeout <seconds>` (or `MCPXRAY_CODEQL_TIMEOUT`); the flag wins when both are set.
 Exceeding the budget is reported as `timed out after Ns`, never as a clean zero.
 
+#### Monorepo / Target Resolution
+
+By default, `repo-scan` scans the whole repository. In a monorepo holding several MCP servers, or one server among clients, SDKs and shared libraries, that mixes unrelated findings into one report. Target resolution detects the MCP servers in the repository and scans the selected one together with the workspace-local components it depends on.
+
+```bash
+# List the MCP servers found in the repository without scanning (add --json for machine-readable output)
+./mcpxray repo-scan /path/to/monorepo --list-targets
+
+# Scan one server by name (or by --target-id)
+./mcpxray repo-scan /path/to/monorepo --target "Fabric MCP"
+
+# Scan every server in one deduplicated report; --include-repo-global also scans the files no server owns
+./mcpxray repo-scan /path/to/monorepo --all-targets
+
+# With exactly one server found, it is selected automatically
+./mcpxray repo-scan /path/to/monorepo --target-resolution
+```
+
+Any of `--target-resolution`, `--list-targets`, `--target`, `--target-id`, `--all-targets`, `--include-repo-global` or `--explain-scope` turns target resolution on; `--json` is only valid with `--list-targets`. If several servers are found and none is selected, `repo-scan` prompts when run from a terminal, or exits with the list of servers and the flag that selects each one when run non-interactively (e.g. in CI). If no server is found and none was requested, it scans the whole repository.
+
+Without these flags `repo-scan` scans the whole repository as before; run from a terminal, it also prints a one-line hint pointing at `--list-targets` when it detects two or more servers. In the directories it scans, a target scan reads every dependency file a full scan would, including those in default-excluded directories such as `build/`, and a scanner that fails there fails the run instead of reporting no findings. A SAST taint engine (OpenGrep, CodeQL) that fails is skipped, as in a full scan, and the report records that SAST execution as `partial`, with the error.
+
+A target covers its server's project, the workspace-local projects that project depends on (its own development dependencies included; of a Python dependency, only its runtime dependencies, not its dependency groups) and the test projects that depend on it, minus any other server nested inside them. A server with no lockfile of its own is checked against the lockfile of the workspace it is a member of (npm, yarn and bun `workspaces`, `pnpm-workspace.yaml`, Cargo or uv workspaces) and is credited with all of that lockfile's findings, as `workspace-root-dependency`, although the lockfile may also pin packages only its siblings use. Each finding also carries a `context` taken from its path (`production`, `test`, `fixture`, `example`, `docs`, `build`, `ci`, `deployment`, `vendored` or `generated`), so that, for example, findings in tests can be filtered out.
+
+A target scan's SARIF report records, in its run properties, each target's finding counts, the scan units (roots, exclusions and file counts) and every scanner execution. `--explain-scope` prints the full plan, file lists included, before scanning.
+
+With `--upload`, a target scan's report is uploaded under the repository's name, as a full scan's is, followed by `/<target name>` when a single target was scanned (e.g. `mono/billing-server`), or by its directory when another server in the repository has the same name; the report itself names every target it covers.
+
+Target detection covers Go, Node (npm/yarn/pnpm workspaces, including `workspace:`/`file:`/`link:` dependencies, and SDK v2's `@modelcontextprotocol/server`), Python (Poetry and `uv` path/workspace dependencies), .NET (`ProjectReference`), Java (Maven modules) and Rust (Cargo workspaces), plus MCP registry `server.json` manifests in any language.
+
+Detection reads manifests and source with pattern matching, not a compiler, so an SDK imported under an alias can go unnoticed. A project is a manifest (`go.mod`, `package.json`, ...), so several servers sharing one manifest, like the example `main` packages inside a Go module, form a single project rather than one target each.
+
 ## Output Format
 
 MCP X-Ray generates reports in [SARIF (Static Analysis Results Interchange Format)](https://sarifweb.azurewebsites.net/) format, which is widely supported by security tools and CI/CD platforms.
