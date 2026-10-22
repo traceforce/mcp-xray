@@ -160,6 +160,9 @@ func TestOutcomeForError_Unlaunchable(t *testing.T) {
 func TestOutcomeForError(t *testing.T) {
 	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(&DCRUnauthorizedError{ServerName: "s"}))
 	assert.Equal(t, OutcomeUnlaunchable, OutcomeForError(&fs.PathError{Op: "fork/exec", Path: "/no/such/server", Err: fs.ErrNotExist}))
+	assert.Equal(t, OutcomeUnlaunchable, OutcomeForError(&fs.PathError{Op: "fork/exec", Path: "/srv/server", Err: fs.ErrPermission}))
+	assert.Equal(t, OutcomeUnlaunchable, OutcomeForError(&fs.PathError{Op: "fork/exec", Path: "/srv/server", Err: errors.New("exec format error")}))
+	assert.Equal(t, OutcomeFailed, OutcomeForError(&fs.PathError{Op: "open", Path: "/srv/config", Err: fs.ErrNotExist}))
 	assert.Equal(t, OutcomeFailed, OutcomeForError(errors.New("boom")))
 }
 
