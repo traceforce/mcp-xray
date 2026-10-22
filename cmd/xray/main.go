@@ -226,20 +226,26 @@ func NewDumpToolsCommand() *cobra.Command {
 				toolsOutputFile = fmt.Sprintf("tools_summary_%s.json", strings.ReplaceAll(timestamp, ":", "-"))
 			}
 
+			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
+			outcomesFile, _ := cmd.Flags().GetString("outcomes-output")
+
 			ctx := context.Background()
 			// Aggregate tools across all config files so nothing is overwritten.
 			allToolsData := []libmcp.ServerToolsData{}
+			allOutcomes := []libmcp.ServerOutcome{}
 
 			for _, configPath := range configPaths {
 				fmt.Printf("\nDumping tools: %s\n", configPath)
 				scanner := configscan.NewToolsScannerForDump(configPath)
-				serverToolsData, connectionFindings, err := scanner.DumpTools(ctx)
+				scanner.NonInteractive = nonInteractive
+				serverToolsData, outcomes, connectionFindings, err := scanner.DumpTools(ctx)
 				if err != nil {
 					fmt.Printf("Warning: Error dumping tools for %s: %v\n", configPath, err)
 					continue
 				}
 
 				allToolsData = append(allToolsData, serverToolsData...)
+				allOutcomes = append(allOutcomes, outcomes...)
 
 				// Surface connection/listing problems without turning them into a scan.
 				for _, finding := range connectionFindings {
@@ -252,6 +258,19 @@ func NewDumpToolsCommand() *cobra.Command {
 				os.Exit(1)
 			}
 
+			if outcomesFile != "" {
+				data, err := json.MarshalIndent(allOutcomes, "", "  ")
+				if err != nil {
+					fmt.Printf("Error writing outcomes file: %v\n", err)
+					os.Exit(1)
+				}
+				if err := os.WriteFile(outcomesFile, data, 0644); err != nil {
+					fmt.Printf("Error writing outcomes file: %v\n", err)
+					os.Exit(1)
+				}
+				fmt.Printf("Outcomes written to %s\n", outcomesFile)
+			}
+
 			totalTools := 0
 			for _, sd := range allToolsData {
 				totalTools += len(sd.Tools)
@@ -261,6 +280,8 @@ func NewDumpToolsCommand() *cobra.Command {
 	}
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Dump tools from all known MCP config paths")
+	cmd.Flags().Bool("non-interactive", false, "Never open a browser for OAuth; servers that need it are reported as auth_required")
+	cmd.Flags().String("outcomes-output", "", "Output file path for per-server outcomes JSON (status ok, empty, auth_required, unlaunchable, or failed)")
 	return cmd
 }
 

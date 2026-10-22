@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"mcpxray/internal/libmcp"
@@ -24,6 +23,8 @@ type ToolsScanner struct {
 	MCPconfigPath   string
 	toolsAnalyzer   ToolsAnalyzer
 	toolsOutputFile string
+	// NonInteractive never starts browser OAuth; such servers are reported as auth_required.
+	NonInteractive bool
 }
 
 func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string, maxRetries int) (*ToolsScanner, error) {
@@ -63,12 +64,12 @@ func NewToolsScannerForDump(configPath string) *ToolsScanner {
 	}
 }
 
-// serverToolsResult is the outcome of connecting to a single MCP server and
-// listing its tools. Exactly one of data or finding is set: data holds the
-// listed tools, while finding describes a connection or listing failure.
+// serverToolsResult holds the per-server outcome plus, when there is one, the
+// listed tools (data) or the connection/listing failure (finding).
 type serverToolsResult struct {
 	data    *libmcp.ServerToolsData
 	finding *proto.Finding
+	outcome libmcp.ServerOutcome
 }
 
 // listAllServerTools connects to every MCP server in the config, lists its
@@ -90,6 +91,7 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 	defer cancel()
 
 	for _, server := range servers {
+		server.NonInteractive = s.NonInteractive
 		session, err := libmcp.NewSDKSession(ctx, server)
 		if err != nil {
 			// Handle connection errors gracefully - continue with other servers
@@ -108,19 +110,19 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 				McpServerName: server.Name,
 				File:          s.MCPconfigPath,
 				Message:       msg,
-			}})
+			}, outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}})
 			continue
 		}
 		defer session.Close()
 
 		fmt.Printf("Listing tools for server %s\n", server.Name)
 
-		listToolsResult, err := session.Session.ListTools(ctx, &mcp.ListToolsParams{})
+		tools, err := libmcp.ListAllTools(ctx, session.Session)
 		if err != nil {
-			// If the error is a 401 Unauthorized error, report a medium severity finding
-			// and suggest the user to check the OAuth scopes.
-			if strings.Contains(err.Error(), "401") {
-				results = append(results, serverToolsResult{finding: &proto.Finding{
+			outcome := libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}
+			// Auth failures get a medium finding that points at credentials and OAuth scopes.
+			if outcome.Status == libmcp.OutcomeAuthRequired {
+				results = append(results, serverToolsResult{outcome: outcome, finding: &proto.Finding{
 					Tool:          "tools-scanner",
 					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 					Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -134,7 +136,7 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 			}
 			// Handle other errors gracefully too
 			fmt.Printf("Warning: Failed to list tools for MCP server '%s': %v\n", server.Name, err)
-			results = append(results, serverToolsResult{finding: &proto.Finding{
+			results = append(results, serverToolsResult{outcome: outcome, finding: &proto.Finding{
 				Tool:          "tools-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
@@ -147,14 +149,15 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 			continue
 		}
 
-		if len(listToolsResult.Tools) == 0 {
+		if len(tools) == 0 {
+			results = append(results, serverToolsResult{outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeEmpty}})
 			continue
 		}
 
-		results = append(results, serverToolsResult{data: &libmcp.ServerToolsData{
-			Server: server.Name,
-			Tools:  enrichTools(listToolsResult.Tools),
-		}})
+		results = append(results, serverToolsResult{
+			data:    &libmcp.ServerToolsData{Server: server.Name, Tools: enrichTools(tools)},
+			outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeOK, ToolCount: len(tools)},
+		})
 	}
 
 	return results, nil
@@ -172,6 +175,9 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	for _, result := range results {
 		if result.finding != nil {
 			allFindings = append(allFindings, result.finding)
+			continue
+		}
+		if result.data == nil {
 			continue
 		}
 
@@ -195,28 +201,33 @@ func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 }
 
 // DumpTools lists the tools exposed by every MCP server in the config, without
-// running any tool analysis or writing to disk. Connection and listing failures
-// are returned as findings so callers can surface them, but no security scanning
-// is performed. Callers can aggregate the returned data across multiple configs
-// and persist it once with WriteToolsJSON.
-func (s *ToolsScanner) DumpTools(ctx context.Context) ([]libmcp.ServerToolsData, []*proto.Finding, error) {
+// running any tool analysis or writing to disk. Every server gets an outcome;
+// connection and listing failures are also returned as findings so callers can
+// surface them, but no security scanning is performed. Callers can aggregate
+// the returned data across multiple configs and persist it once with
+// WriteToolsJSON.
+func (s *ToolsScanner) DumpTools(ctx context.Context) ([]libmcp.ServerToolsData, []libmcp.ServerOutcome, []*proto.Finding, error) {
 	results, err := s.listAllServerTools(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	var serverToolsData []libmcp.ServerToolsData
+	var outcomes []libmcp.ServerOutcome
 	var connectionFindings []*proto.Finding
 
 	for _, result := range results {
+		outcomes = append(outcomes, result.outcome)
 		if result.finding != nil {
 			connectionFindings = append(connectionFindings, result.finding)
 			continue
 		}
-		serverToolsData = append(serverToolsData, *result.data)
+		if result.data != nil {
+			serverToolsData = append(serverToolsData, *result.data)
+		}
 	}
 
-	return serverToolsData, connectionFindings, nil
+	return serverToolsData, outcomes, connectionFindings, nil
 }
 
 // WriteToolsJSON writes the collected tools data for one or more servers to the

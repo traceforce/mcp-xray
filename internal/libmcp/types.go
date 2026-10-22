@@ -16,6 +16,7 @@ type MCPServerConfig struct {
 	OAuthClientID     string
 	OAuthClientSecret string
 	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
+	NonInteractive    bool   // Never start browser OAuth; a server that needs it fails to connect instead
 }
 
 // EnrichedTool wraps an MCP tool with classified action labels

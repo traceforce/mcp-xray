@@ -129,7 +129,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
-	if !hasAccessToken(cfg.Headers) {
+	if !cfg.NonInteractive && !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, err := oauthConfig.OauthDiscovery()
 		if err != nil {

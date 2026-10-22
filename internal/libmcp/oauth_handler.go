@@ -186,7 +186,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
-	fmt.Printf(" Access token acquired %+v\n\n", tok)
+	fmt.Println("Access token acquired")
 
 	return tok.AccessToken, nil
 }
@@ -315,7 +315,6 @@ func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, err
 	if err := json.NewDecoder(resp.Body).Decode(&dcr); err != nil {
 		return nil, err
 	}
-	fmt.Printf("DCR response: %+v\n", dcr)
 	return &dcr, nil
 }
 
