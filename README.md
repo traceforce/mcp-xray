@@ -77,6 +77,9 @@ Connect to the MCP servers and dump their tool definitions to a JSON file, witho
 
 # Specify a custom output file
 ./mcpxray dump-tools /path/to/mcp/config.json --tools-output custom-tools.json
+
+# Never open a browser for OAuth and record one outcome per server
+./mcpxray dump-tools /path/to/mcp/config.json --non-interactive --outcomes-output outcomes.json
 ```
 
 Unlike `config-scan`, this command performs no connection, secrets, or tool analysis — it only lists tools and writes them to the tools JSON file (`tools_summary_<timestamp>.json` by default). The output is a single JSON array with one entry per server. Each tool is wrapped with classified actions derived from MCP annotations (`readOnlyHint` / `destructiveHint`) and name/description keywords:
@@ -94,6 +97,14 @@ Unlike `config-scan`, this command performs no connection, secrets, or tool anal
 ```
 
 Possible `actions` values are `read`, `write`, `delete`, and `unknown` (when no signal matches). A tool may have more than one action. The same enrichment is included in the tools summary written by `config-scan`. Connection or listing failures are printed as warnings.
+
+Tool lists are paginated to completion; a server that never stops paging is reported as `failed` rather than as a partial list. With `--outcomes-output`, every server also gets one entry in a separate JSON array:
+
+```json
+{ "server": "notion", "status": "auth_required", "reason": "failed to connect: calling \"initialize\": sending \"initialize\": Unauthorized", "tool_count": 0 }
+```
+
+`status` is `ok`, `empty` (connected, but the server lists no tools), `auth_required`, `unlaunchable` (the command could not be started), or `failed`. With `--non-interactive`, MCP X-Ray never opens a browser: a server that needs OAuth is reported as `auth_required` instead of waiting for a login.
 
 ### Pentest
 
