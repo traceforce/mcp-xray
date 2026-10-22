@@ -228,6 +228,14 @@ func NewDumpToolsCommand() *cobra.Command {
 
 			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 			outcomesFile, _ := cmd.Flags().GetString("outcomes-output")
+			if outcomesFile != "" {
+				oa, _ := filepath.Abs(outcomesFile)
+				ta, _ := filepath.Abs(toolsOutputFile)
+				if oa == ta {
+					fmt.Println("Error: --outcomes-output must not be the same file as --tools-output")
+					os.Exit(1)
+				}
+			}
 
 			ctx := context.Background()
 			// Aggregate tools across all config files so nothing is overwritten.

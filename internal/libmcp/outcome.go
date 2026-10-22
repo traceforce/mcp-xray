@@ -67,7 +67,8 @@ func OutcomeForError(err error) string {
 	switch {
 	case errors.As(err, &execErr), errors.As(err, &pathErr) && pathErr.Op == "fork/exec":
 		return OutcomeUnlaunchable
-	case errors.As(err, &dcrErr), strings.Contains(err.Error(), "Unauthorized"):
+	// The SDK ends a 401 error with the status text; a suffix match keeps a URL or cursor in the message from counting.
+	case errors.As(err, &dcrErr), strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized"):
 		return OutcomeAuthRequired
 	}
 	return OutcomeFailed
