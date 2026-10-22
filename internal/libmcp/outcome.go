@@ -50,7 +50,7 @@ func ListAllTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool,
 			return tools, nil
 		}
 		if seen[res.NextCursor] {
-			return nil, fmt.Errorf("tools/list repeated cursor %q", res.NextCursor)
+			return nil, errors.New("tools/list returned a repeated cursor")
 		}
 		seen[res.NextCursor] = true
 		params = &mcp.ListToolsParams{Cursor: res.NextCursor}
