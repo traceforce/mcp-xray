@@ -228,14 +228,6 @@ func NewDumpToolsCommand() *cobra.Command {
 
 			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 			outcomesFile, _ := cmd.Flags().GetString("outcomes-output")
-			if outcomesFile != "" {
-				oa, _ := filepath.Abs(outcomesFile)
-				ta, _ := filepath.Abs(toolsOutputFile)
-				if oa == ta {
-					fmt.Println("Error: --outcomes-output must not be the same file as --tools-output")
-					os.Exit(1)
-				}
-			}
 
 			ctx := context.Background()
 			// Aggregate tools across all config files so nothing is overwritten.
@@ -267,6 +259,13 @@ func NewDumpToolsCommand() *cobra.Command {
 			}
 
 			if outcomesFile != "" {
+				// The tools file exists now, so any alias of it (same path, symlink, hard link) is refused before it is overwritten.
+				if ti, err := os.Stat(toolsOutputFile); err == nil {
+					if oi, err := os.Stat(outcomesFile); err == nil && os.SameFile(ti, oi) {
+						fmt.Println("Error: --outcomes-output must not be the same file as --tools-output")
+						os.Exit(1)
+					}
+				}
 				data, err := json.MarshalIndent(allOutcomes, "", "  ")
 				if err != nil {
 					fmt.Printf("Error writing outcomes file: %v\n", err)
