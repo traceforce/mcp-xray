@@ -74,7 +74,7 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 				l.err = err
 				continue
 			}
-			if b == ' ' || b == '\t' || b == '\n' {
+			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
 				continue // leading blanks and empty lines: the decoder would skip them too
 			}
 			l.mid, l.keep = true, b == '{'
@@ -135,9 +135,10 @@ func (c *stdinCloser) Close() error {
 // failure can say why the child exited. The configured secrets are masked
 // before the tail is cut to its last lines, so no fragment of one survives.
 type stderrTail struct {
-	secrets []string   // configured values that must never appear in a report
+	secrets []string   // environment values that must never appear in a report
 	mu      sync.Mutex // Close can report an unresponsive child while Wait's copy goroutine still writes
 	buf     []byte
+	cut     bool // buf lost its front and may start inside a secret
 }
 
 func (t *stderrTail) Write(p []byte) (int, error) {
@@ -145,7 +146,7 @@ func (t *stderrTail) Write(p []byte) (int, error) {
 	defer t.mu.Unlock()
 	t.buf = append(t.buf, p...)
 	if drop := len(t.buf) - stderrTailBytes; drop > 0 {
-		t.buf = t.buf[drop:]
+		t.buf, t.cut = t.buf[drop:], true
 	}
 	return len(p), nil
 }
@@ -155,7 +156,7 @@ func (t *stderrTail) Write(p []byte) (int, error) {
 func (t *stderrTail) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	lines := strings.Split(strings.TrimSpace(redact(string(t.buf), t.secrets)), "\n")
+	lines := strings.Split(strings.TrimSpace(redact(string(t.buf), t.secrets, t.cut)), "\n")
 	if len(lines) > stderrTailLines {
 		lines = lines[len(lines)-stderrTailLines:]
 	}
@@ -164,9 +165,9 @@ func (t *stderrTail) String() string {
 
 // redact replaces every occurrence of the secrets in s with one "[redacted]"
 // per masked span, so overlapping matches cannot leave a piece of each other
-// behind. A leading suffix of a secret is masked too: s may start inside one
-// that Write cut when the buffer filled.
-func redact(s string, secrets []string) string {
+// behind. With cut, a leading suffix of a secret is masked too: s then starts
+// where the front of the buffer was dropped, possibly inside a secret.
+func redact(s string, secrets []string, cut bool) string {
 	if len(secrets) == 0 {
 		return s
 	}
@@ -185,7 +186,7 @@ func redact(s string, secrets []string) string {
 			mark(i+j, i+j+len(secret))
 			i += j + 1
 		}
-		for k := 1; k < len(secret); k++ {
+		for k := 1; cut && k < len(secret); k++ {
 			if strings.HasPrefix(s, secret[k:]) {
 				mark(0, len(secret)-k)
 				break

@@ -62,9 +62,9 @@ func TestNewSDKSession_StdioSkipsBanner(t *testing.T) {
 }
 
 func TestNewSDKSession_StdioExitReportsStderr(t *testing.T) {
-	cfg := childConfig(t, "stderr")
-	cfg.Env["MCPXRAY_TEST_TOKEN"] = "ghp_secret_0123456789"
-	_, err := NewSDKSession(context.Background(), cfg)
+	// The token is inherited from the parent environment, not configured for the server.
+	t.Setenv("MCPXRAY_TEST_TOKEN", "ghp_secret_0123456789")
+	_, err := NewSDKSession(context.Background(), childConfig(t, "stderr"))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "failed to connect (stderr: token: [redacted]\nnpm error E401 Unauthorized)")
 	assert.NotContains(t, err.Error(), "ghp_secret_0123456789")
@@ -80,8 +80,8 @@ func readJSONLines(t *testing.T, in string) string {
 }
 
 func TestJSONLines(t *testing.T) {
-	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n{\"b\":2}"
-	assert.Equal(t, "{\"a\":1}\r\n{\"c\":3}\n{\"b\":2}", readJSONLines(t, in))
+	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n\r{\"d\":4}\n{\"b\":2}"
+	assert.Equal(t, "{\"a\":1}\r\n{\"c\":3}\n{\"d\":4}\n{\"b\":2}", readJSONLines(t, in))
 }
 
 func TestJSONLines_LongLines(t *testing.T) {

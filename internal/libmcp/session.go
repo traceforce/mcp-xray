@@ -72,8 +72,9 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if cfg.Env != nil {
 			cmd.Env = append(os.Environ(), envToSlice(cfg.Env)...)
 		}
-		for _, v := range cfg.Env {
-			if len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
+		// Inherited values count too: the child may echo any of them.
+		for _, kv := range cmd.Environ() {
+			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
 				stderr.secrets = append(stderr.secrets, v)
 			}
 		}
