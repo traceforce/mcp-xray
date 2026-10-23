@@ -2,7 +2,6 @@ package libmcp
 
 import (
 	"bufio"
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -53,26 +52,50 @@ func startStdio(cmd *exec.Cmd) (mcp.Transport, error) {
 }
 
 // jsonLines passes through the lines of r whose first non-blank byte is '{'
-// and drops the rest. That includes '[' batches: this client never sends one,
-// and "[INFO]" log prefixes are common.
+// and drops the rest, chunk by chunk, so a child that streams progress output
+// without newlines cannot grow memory. Dropped lines include '[' batches: this
+// client never sends one, and "[INFO]" log prefixes are common.
 type jsonLines struct {
 	r    *bufio.Reader
-	line []byte // unread rest of the current JSON line
-	err  error  // returned once line is drained
+	mid  bool   // inside a line whose fate is decided
+	keep bool   // and that line is JSON
+	rest []byte // unread part of the current kept chunk
+	err  error  // returned once rest is drained
 }
 
 func (l *jsonLines) Read(p []byte) (int, error) {
-	for len(l.line) == 0 {
+	for len(l.rest) == 0 {
 		if l.err != nil {
 			return 0, l.err
 		}
-		l.line, l.err = l.r.ReadBytes('\n')
-		if first := bytes.TrimLeft(l.line, " \t"); len(first) == 0 || first[0] != '{' {
-			l.line = nil
+		if !l.mid {
+			b, err := l.r.ReadByte()
+			if err != nil {
+				l.err = err
+				continue
+			}
+			if b == ' ' || b == '\t' || b == '\n' {
+				continue // leading blanks and empty lines: the decoder would skip them too
+			}
+			l.mid, l.keep = true, b == '{'
+			if l.keep {
+				_ = l.r.UnreadByte()
+			}
+		}
+		chunk, err := l.r.ReadSlice('\n')
+		switch err {
+		case nil:
+			l.mid = false
+		case bufio.ErrBufferFull:
+		default:
+			l.err = err // EOF or a read error, after the chunk is delivered
+		}
+		if l.keep {
+			l.rest = append(l.rest[:0], chunk...)
 		}
 	}
-	n := copy(p, l.line)
-	l.line = l.line[n:]
+	n := copy(p, l.rest)
+	l.rest = l.rest[n:]
 	return n, nil
 }
 
@@ -109,10 +132,12 @@ func (c *stdinCloser) Close() error {
 }
 
 // stderrTail keeps the end of what a child writes to stderr so a connect
-// failure can say why the child exited.
+// failure can say why the child exited. The configured secrets are masked
+// before the tail is cut to its last lines, so no fragment of one survives.
 type stderrTail struct {
-	mu  sync.Mutex // Close can report an unresponsive child while Wait's copy goroutine still writes
-	buf []byte
+	secrets []string   // configured values that must never appear in a report
+	mu      sync.Mutex // Close can report an unresponsive child while Wait's copy goroutine still writes
+	buf     []byte
 }
 
 func (t *stderrTail) Write(p []byte) (int, error) {
@@ -125,13 +150,59 @@ func (t *stderrTail) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String returns the last stderrTailLines lines written, without surrounding whitespace.
+// String returns the last stderrTailLines lines written, with secrets masked
+// and without surrounding whitespace.
 func (t *stderrTail) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	lines := strings.Split(strings.TrimSpace(string(t.buf)), "\n")
+	lines := strings.Split(strings.TrimSpace(redact(string(t.buf), t.secrets)), "\n")
 	if len(lines) > stderrTailLines {
 		lines = lines[len(lines)-stderrTailLines:]
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// redact replaces every occurrence of the secrets in s with one "[redacted]"
+// per masked span, so overlapping matches cannot leave a piece of each other
+// behind. A leading suffix of a secret is masked too: s may start inside one
+// that Write cut when the buffer filled.
+func redact(s string, secrets []string) string {
+	if len(secrets) == 0 {
+		return s
+	}
+	masked := make([]bool, len(s))
+	mark := func(from, to int) {
+		for i := from; i < to; i++ {
+			masked[i] = true
+		}
+	}
+	for _, secret := range secrets {
+		for i := 0; i < len(s); {
+			j := strings.Index(s[i:], secret)
+			if j < 0 {
+				break
+			}
+			mark(i+j, i+j+len(secret))
+			i += j + 1
+		}
+		for k := 1; k < len(secret); k++ {
+			if strings.HasPrefix(s, secret[k:]) {
+				mark(0, len(secret)-k)
+				break
+			}
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if !masked[i] {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		b.WriteString("[redacted]")
+		for i < len(s) && masked[i] {
+			i++
+		}
+	}
+	return b.String()
 }

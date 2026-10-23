@@ -72,6 +72,11 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if cfg.Env != nil {
 			cmd.Env = append(os.Environ(), envToSlice(cfg.Env)...)
 		}
+		for _, v := range cfg.Env {
+			if len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
+				stderr.secrets = append(stderr.secrets, v)
+			}
+		}
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioExitWait // a grandchild holding stderr open must not block Wait
 
@@ -112,12 +117,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
 		if tail := stderr.String(); tail != "" {
-			// A child that echoes its configuration must not put a configured secret in the report.
-			for _, v := range cfg.Env {
-				if len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-					tail = strings.ReplaceAll(tail, v, "[redacted]")
-				}
-			}
 			// The SDK error stays last: OutcomeForError classifies by its suffix.
 			return nil, fmt.Errorf("failed to connect (stderr: %s): %w", tail, err)
 		}

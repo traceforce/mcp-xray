@@ -2,7 +2,6 @@ package libmcp
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -73,11 +72,25 @@ func TestNewSDKSession_StdioExitReportsStderr(t *testing.T) {
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
 }
 
-func TestJSONLines(t *testing.T) {
-	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n{\"b\":2}"
+func readJSONLines(t *testing.T, in string) string {
+	t.Helper()
 	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in))})
 	require.NoError(t, err)
-	assert.Equal(t, "{\"a\":1}\r\n  {\"c\":3}\n{\"b\":2}", string(got))
+	return string(got)
+}
+
+func TestJSONLines(t *testing.T) {
+	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n{\"b\":2}"
+	assert.Equal(t, "{\"a\":1}\r\n{\"c\":3}\n{\"b\":2}", readJSONLines(t, in))
+}
+
+func TestJSONLines_LongLines(t *testing.T) {
+	// Both lines are far longer than bufio's buffer: the dropped one must not be
+	// collected, the kept one must arrive whole.
+	progress := strings.Repeat("\rdownloading 42%", 20000)
+	message := "{\"k\":\"" + strings.Repeat("v", 100000) + "\"}\n"
+	assert.Equal(t, message, readJSONLines(t, progress+"\n"+message))
+	assert.Equal(t, "", readJSONLines(t, progress))
 }
 
 func TestStderrTail(t *testing.T) {
@@ -91,6 +104,25 @@ func TestStderrTail(t *testing.T) {
 	assert.Equal(t, "line 12", lines[stderrTailLines-1])
 
 	var long stderrTail
-	_, _ = long.Write(bytes.Repeat([]byte("x"), 2*stderrTailBytes))
+	fmt.Fprint(&long, strings.Repeat("x", 2*stderrTailBytes))
 	assert.Len(t, long.String(), stderrTailBytes)
+}
+
+func TestStderrTail_Redacts(t *testing.T) {
+	base, auth := "https://host.example", "https://host.example?token=s3cretvalue"
+	overlap := stderrTail{secrets: []string{base, auth}}
+	fmt.Fprintln(&overlap, "GET", auth, "failed")
+	assert.Equal(t, "GET [redacted] failed", overlap.String())
+
+	// The byte cap cuts the buffer inside the secret; no suffix of it may survive.
+	secret := "ghp_secret_0123456789"
+	cut := stderrTail{secrets: []string{secret}}
+	fmt.Fprint(&cut, strings.Repeat("x", stderrTailBytes-8), secret, strings.Repeat("y", stderrTailBytes-8))
+	assert.True(t, strings.HasPrefix(cut.String(), "[redacted]y"), cut.String()[:20])
+
+	// A multi-line secret is masked before the line limit can cut it.
+	key := "-----BEGIN KEY-----\nAAAA\n-----END KEY-----"
+	multi := stderrTail{secrets: []string{key}}
+	fmt.Fprint(&multi, strings.Repeat("log\n", stderrTailLines-1), key, "\nexit 1\n")
+	assert.Equal(t, strings.Repeat("log\n", stderrTailLines-2)+"[redacted]\nexit 1", multi.String())
 }
