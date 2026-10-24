@@ -137,9 +137,12 @@ func TestListAllTools_PageLimit(t *testing.T) {
 
 func TestNewSDKSession_NonInteractiveReportsAuthRequired(t *testing.T) {
 	ts, discovery := unauthorizedServer(t)
-	_, err := connect(t, ts.URL, true)
+	const token = "Bearer secret-0123456789"
+	headers := map[string]string{"Authorization": token}
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, Headers: headers, NonInteractive: true})
 	require.Error(t, err)
 	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err))
+	assert.NotContains(t, err.Error(), token, "a header value never reaches the reason")
 	assert.False(t, discovery.Load(), "non-interactive must not run OAuth discovery")
 }
 

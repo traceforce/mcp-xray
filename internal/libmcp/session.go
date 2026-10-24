@@ -167,10 +167,16 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		// the server might not require authentication
 	}
 
-	// Add the configured headers, and a User-Agent when they do not set one, to all requests
+	// The configured headers go to the configured host only, so a redirect or
+	// an SSE endpoint event cannot carry them to another.
+	host := ""
+	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
+		host = req.URL.Host // spelled as every request will spell it
+	}
 	httpClient.Transport = &headerTransport{
 		base:    http.DefaultTransport,
 		headers: cfg.Headers,
+		host:    host,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -195,19 +201,22 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// all requests, plus a User-Agent when they do not set one.
+// requests for the configured host, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
+	host    string // the only host the configured headers are sent to
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to the request
-	for k, v := range t.headers {
-		req.Header.Set(k, v)
+	// Add all configured headers to a request for the configured host
+	if req.URL.Host == t.host {
+		for k, v := range t.headers {
+			req.Header.Set(k, v)
+		}
 	}
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
