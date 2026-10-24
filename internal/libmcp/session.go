@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	metadata "mcpxray/internal/metadata"
 	"mcpxray/proto"
@@ -228,18 +227,26 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-// sameHost reports whether two authorities name one server: ASCII folds as DNS
-// does, anything else must match as written, since letters such as σ and ς fold
-// alike yet are different names once encoded. The port counts.
+// sameHost reports whether two authorities name one server: ASCII letters fold
+// as DNS folds them, every other byte must match, since letters such as σ and ς
+// fold alike yet encode to different names. The port counts.
 func sameHost(a, b string) bool {
-	for _, s := range [2]string{a, b} {
-		for i := 0; i < len(s); i++ {
-			if s[i] >= utf8.RuneSelf {
-				return a == b
-			}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
 		}
 	}
-	return strings.EqualFold(a, b)
+	return true
 }
 
 // Helper functions
