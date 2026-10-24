@@ -56,6 +56,14 @@ func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	_, err := ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://mcp.example:9443/mcp", nil))
 	require.NoError(t, err)
 	assert.Empty(t, got.Get("Authorization"), "another port is another host")
+	// Only ASCII folds: σ and ς fold alike yet encode to different names.
+	ht.host = "σ.example:8443"
+	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://σ.example:8443/mcp", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer x", got.Get("Authorization"))
+	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://ς.example:8443/mcp", nil))
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"), "a Unicode spelling must match as written")
 }
 
 func TestNewSDKSession_SendsHeadersToConfiguredHostOnly(t *testing.T) {
