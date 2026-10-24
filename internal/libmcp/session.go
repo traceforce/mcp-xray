@@ -213,7 +213,7 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 
 	// Add all configured headers to a request for the configured host
-	if req.URL.Host == t.host {
+	if strings.EqualFold(req.URL.Host, t.host) { // DNS names have no case; the port still counts
 		for k, v := range t.headers {
 			req.Header.Set(k, v)
 		}

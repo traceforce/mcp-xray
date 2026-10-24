@@ -37,6 +37,27 @@ func TestNewSDKSession_UserAgent(t *testing.T) {
 	}
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
+	var got http.Header
+	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, host: "MCP.Example:8443",
+		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			got = r.Header
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+		})}
+	for _, u := range []string{"https://mcp.example:8443/mcp", "https://MCP.EXAMPLE:8443/mcp"} {
+		_, err := ht.RoundTrip(httptest.NewRequest(http.MethodPost, u, nil))
+		require.NoError(t, err)
+		assert.Equal(t, "Bearer x", got.Get("Authorization"), u)
+	}
+	_, err := ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://mcp.example:9443/mcp", nil))
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"), "another port is another host")
+}
+
 func TestNewSDKSession_SendsHeadersToConfiguredHostOnly(t *testing.T) {
 	var asked atomic.Int32 // requests the other host received, each checked for the bearer
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
