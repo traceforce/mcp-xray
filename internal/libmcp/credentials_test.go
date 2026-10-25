@@ -266,6 +266,8 @@ func TestKeepable_SameSiteHTTPSOnly(t *testing.T) {
 	assert.False(t, keepable("https://mcp.vendor.dev/", hosted, "https://other.authkit.app/oauth2/token"))
 	// An IDN host folds to the punycode the client dials, not a different domain.
 	assert.Equal(t, site("xn--mnchen-3ya.com"), site("münchen.com"), "IDN and its punycode are one site")
+	// Full-width digits that IDNA folds to an IPv4 literal stay distinct addresses.
+	assert.NotEqual(t, site("１９２.０.２.１０"), site("１９８.５１.２.１０"), "full-width IPv4 forms are not one site")
 }
 
 func TestNewSDKSession_StoredCredentialFromAnotherSiteIsNotUsed(t *testing.T) {

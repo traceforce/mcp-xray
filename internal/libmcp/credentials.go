@@ -132,6 +132,11 @@ func site(host string) string {
 	if err != nil {
 		return strings.ToLower(host) // unresolvable: only matches an identical host
 	}
+	// IDNA can fold full-width digits to an IPv4 literal (１９２.０.２.１０ -> 192.0.2.10);
+	// the suffix list would then read it as a domain and merge unrelated addresses.
+	if ip := net.ParseIP(ascii); ip != nil {
+		return ip.String()
+	}
 	if s, err := publicsuffix.EffectiveTLDPlusOne(ascii); err == nil {
 		return s
 	}
