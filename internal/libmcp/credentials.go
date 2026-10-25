@@ -192,7 +192,9 @@ func (c *Credential) refresh(resource string) (string, error) {
 	}
 	resp, err := tokenClient.PostForm(c.TokenEndpoint, form)
 	if err != nil {
-		return "", fmt.Errorf("token refresh failed: %w", err)
+		// A redirect whose Location echoes the refresh token is parsed before
+		// CheckRedirect refuses it, so Go's error can carry the token; mask it.
+		return "", fmt.Errorf("token refresh failed: %s", redact(err.Error(), []string{c.RefreshToken, c.ClientSecret}, false))
 	}
 	defer resp.Body.Close()
 	tok, reason := readTokenReply(resp)

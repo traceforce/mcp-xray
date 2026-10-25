@@ -235,20 +235,26 @@ func NewDumpToolsCommand() *cobra.Command {
 					fmt.Printf("Error: %v\n", err)
 					os.Exit(1)
 				}
-				// It is rewritten during the run, so no config or output file may be the same
-				// file. Checked before the first save, so an aliased file is never overwritten.
-				ci, _ := os.Stat(credentialsFile)
-				for _, other := range append([]string{toolsOutputFile, outcomesFile}, configPaths...) {
-					if oi, err := os.Stat(other); other != "" && err == nil && ci != nil && os.SameFile(ci, oi) {
-						fmt.Println("Error: --credentials-file must not be a config or output file")
-						os.Exit(1)
+				// It is rewritten during the run, so no config or output file may be the
+				// same file. Run before the first save so an existing aliased file is not
+				// overwritten, and again after it so a path the save itself creates (the
+				// credentials file did not exist yet) is still caught before any login.
+				checkNoAlias := func() {
+					ci, _ := os.Stat(credentialsFile)
+					for _, other := range append([]string{toolsOutputFile, outcomesFile}, configPaths...) {
+						if oi, err := os.Stat(other); other != "" && err == nil && ci != nil && os.SameFile(ci, oi) {
+							fmt.Println("Error: --credentials-file must not be a config or output file")
+							os.Exit(1)
+						}
 					}
 				}
+				checkNoAlias()
 				// Saved now, so an unwritable path fails before the run rather than after it.
 				if err := credentials.Save(credentialsFile); err != nil {
 					fmt.Printf("Error writing credentials file: %v\n", err)
 					os.Exit(1)
 				}
+				checkNoAlias()
 			}
 
 			ctx := context.Background()
