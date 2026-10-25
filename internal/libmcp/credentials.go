@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/idna"
 	"golang.org/x/net/publicsuffix"
 )
 
@@ -112,16 +113,21 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 // site is a host's registrable domain (mcp.example.com -> example.com), or the
 // host itself when it has none, such as an IP address or localhost.
 func site(host string) string {
-	host = strings.ToLower(host)
 	// An IP is its own site; the public suffix list would read it as a domain and
 	// fold 192.0.2.10 and 198.51.2.10 both to "2.10", merging unrelated hosts.
-	if net.ParseIP(host) != nil {
-		return host
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
 	}
-	if s, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
+	// Normalize to the ASCII/punycode form the HTTP client actually dials, so a
+	// Unicode host cannot fold to a different registrable domain than the connection.
+	ascii, err := idna.Lookup.ToASCII(host)
+	if err != nil {
+		return strings.ToLower(host) // unresolvable: only matches an identical host
+	}
+	if s, err := publicsuffix.EffectiveTLDPlusOne(ascii); err == nil {
 		return s
 	}
-	return host
+	return ascii
 }
 
 // saveCredentials writes the credentials right after a change, so a rotated

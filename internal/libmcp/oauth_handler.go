@@ -378,7 +378,9 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 		return tr, fmt.Errorf("token exchange failed: %s", reason)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
-		return tr, fmt.Errorf("token decode failed: %w", err)
+		// A malformed success body can surface read or syntax errors that quote bytes
+		// the server chose; report a constant message with no server-controlled text.
+		return tr, errors.New("token exchange failed: the token response could not be read")
 	}
 	if tr.AccessToken == "" {
 		return tr, errors.New("token exchange failed: no access_token")

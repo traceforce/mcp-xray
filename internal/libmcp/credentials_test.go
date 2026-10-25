@@ -153,6 +153,22 @@ func TestCredentialRefresh_TransportErrorHidesEncodedToken(t *testing.T) {
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a transport failure is failed, not a refused credential")
 }
 
+func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"`)) // a truncated 200 body the decoder chokes on
+	}))
+	t.Cleanup(ts.Close)
+	trustTokenServer(t, ts)
+
+	o := NewOAuthConfig("https://mcp.example/mcp", "c", "client-secret-xyz", "http://127.0.0.1:8765/callback")
+	_, err := o.exchangeCode(ts.URL, "c", "client-secret-xyz", "auth-code-xyz", "verifier")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "the token response could not be read", "a malformed body yields a constant error")
+	assert.NotContains(t, err.Error(), "auth-code-xyz", "the authorization code never reaches the error")
+	assert.NotContains(t, err.Error(), "client-secret-xyz", "nor the client secret")
+}
+
 func TestCredentials_SaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.json")
 	creds, err := LoadCredentials(path)
@@ -203,6 +219,8 @@ func TestKeepable_SameSiteHTTPSOnly(t *testing.T) {
 	hosted := Credential{TokenEndpoint: "https://tenant.authkit.app/oauth2/token"}
 	assert.True(t, keepable("https://mcp.vendor.dev/", hosted, hosted.TokenEndpoint))
 	assert.False(t, keepable("https://mcp.vendor.dev/", hosted, "https://other.authkit.app/oauth2/token"))
+	// An IDN host folds to the punycode the client dials, not a different domain.
+	assert.Equal(t, site("xn--mnchen-3ya.com"), site("münchen.com"), "IDN and its punycode are one site")
 }
 
 func TestNewSDKSession_StoredCredentialFromAnotherSiteIsNotUsed(t *testing.T) {
