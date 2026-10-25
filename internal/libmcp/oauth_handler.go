@@ -348,6 +348,10 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 }
 
 func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
+	// Never POST the code and client secret to a plain-http endpoint, as refresh refuses to.
+	if !strings.HasPrefix(tokenEP, "https://") {
+		return TokenResponse{}, errors.New("token exchange failed: token endpoint is not https")
+	}
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -421,11 +425,7 @@ func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string,
 	// Start server in goroutine
 	go func() {
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			// Only send error if server wasn't explicitly closed
-			select {
-			case errCh <- fmt.Sprintf("redirect_server_error: %v", err):
-			default:
-			}
+			send(errCh, fmt.Sprintf("redirect_server_error: %v", err)) // not an explicit close
 		}
 	}()
 

@@ -306,7 +306,7 @@ func NewDumpToolsCommand() *cobra.Command {
 			}
 			fmt.Printf("\nDumped %d tools from %d server(s) to %s\n", totalTools, len(allToolsData), toolsOutputFile)
 
-			// The engine saves after every change; this last save fails the run if those could not.
+			// The per-change saves only log a write error; this final save fails the run if the credentials could not be written.
 			if credentialsFile != "" {
 				if err := credentials.Save(credentialsFile); err != nil {
 					fmt.Printf("Error writing credentials file: %v\n", err)

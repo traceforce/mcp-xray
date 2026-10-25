@@ -42,7 +42,7 @@ func (e *CredentialError) Unwrap() error { return e.Err }
 // LoadCredentials reads a credentials file; a missing or empty file is an empty set.
 func LoadCredentials(path string) (Credentials, error) {
 	// Refused like an ssh key when others can read it (Unix only: Windows has no mode bits).
-	if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+	if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		return nil, fmt.Errorf("credentials file %s is readable by others; run chmod 600 on it", path)
 	}
 	data, err := os.ReadFile(path)
@@ -126,10 +126,13 @@ func (cfg MCPServerConfig) saveCredentials() {
 }
 
 // tokenClient never follows a redirect: it would resend the refresh token in the
-// form body to the Location.
+// form body to the Location. Its headerTransport adds the configured User-Agent
+// (it carries no credential headers of its own), so token-endpoint calls are not
+// sent as Go's default agent, which some providers refuse.
 var tokenClient = &http.Client{
 	Timeout:       20 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	Transport:     &headerTransport{base: http.DefaultTransport},
 }
 
 var oauthErrorCode = regexp.MustCompile(`^[a-z_]{1,40}$`)
@@ -176,7 +179,7 @@ func (c *Credential) refresh(resource string) (string, error) {
 	// A 4xx other than 429 refuses the grant; some servers send their error with 200.
 	ok := resp.StatusCode/100 == 2
 	switch {
-	case resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests || ok && tok.AccessToken == "" && tok.Error != "":
+	case (resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests) || (ok && tok.AccessToken == "" && tok.Error != ""):
 		return "", &CredentialError{Err: fmt.Errorf("token endpoint refused the stored refresh token: %s", reason)}
 	case !ok || tok.AccessToken == "":
 		return "", fmt.Errorf("token refresh failed: %s", reason)
