@@ -44,7 +44,7 @@ type OAuthConfig struct {
 func NewOAuthConfig(mcpUrl string, clientID, clientSecret string, redirectURI string) *OAuthConfig {
 	return &OAuthConfig{
 		MCPUrl:       mcpUrl,
-		httpClient:   &http.Client{Timeout: 60 * time.Second},
+		httpClient:   &http.Client{Timeout: 60 * time.Second, Transport: &headerTransport{base: http.DefaultTransport}},
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURI:  redirectURI,

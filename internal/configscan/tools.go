@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"time"
 
 	"mcpxray/internal/libmcp"
@@ -86,85 +87,84 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 		return nil, err
 	}
 
+	sort.Slice(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
 	fmt.Printf("Tools scanner scanning %d MCP servers\n", len(servers))
 
 	var results []serverToolsResult
-
 	for _, server := range servers {
 		server.NonInteractive = s.NonInteractive
 		server.Credentials, server.CredentialsFile = s.Credentials, s.CredentialsFile
-		// 60 seconds per server, so one slow server or browser login cannot use up the next one's time.
-		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-		defer cancel()
-		session, err := libmcp.NewSDKSession(ctx, server)
-		if err != nil {
-			// Handle connection errors gracefully - continue with other servers
-			fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
-			var dcrErr *libmcp.DCRUnauthorizedError
-			msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err)
-			if errors.As(err, &dcrErr) {
-				msg = dcrErr.Error()
-			}
-			results = append(results, serverToolsResult{finding: &proto.Finding{
+		results = append(results, s.listServerTools(ctx, server))
+	}
+	return results, nil
+}
+
+// listServerTools connects to one server and lists its tools under its own
+// 60-second deadline, so a server that hangs cannot use up the others' time.
+func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPServerConfig) serverToolsResult {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	session, err := libmcp.NewSDKSession(ctx, server)
+	if err != nil {
+		fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
+		var dcrErr *libmcp.DCRUnauthorizedError
+		msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err)
+		if errors.As(err, &dcrErr) {
+			msg = dcrErr.Error()
+		}
+		return serverToolsResult{finding: &proto.Finding{
+			Tool:          "tools-scanner",
+			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+			Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+			RuleId:        "connection_failed",
+			Title:         "Failed to connect to MCP server",
+			McpServerName: server.Name,
+			File:          s.MCPconfigPath,
+			Message:       msg,
+		}, outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}}
+	}
+	defer session.Close()
+
+	fmt.Printf("Listing tools for server %s\n", server.Name)
+
+	tools, err := libmcp.ListAllTools(ctx, session.Session)
+	if err != nil {
+		outcome := libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}
+		// Auth failures get a medium finding that points at credentials and OAuth scopes.
+		if outcome.Status == libmcp.OutcomeAuthRequired {
+			return serverToolsResult{outcome: outcome, finding: &proto.Finding{
 				Tool:          "tools-scanner",
 				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
 				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
-				RuleId:        "connection_failed",
-				Title:         "Failed to connect to MCP server",
+				RuleId:        "401_unauthorized",
+				Title:         "MCP server returned 401 Unauthorized error",
 				McpServerName: server.Name,
 				File:          s.MCPconfigPath,
-				Message:       msg,
-			}, outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}})
-			continue
+				Message:       fmt.Sprintf("Authorization issue: Failed to get tools from MCP server '%s' due to 401 Unauthorized error. This may indicate missing or invalid authentication credentials, or insufficient OAuth scopes. Error: %v", server.Name, err),
+			}}
 		}
-		defer session.Close()
-
-		fmt.Printf("Listing tools for server %s\n", server.Name)
-
-		tools, err := libmcp.ListAllTools(ctx, session.Session)
-		if err != nil {
-			outcome := libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}
-			// Auth failures get a medium finding that points at credentials and OAuth scopes.
-			if outcome.Status == libmcp.OutcomeAuthRequired {
-				results = append(results, serverToolsResult{outcome: outcome, finding: &proto.Finding{
-					Tool:          "tools-scanner",
-					Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-					Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
-					RuleId:        "401_unauthorized",
-					Title:         "MCP server returned 401 Unauthorized error",
-					McpServerName: server.Name,
-					File:          s.MCPconfigPath,
-					Message:       fmt.Sprintf("Authorization issue: Failed to get tools from MCP server '%s' due to 401 Unauthorized error. This may indicate missing or invalid authentication credentials, or insufficient OAuth scopes. Error: %v", server.Name, err),
-				}})
-				continue
-			}
-			// Handle other errors gracefully too
-			fmt.Printf("Warning: Failed to list tools for MCP server '%s': %v\n", server.Name, err)
-			results = append(results, serverToolsResult{outcome: outcome, finding: &proto.Finding{
-				Tool:          "tools-scanner",
-				Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
-				Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
-				RuleId:        "tools_list_failed",
-				Title:         "Failed to list tools from MCP server",
-				McpServerName: server.Name,
-				File:          s.MCPconfigPath,
-				Message:       fmt.Sprintf("Could not retrieve tools from MCP server '%s'. Error: %v", server.Name, err),
-			}})
-			continue
-		}
-
-		if len(tools) == 0 {
-			results = append(results, serverToolsResult{outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeEmpty}})
-			continue
-		}
-
-		results = append(results, serverToolsResult{
-			data:    &libmcp.ServerToolsData{Server: server.Name, Tools: enrichTools(tools)},
-			outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeOK, ToolCount: len(tools)},
-		})
+		// Any other listing error gets a generic finding.
+		fmt.Printf("Warning: Failed to list tools for MCP server '%s': %v\n", server.Name, err)
+		return serverToolsResult{outcome: outcome, finding: &proto.Finding{
+			Tool:          "tools-scanner",
+			Type:          proto.FindingType_FINDING_TYPE_CONNECTION,
+			Severity:      proto.RiskSeverity_RISK_SEVERITY_MEDIUM,
+			RuleId:        "tools_list_failed",
+			Title:         "Failed to list tools from MCP server",
+			McpServerName: server.Name,
+			File:          s.MCPconfigPath,
+			Message:       fmt.Sprintf("Could not retrieve tools from MCP server '%s'. Error: %v", server.Name, err),
+		}}
 	}
 
-	return results, nil
+	if len(tools) == 0 {
+		return serverToolsResult{outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeEmpty}}
+	}
+
+	return serverToolsResult{
+		data:    &libmcp.ServerToolsData{Server: server.Name, Tools: enrichTools(tools)},
+		outcome: libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeOK, ToolCount: len(tools)},
+	}
 }
 
 func (s *ToolsScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {

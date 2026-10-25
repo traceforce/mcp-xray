@@ -2,9 +2,11 @@ package libmcp
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -17,22 +19,24 @@ import (
 
 // stdioExitWait is how long a child gets to exit after stdin closes, then
 // after SIGTERM, then after SIGKILL; mcp.CommandTransport uses the same value.
-// It is also cmd.WaitDelay, which bounds Wait when a grandchild keeps the
-// stderr pipe open.
 const stdioExitWait = 5 * time.Second
 
-// stderrTail bounds: enough to keep the last error a package manager prints
+// stdioPipeWait is cmd.WaitDelay: once the child exits its output is already in
+// the pipes, so a grandchild that keeps stderr open delays Wait by this much only.
+const stdioPipeWait = 500 * time.Millisecond
+
+// outputTail bounds: enough to keep the last error a package manager prints
 // without flooding the outcome reason.
 const (
-	stderrTailBytes = 2048
-	stderrTailLines = 10
+	outputTailBytes = 2048
+	outputTailLines = 10
 )
 
 // startStdio starts cmd and returns a transport over its pipes. The SDK's
 // CommandTransport hands stdout straight to its JSON decoder, so a server that
 // prints a banner before its first message fails initialize; jsonLines keeps
-// only the JSON lines.
-func startStdio(cmd *exec.Cmd) (mcp.Transport, error) {
+// only the JSON lines and writes the others to dropped.
+func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
@@ -46,7 +50,7 @@ func startStdio(cmd *exec.Cmd) (mcp.Transport, error) {
 	}
 	return &mcp.IOTransport{
 		// The connection is closed through stdin; stdout is closed by Wait.
-		Reader: io.NopCloser(&jsonLines{r: bufio.NewReader(stdout)}),
+		Reader: io.NopCloser(&jsonLines{r: bufio.NewReader(stdout), dropped: dropped}),
 		Writer: &stdinCloser{WriteCloser: stdin, cmd: cmd},
 	}, nil
 }
@@ -56,11 +60,12 @@ func startStdio(cmd *exec.Cmd) (mcp.Transport, error) {
 // without newlines cannot grow memory. Dropped lines include '[' batches: this
 // client never sends one, and "[INFO]" log prefixes are common.
 type jsonLines struct {
-	r    *bufio.Reader
-	mid  bool   // inside a line whose fate is decided
-	keep bool   // and that line is JSON
-	rest []byte // unread part of the current kept chunk
-	err  error  // returned once rest is drained
+	r       *bufio.Reader
+	dropped io.Writer // the non-JSON lines of r, for the diagnostic tail
+	mid     bool      // inside a line whose fate is decided
+	keep    bool      // and that line is JSON
+	rest    []byte    // unread part of the current kept chunk
+	err     error     // returned once rest is drained
 }
 
 func (l *jsonLines) Read(p []byte) (int, error) {
@@ -75,12 +80,13 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 				continue
 			}
 			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
-				continue // leading blanks and empty lines: the decoder would skip them too
+				if l.dropped != nil { // blank lines and indent: keep the diagnostic faithful
+					_, _ = l.dropped.Write([]byte{b})
+				}
+				continue
 			}
 			l.mid, l.keep = true, b == '{'
-			if l.keep {
-				_ = l.r.UnreadByte()
-			}
+			_ = l.r.UnreadByte()
 		}
 		chunk, err := l.r.ReadSlice('\n')
 		switch err {
@@ -92,6 +98,10 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 		}
 		if l.keep {
 			l.rest = append(l.rest[:0], chunk...)
+		} else if l.dropped != nil {
+			// Only non-JSON output reaches the diagnostic; a kept protocol frame,
+			// where a secret would appear JSON-escaped, is never persisted there.
+			_, _ = l.dropped.Write(chunk)
 		}
 	}
 	n := copy(p, l.rest)
@@ -112,16 +122,19 @@ func (c *stdinCloser) Close() error {
 	}
 	done := make(chan error, 1)
 	go func() { done <- c.cmd.Wait() }()
-	for _, stop := range []func() error{
+	for i, stop := range []func() error{
 		func() error { return nil },
 		func() error { return c.cmd.Process.Signal(syscall.SIGTERM) },
 		c.cmd.Process.Kill,
 	} {
-		if err := stop(); errors.Is(err, os.ErrProcessDone) {
+		err := stop()
+		if errors.Is(err, os.ErrProcessDone) {
 			return <-done // exited while Wait was still draining its pipes
-		} else if err != nil {
+		}
+		if err != nil && i == 1 {
 			continue // SIGTERM is not supported on every platform; go on to SIGKILL
 		}
+		// A Kill error can mean the child just exited, so it still waits.
 		select {
 		case err := <-done:
 			return err
@@ -131,37 +144,118 @@ func (c *stdinCloser) Close() error {
 	return errors.New("unresponsive subprocess")
 }
 
-// stderrTail keeps the end of what a child writes to stderr so a connect
-// failure can say why the child exited. The configured secrets are masked
-// before the tail is cut to its last lines, so no fragment of one survives.
-type stderrTail struct {
-	secrets []string   // environment values that must never appear in a report
+// outputTail keeps the end of a child's stderr, or of the stdout lines
+// jsonLines drops, so a connect failure can say why the child exited. The
+// secrets are masked before the tail is cut to its last lines, so no fragment
+// of one survives.
+type outputTail struct {
+	secrets []string   // environment and argument values that must never appear in a report
 	mu      sync.Mutex // Close can report an unresponsive child while Wait's copy goroutine still writes
 	buf     []byte
 	cut     bool // buf lost its front and may start inside a secret
 }
 
-func (t *stderrTail) Write(p []byte) (int, error) {
+func (t *outputTail) Write(p []byte) (int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.buf = append(t.buf, p...)
-	if drop := len(t.buf) - stderrTailBytes; drop > 0 {
+	if drop := len(t.buf) - outputTailBytes; drop > 0 {
 		t.buf, t.cut = t.buf[drop:], true
 	}
 	return len(p), nil
 }
 
-// String returns the last stderrTailLines lines written, with secrets masked
+// String returns the last outputTailLines lines written, with secrets masked
 // and without surrounding whitespace.
-func (t *stderrTail) String() string {
+func (t *outputTail) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	lines := strings.Split(strings.TrimSpace(redact(string(t.buf), t.secrets, t.cut)), "\n")
-	if len(lines) > stderrTailLines {
-		lines = lines[len(lines)-stderrTailLines:]
+	if len(lines) > outputTailLines {
+		lines = lines[len(lines)-outputTailLines:]
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
+
+// argSecrets returns the parts of a command line that may carry a credential,
+// 8 bytes or more: every argument but a bare flag name, the part after '=' in
+// one, and a URL's user and password.
+func argSecrets(args []string) []string {
+	var secrets []string
+	add := func(v string) {
+		if len(v) >= 8 {
+			secrets = append(secrets, v)
+		}
+	}
+	for _, arg := range args {
+		if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+			add(arg)
+		}
+		if _, value, ok := strings.Cut(arg, "="); ok {
+			add(value)
+		}
+		for _, rest := range strings.Split(arg, "://")[1:] {
+			authority := rest
+			if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+				authority = authority[:i] // userinfo lives before the path, query or fragment
+			}
+			if at := strings.LastIndex(authority, "@"); at >= 0 {
+				user, pass, _ := strings.Cut(authority[:at], ":")
+				for _, v := range []string{user, pass} {
+					add(v)
+					// A child may log the decoded form, so mask that too.
+					if dec, err := url.PathUnescape(v); err == nil && dec != v {
+						add(dec)
+					}
+				}
+			}
+		}
+	}
+	return secrets
+}
+
+// secretParts returns the values to mask: each value, its lines when it spans
+// several (jsonLines may route them to the diagnostic separately), and the
+// JSON-escaped form of each, since a child that logs structured JSON emits a
+// value with its quotes, backslashes and newlines escaped.
+func secretParts(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if len(v) < 8 || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	addForms := func(v string) {
+		add(v)
+		if b, err := json.Marshal(v); err == nil {
+			if esc := string(b[1 : len(b)-1]); esc != v { // the quoted body, escapes and all
+				add(esc)
+			}
+		}
+	}
+	for _, v := range values {
+		addForms(v)
+		if strings.Contains(v, "\n") {
+			for _, line := range strings.Split(v, "\n") {
+				addForms(strings.TrimSpace(line))
+			}
+		}
+	}
+	return out
+}
+
+// redactedError reports msg, err's text with the child's secrets masked, and
+// unwraps to err so errors.Is and errors.As still reach it.
+type redactedError struct {
+	msg string
+	err error
+}
+
+func (e *redactedError) Error() string { return e.msg }
+func (e *redactedError) Unwrap() error { return e.err }
 
 // redact replaces every occurrence of the secrets in s with one "[redacted]"
 // per masked span, so overlapping matches cannot leave a piece of each other

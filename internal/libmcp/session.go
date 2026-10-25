@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	metadata "mcpxray/internal/metadata"
@@ -33,7 +34,12 @@ type SDKSession struct {
 	Client    *mcp.Client
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
+	cancel    context.CancelFunc // ends the context the transport connected with
 }
+
+// connectTimeout bounds initialize, so a child that prints only non-JSON and
+// waits, or a remote server that never answers, fails instead of hanging.
+var connectTimeout = 60 * time.Second
 
 // NewSDKSession creates a new session using the official MCP SDK
 func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error) {
@@ -44,7 +50,9 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
-	var stderr stderrTail // what a stdio child wrote to stderr, for the connect error
+	var remote *headerTransport // set for HTTP/SSE, to tell a redirect from a real 401
+	var stderr outputTail       // what a stdio child wrote to stderr, for the connect error
+	var stdout outputTail       // the non-JSON lines it wrote to stdout, likewise
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -78,10 +86,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 				stderr.secrets = append(stderr.secrets, v)
 			}
 		}
+		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
+		stderr.secrets = secretParts(stderr.secrets) // mask each line of a multiline secret too
+		stdout.secrets = stderr.secrets
 		cmd.Stderr = &stderr
-		cmd.WaitDelay = stdioExitWait // a grandchild holding stderr open must not block Wait
+		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
-		stdio, err := startStdio(cmd)
+		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect: %w", err)
 		}
@@ -93,6 +104,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -103,6 +115,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -112,16 +125,46 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		return nil, fmt.Errorf("unsupported transport type: %v", transportType)
 	}
 
-	session, err := client.Connect(ctx, transport, nil)
+	// SSE reads its stream with the context it connects with, so that context
+	// lives as long as the session; the timer cancels it only while initialize runs.
+	connectCtx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(connectTimeout, cancel)
+	session, err := client.Connect(connectCtx, transport, nil)
+	if !timer.Stop() {
+		if err == nil {
+			_ = session.Close()
+			err = fmt.Errorf("%w after %v", context.DeadlineExceeded, connectTimeout)
+		} else {
+			err = fmt.Errorf("%w after %v (%v)", context.DeadlineExceeded, connectTimeout, err)
+		}
+	}
 	if err != nil {
+		cancel()
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
-		if tail := stderr.String(); tail != "" {
-			// The SDK error stays last: OutcomeForError classifies by its suffix.
-			return nil, fmt.Errorf("failed to connect (stderr: %s): %w", tail, err)
+		// A 401 after the bearer was withheld from a redirect target is a wrong
+		// endpoint, not a missing credential. The explanation must be the suffix,
+		// not the 401: OutcomeForError reads the last word, so a trailing
+		// "Unauthorized" would still count as auth_required.
+		if remote != nil && strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized") {
+			if origin := remote.withheldOrigin(); origin != "" {
+				err = fmt.Errorf("%v (server redirected to %s, where the configured headers are not sent)", err, origin)
+			}
 		}
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		var output []string
+		if tail := stderr.String(); tail != "" {
+			output = append(output, "stderr: "+tail)
+		}
+		if tail := stdout.String(); tail != "" {
+			output = append(output, "stdout: "+tail)
+		}
+		msg := "failed to connect: " + err.Error()
+		if len(output) > 0 {
+			// The SDK error stays last: OutcomeForError classifies by its suffix.
+			msg = fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err)
+		}
+		return nil, &redactedError{msg: redact(msg, stderr.secrets, false), err: err}
 	}
 
 	return &SDKSession{
@@ -129,6 +172,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Client:    client,
 		Type:      transportType,
 		Transport: transport,
+		cancel:    cancel,
 	}, nil
 }
 
@@ -187,8 +231,8 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		// the server might not require authentication
 	}
 
-	// The configured headers go to the configured scheme and host only, so a
-	// redirect or an SSE endpoint event cannot carry them elsewhere or to plain http.
+	// The configured headers go to the configured origin only, so a redirect or
+	// an SSE endpoint event cannot carry them to another, or to plain http.
 	scheme, host := "", ""
 	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
 		scheme, host = req.URL.Scheme, req.URL.Host // spelled as every request will spell them
@@ -205,6 +249,9 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 
 // Close closes the session
 func (s *SDKSession) Close() error {
+	if s.cancel != nil {
+		defer s.cancel()
+	}
 	// Add timeout to prevent hanging when MCP server is stuck
 	done := make(chan error, 1)
 	go func() {
@@ -222,24 +269,46 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// requests for the configured scheme and host, plus a User-Agent when they do not set one.
+// requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
 	scheme  string // with host, the only origin the configured headers are sent to
 	host    string
+
+	mu       sync.Mutex
+	withheld string // the other origin the MOST RECENT request withheld the credential from, cleared once a request reaches the configured origin
+}
+
+// withheldOrigin reports the other origin the last request withheld a configured
+// credential header from, or "" when the last request reached the configured
+// origin (so a redirect A→B→A ending in a 401 at A, where the bearer was sent,
+// reads as auth, not a redirect).
+func (t *headerTransport) withheldOrigin() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.withheld
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to a request for the configured scheme and host
-	if req.URL.Scheme == t.scheme && sameHost(req.URL.Host, t.host) {
-		for k, v := range t.headers {
+	// The configured headers go to the configured origin; a User-Agent is no
+	// credential, so a configured one goes everywhere.
+	same := strings.EqualFold(req.URL.Scheme, t.scheme) && sameHost(req.URL.Host, t.host)
+	withheldHere := false
+	for k, v := range t.headers {
+		if same || strings.EqualFold(k, "User-Agent") {
 			req.Header.Set(k, v)
+		} else {
+			withheldHere = true
 		}
 	}
+	if !same {
+		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
+	}
+	t.recordWithheld(same, req.URL.Scheme+"://"+req.URL.Host, withheldHere)
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
 	if _, ok := req.Header["User-Agent"]; !ok {
@@ -247,6 +316,21 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return t.base.RoundTrip(req)
+}
+
+// recordWithheld tracks the disposition of the request just sent: reaching the
+// configured origin clears the mark (the credential, if any, was sent there), a
+// cross-origin hop that withheld it records that origin. The final error is then
+// read against the last hop, not the first, so a redirect back to the configured
+// origin is not misread as a credential-free redirect.
+func (t *headerTransport) recordWithheld(same bool, origin string, withheldHere bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if same {
+		t.withheld = ""
+	} else if withheldHere {
+		t.withheld = origin
+	}
 }
 
 // sameHost reports whether two authorities name one server: ASCII letters fold
