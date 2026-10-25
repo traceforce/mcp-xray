@@ -33,7 +33,12 @@ type SDKSession struct {
 	Client    *mcp.Client
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
+	cancel    context.CancelFunc // ends the context the transport connected with
 }
+
+// connectTimeout bounds initialize, so a child that prints only non-JSON and
+// waits, or a remote server that never answers, fails instead of hanging.
+var connectTimeout = 60 * time.Second
 
 // NewSDKSession creates a new session using the official MCP SDK
 func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error) {
@@ -44,7 +49,8 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
-	var stderr stderrTail // what a stdio child wrote to stderr, for the connect error
+	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
+	var stdout outputTail // the non-JSON lines it wrote to stdout, likewise
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -78,10 +84,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 				stderr.secrets = append(stderr.secrets, v)
 			}
 		}
+		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
+		stderr.secrets = secretParts(stderr.secrets) // mask each line of a multiline secret too
+		stdout.secrets = stderr.secrets
 		cmd.Stderr = &stderr
-		cmd.WaitDelay = stdioExitWait // a grandchild holding stderr open must not block Wait
+		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
-		stdio, err := startStdio(cmd)
+		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect: %w", err)
 		}
@@ -112,16 +121,37 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		return nil, fmt.Errorf("unsupported transport type: %v", transportType)
 	}
 
-	session, err := client.Connect(ctx, transport, nil)
+	// SSE reads its stream with the context it connects with, so that context
+	// lives as long as the session; the timer cancels it only while initialize runs.
+	connectCtx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(connectTimeout, cancel)
+	session, err := client.Connect(connectCtx, transport, nil)
+	if !timer.Stop() {
+		if err == nil {
+			_ = session.Close()
+			err = fmt.Errorf("%w after %v", context.DeadlineExceeded, connectTimeout)
+		} else {
+			err = fmt.Errorf("%w after %v (%v)", context.DeadlineExceeded, connectTimeout, err)
+		}
+	}
 	if err != nil {
+		cancel()
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
+		var output []string
 		if tail := stderr.String(); tail != "" {
-			// The SDK error stays last: OutcomeForError classifies by its suffix.
-			return nil, fmt.Errorf("failed to connect (stderr: %s): %w", tail, err)
+			output = append(output, "stderr: "+tail)
 		}
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		if tail := stdout.String(); tail != "" {
+			output = append(output, "stdout: "+tail)
+		}
+		msg := "failed to connect: " + err.Error()
+		if len(output) > 0 {
+			// The SDK error stays last: OutcomeForError classifies by its suffix.
+			msg = fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err)
+		}
+		return nil, &redactedError{msg: redact(msg, stderr.secrets, false), err: err}
 	}
 
 	return &SDKSession{
@@ -129,6 +159,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Client:    client,
 		Type:      transportType,
 		Transport: transport,
+		cancel:    cancel,
 	}, nil
 }
 
@@ -185,6 +216,9 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 
 // Close closes the session
 func (s *SDKSession) Close() error {
+	if s.cancel != nil {
+		defer s.cancel()
+	}
 	// Add timeout to prevent hanging when MCP server is stuck
 	done := make(chan error, 1)
 	go func() {
