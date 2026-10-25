@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	metadata "mcpxray/internal/metadata"
@@ -49,8 +50,9 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
-	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
-	var stdout outputTail // the non-JSON lines it wrote to stdout, likewise
+	var remote *headerTransport // set for HTTP/SSE, to tell a redirect from a real 401
+	var stderr outputTail       // what a stdio child wrote to stderr, for the connect error
+	var stdout outputTail       // the non-JSON lines it wrote to stdout, likewise
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -102,6 +104,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -112,6 +115,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -138,6 +142,15 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		cancel()
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
+		}
+		// A 401 after the bearer was withheld from a redirect target is a wrong
+		// endpoint, not a missing credential. The explanation must be the suffix,
+		// not the 401: OutcomeForError reads the last word, so a trailing
+		// "Unauthorized" would still count as auth_required.
+		if remote != nil && strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized") {
+			if origin := remote.withheldOrigin(); origin != "" {
+				err = fmt.Errorf("%v (server redirected to %s, where the configured headers are not sent)", err, origin)
+			}
 		}
 		var output []string
 		if tail := stderr.String(); tail != "" {
@@ -242,6 +255,17 @@ type headerTransport struct {
 	headers map[string]string
 	scheme  string // with host, the only origin the configured headers are sent to
 	host    string
+
+	mu       sync.Mutex
+	withheld string // the first other origin the configured headers were withheld from
+}
+
+// withheldOrigin is the first origin a configured credential header was not sent
+// to, or "" if none; a following 401 there is a redirect, not a missing credential.
+func (t *headerTransport) withheldOrigin() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.withheld
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -254,6 +278,8 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	for k, v := range t.headers {
 		if same || strings.EqualFold(k, "User-Agent") {
 			req.Header.Set(k, v)
+		} else {
+			t.noteWithheld(req.URL.Scheme + "://" + req.URL.Host)
 		}
 	}
 	if !same {
@@ -266,6 +292,15 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	return t.base.RoundTrip(req)
+}
+
+// noteWithheld records the first other origin a credential header was withheld from.
+func (t *headerTransport) noteWithheld(origin string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.withheld == "" {
+		t.withheld = origin
+	}
 }
 
 // sameHost reports whether two authorities name one server: ASCII letters fold

@@ -164,3 +164,24 @@ func TestNewSDKSession_SendsHeadersToConfiguredHostOnly(t *testing.T) {
 		assert.Equal(t, OutcomeFailed, OutcomeForError(err), path)
 	}
 }
+
+func TestNewSDKSession_WithheldBearerReadsAsRedirectNotAuth(t *testing.T) {
+	// The redirect target 401s; because the bearer was withheld there, the
+	// outcome must point at the redirect and not read as a missing credential.
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(other.Close)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(ts.Close)
+
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{
+		Name: "s", URL: &ts.URL, Headers: map[string]string{"Authorization": "Bearer secret-0123456789"}, NonInteractive: true,
+	})
+	require.Error(t, err)
+	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a withheld-bearer 401 is a redirect, not auth_required")
+	assert.Contains(t, err.Error(), "redirected to", err.Error())
+	assert.NotContains(t, err.Error(), "secret-0123456789")
+}
