@@ -172,9 +172,13 @@ type tokenReply struct {
 
 func readTokenReply(resp *http.Response) (tokenReply, string) {
 	var reply tokenReply
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&reply)
 	// The status code only: a server's status text is free text that could carry anything.
 	status := strconv.Itoa(resp.StatusCode)
+	// A malformed body can populate some fields before the decoder errors; never trust a
+	// partial decode, and never surface decoder text that might quote a token.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&reply); err != nil {
+		return tokenReply{}, status
+	}
 	if oauthErrorCodes[reply.Error] {
 		return reply, status + " " + reply.Error
 	}
@@ -205,10 +209,11 @@ func (c *Credential) refresh(resource string) (string, error) {
 	}
 	defer resp.Body.Close()
 	tok, reason := readTokenReply(resp)
-	// A 4xx other than 429 refuses the grant; some servers send their error with 200.
+	// A 4xx other than 408/429 refuses the grant; some servers send their error with 200.
+	// 408 and 429 are transient (timeout, rate limit), not a refused token.
 	ok := resp.StatusCode/100 == 2
 	switch {
-	case (resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests) || (ok && tok.AccessToken == "" && tok.Error != ""):
+	case (resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusRequestTimeout) || (ok && tok.AccessToken == "" && tok.Error != ""):
 		return "", &CredentialError{Err: fmt.Errorf("token endpoint refused the stored refresh token: %s", reason)}
 	case !ok || tok.AccessToken == "":
 		return "", fmt.Errorf("token refresh failed: %s", reason)

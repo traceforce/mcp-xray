@@ -201,7 +201,14 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		case cfg.NonInteractive:
 			return nil, false, err
 		default:
-			fmt.Printf("Warning: stored credential for MCP server '%s' not used: %v; logging in again\n", cfg.Name, err)
+			// Only a refused token (CredentialError) is worth a fresh browser login; a
+			// transient or transport outage stays a failure, not auth_required after an
+			// unauthenticated retry that hides the real cause.
+			var ce *CredentialError
+			if !errors.As(err, &ce) {
+				return nil, false, err
+			}
+			fmt.Printf("Warning: stored credential for MCP server '%s' refused: %v; logging in again\n", cfg.Name, err)
 		}
 	}
 	if !cfg.NonInteractive && !hasAccessToken(cfg.Headers) {

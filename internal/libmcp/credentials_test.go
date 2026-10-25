@@ -103,6 +103,11 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 	creds[ts.URL] = Credential{TokenEndpoint: busy.URL, ClientID: "c", RefreshToken: "r"}
 	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
+	// A 408 request timeout is transient too, not a refused credential.
+	slow, _ := tokenServer(t, http.StatusRequestTimeout, nil)
+	creds[ts.URL] = Credential{TokenEndpoint: slow.URL, ClientID: "c", RefreshToken: "r"}
+	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
+	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
 	down, _ := tokenServer(t, http.StatusServiceUnavailable, nil)
 	creds[ts.URL] = Credential{TokenEndpoint: down.URL, ClientID: "c", RefreshToken: "r"}
 	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
@@ -151,6 +156,36 @@ func TestCredentialRefresh_TransportErrorHidesEncodedToken(t *testing.T) {
 	assert.NotContains(t, err.Error(), secret, "the raw refresh token must not reach the error")
 	assert.NotContains(t, err.Error(), url.QueryEscape(secret), "nor its URL-encoded form")
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a transport failure is failed, not a refused credential")
+}
+
+func TestCredentialRefresh_PartialDecodeIsFailure(t *testing.T) {
+	// A 200 whose refresh_token has the wrong type: the decoder sets access_token
+	// then errors. The partial reply must not count as a successful refresh.
+	tok := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"access-2","refresh_token":123}`))
+	}))
+	t.Cleanup(tok.Close)
+	trustTokenServer(t, tok)
+
+	cred := Credential{TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: "r1"}
+	access, err := cred.refresh("https://mcp.example/mcp")
+	require.Error(t, err)
+	assert.Empty(t, access, "a partially decoded response yields no access token")
+	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a malformed success body is a failure, not a refusal")
+	assert.Equal(t, "r1", cred.RefreshToken, "the stored refresh token is left unchanged")
+	assert.NotContains(t, err.Error(), "123", "no decoder text reaches the error")
+}
+
+func TestNewHTTPClient_InteractiveKeepsTransientOutageFailed(t *testing.T) {
+	// A transient token-endpoint outage in interactive mode must not fall back to a
+	// browser login and end as auth_required; it stays a failure.
+	down, _ := tokenServer(t, http.StatusServiceUnavailable, nil)
+	u := "https://127.0.0.1:65000/mcp" // same site (127.0.0.1) as the token server, so keepable passes
+	creds := Credentials{u: {TokenEndpoint: down.URL, ClientID: "c", RefreshToken: "r"}}
+	_, _, err := newHTTPClient(MCPServerConfig{Name: "s", URL: &u, NonInteractive: false, Credentials: creds})
+	require.Error(t, err)
+	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a transient outage stays failed, never a browser re-login")
 }
 
 func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
