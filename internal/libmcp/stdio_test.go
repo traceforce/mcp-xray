@@ -3,12 +3,14 @@ package libmcp
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +37,23 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "token:", os.Getenv("MCPXRAY_TEST_TOKEN"))
 		fmt.Fprintln(os.Stderr, "npm error E401 Unauthorized")
 		os.Exit(1)
+	case "args":
+		fmt.Fprintln(os.Stderr, "args:", strings.Join(os.Args[1:], " "))
+		os.Exit(1)
+	case "stdout":
+		fmt.Println("Error: GITHUB_TOKEN not set")
+		os.Exit(1)
+	case "listen":
+		fmt.Println("MCP server listening on http://localhost:3000")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
+	case "rpcerror":
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		var req struct{ ID json.RawMessage }
+		_ = json.Unmarshal([]byte(line), &req)
+		fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"bad key %s"}}`+"\n", req.ID, os.Getenv("MCPXRAY_TEST_TOKEN"))
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		return
 	}
 	os.Exit(m.Run())
 }
@@ -72,6 +91,46 @@ func TestNewSDKSession_StdioExitReportsStderr(t *testing.T) {
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
 }
 
+func TestNewSDKSession_StdioExitRedactsArgSecrets(t *testing.T) {
+	cfg := childConfig(t, "args")
+	cfg.Args = []string{"-y", "@acme/server-pkg", "--api-key", "sk-0123456789",
+		"--token=ghp_0123456789", "postgresql://user:password@db.example/x"}
+	_, err := NewSDKSession(context.Background(), cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "(stderr: args: -y [redacted] --api-key [redacted] [redacted] [redacted])")
+}
+
+func TestNewSDKSession_StdioExitReportsStdout(t *testing.T) {
+	_, err := NewSDKSession(context.Background(), childConfig(t, "stdout"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "failed to connect (stdout: Error: GITHUB_TOKEN not set)")
+}
+
+func TestNewSDKSession_StdioConnectTimesOut(t *testing.T) {
+	old := connectTimeout
+	t.Cleanup(func() { connectTimeout = old })
+	connectTimeout = 500 * time.Millisecond
+	_, err := NewSDKSession(context.Background(), childConfig(t, "listen"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "(stdout: MCP server listening on http://localhost:3000)")
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestNewSDKSession_StdioRedactsSDKError(t *testing.T) {
+	t.Setenv("MCPXRAY_TEST_TOKEN", "ghp_secret_0123456789")
+	_, err := NewSDKSession(context.Background(), childConfig(t, "rpcerror"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "bad key [redacted]")
+	assert.NotContains(t, err.Error(), "ghp_secret_0123456789")
+}
+
+func TestArgSecrets(t *testing.T) {
+	args := []string{"-y", "--api-key", "sk-0123456789", "--token=ghp_0123456789", "short",
+		"https://ghp_0123456789:x-oauth-basic@github.com/o/r"}
+	assert.Equal(t, []string{"sk-0123456789", "--token=ghp_0123456789", "ghp_0123456789",
+		"https://ghp_0123456789:x-oauth-basic@github.com/o/r", "ghp_0123456789", "x-oauth-basic"}, argSecrets(args))
+}
+
 func readJSONLines(t *testing.T, in string) string {
 	t.Helper()
 	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in))})
@@ -93,36 +152,36 @@ func TestJSONLines_LongLines(t *testing.T) {
 	assert.Equal(t, "", readJSONLines(t, progress))
 }
 
-func TestStderrTail(t *testing.T) {
-	var tail stderrTail
-	for i := 1; i <= stderrTailLines+2; i++ {
+func TestOutputTail(t *testing.T) {
+	var tail outputTail
+	for i := 1; i <= outputTailLines+2; i++ {
 		fmt.Fprintf(&tail, "line %d\n", i)
 	}
 	lines := strings.Split(tail.String(), "\n")
-	assert.Len(t, lines, stderrTailLines)
+	assert.Len(t, lines, outputTailLines)
 	assert.Equal(t, "line 3", lines[0])
-	assert.Equal(t, "line 12", lines[stderrTailLines-1])
+	assert.Equal(t, "line 12", lines[outputTailLines-1])
 
-	var long stderrTail
-	fmt.Fprint(&long, strings.Repeat("x", 2*stderrTailBytes))
-	assert.Len(t, long.String(), stderrTailBytes)
+	var long outputTail
+	fmt.Fprint(&long, strings.Repeat("x", 2*outputTailBytes))
+	assert.Len(t, long.String(), outputTailBytes)
 }
 
-func TestStderrTail_Redacts(t *testing.T) {
+func TestOutputTail_Redacts(t *testing.T) {
 	base, auth := "https://host.example", "https://host.example?token=s3cretvalue"
-	overlap := stderrTail{secrets: []string{base, auth}}
+	overlap := outputTail{secrets: []string{base, auth}}
 	fmt.Fprintln(&overlap, "GET", auth, "failed")
 	assert.Equal(t, "GET [redacted] failed", overlap.String())
 
 	// The byte cap cuts the buffer inside the secret; no suffix of it may survive.
 	secret := "ghp_secret_0123456789"
-	cut := stderrTail{secrets: []string{secret}}
-	fmt.Fprint(&cut, strings.Repeat("x", stderrTailBytes-8), secret, strings.Repeat("y", stderrTailBytes-8))
+	cut := outputTail{secrets: []string{secret}}
+	fmt.Fprint(&cut, strings.Repeat("x", outputTailBytes-8), secret, strings.Repeat("y", outputTailBytes-8))
 	assert.True(t, strings.HasPrefix(cut.String(), "[redacted]y"), cut.String()[:20])
 
 	// A multi-line secret is masked before the line limit can cut it.
 	key := "-----BEGIN KEY-----\nAAAA\n-----END KEY-----"
-	multi := stderrTail{secrets: []string{key}}
-	fmt.Fprint(&multi, strings.Repeat("log\n", stderrTailLines-1), key, "\nexit 1\n")
-	assert.Equal(t, strings.Repeat("log\n", stderrTailLines-2)+"[redacted]\nexit 1", multi.String())
+	multi := outputTail{secrets: []string{key}}
+	fmt.Fprint(&multi, strings.Repeat("log\n", outputTailLines-1), key, "\nexit 1\n")
+	assert.Equal(t, strings.Repeat("log\n", outputTailLines-2)+"[redacted]\nexit 1", multi.String())
 }
