@@ -174,15 +174,27 @@ func TestJSONLines_DroppedKeepsIndentForRedaction(t *testing.T) {
 
 func TestJSONLines_DroppedRedactsJSONValuedSecret(t *testing.T) {
 	// A secret that is itself JSON starts with '{', so its first line is kept and
-	// its body dropped; the diagnostic must still hold the whole value to redact it.
+	// its body dropped; masking each line (secretParts) still catches the token.
 	secret := "{\n  \"access_token\": \"ghp_secret_0123456789\"\n}"
 	in := secret + "\n{\"a\":1}\n"
 	var dropped outputTail
-	dropped.secrets = []string{secret}
+	dropped.secrets = secretParts([]string{secret})
 	_, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in)), dropped: &dropped})
 	require.NoError(t, err)
 	assert.NotContains(t, dropped.String(), "ghp_secret_0123456789")
 	assert.Contains(t, dropped.String(), "[redacted]")
+}
+
+func TestJSONLines_KeptFrameStaysOutOfDiagnostic(t *testing.T) {
+	// A secret appears JSON-escaped inside a kept protocol frame; that frame must
+	// not reach the diagnostic, so the escaped form is never persisted.
+	secret := "s3cret\"credential42"
+	in := "{\"error\":\"s3cret\\\"credential42\"}\n"
+	var dropped outputTail
+	dropped.secrets = secretParts([]string{secret})
+	_, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in)), dropped: &dropped})
+	require.NoError(t, err)
+	assert.NotContains(t, dropped.String(), "credential42")
 }
 
 func TestJSONLines_LongLines(t *testing.T) {

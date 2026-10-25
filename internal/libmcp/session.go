@@ -85,6 +85,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			}
 		}
 		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
+		stderr.secrets = secretParts(stderr.secrets) // mask each line of a multiline secret too
 		stdout.secrets = stderr.secrets
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait

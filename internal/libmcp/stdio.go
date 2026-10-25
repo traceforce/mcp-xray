@@ -60,7 +60,7 @@ func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 // client never sends one, and "[INFO]" log prefixes are common.
 type jsonLines struct {
 	r       *bufio.Reader
-	dropped io.Writer // a byte-faithful copy of all of r, for the diagnostic tail
+	dropped io.Writer // the non-JSON lines of r, for the diagnostic tail
 	mid     bool      // inside a line whose fate is decided
 	keep    bool      // and that line is JSON
 	rest    []byte    // unread part of the current kept chunk
@@ -97,10 +97,9 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 		}
 		if l.keep {
 			l.rest = append(l.rest[:0], chunk...)
-		}
-		// Every chunk is copied to the diagnostic, kept or not, so a secret that
-		// straddles a kept line and a dropped one still appears whole and redacts.
-		if l.dropped != nil {
+		} else if l.dropped != nil {
+			// Only non-JSON output reaches the diagnostic; a kept protocol frame,
+			// where a secret would appear JSON-escaped, is never persisted there.
 			_, _ = l.dropped.Write(chunk)
 		}
 	}
@@ -212,6 +211,29 @@ func argSecrets(args []string) []string {
 		}
 	}
 	return secrets
+}
+
+// secretParts returns the values plus, for a multiline one, each of its lines of
+// 8 bytes or more. jsonLines may route a multiline secret's lines to the
+// diagnostic separately, so masking each line matches it however it is split.
+func secretParts(values []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	add := func(v string) {
+		if len(v) >= 8 && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, v := range values {
+		add(v)
+		if strings.Contains(v, "\n") {
+			for _, line := range strings.Split(v, "\n") {
+				add(strings.TrimSpace(line))
+			}
+		}
+	}
+	return out
 }
 
 // redactedError reports msg, err's text with the child's secrets masked, and
