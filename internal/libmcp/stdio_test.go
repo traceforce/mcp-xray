@@ -131,6 +131,14 @@ func TestArgSecrets(t *testing.T) {
 		"https://ghp_0123456789:x-oauth-basic@github.com/o/r", "ghp_0123456789", "x-oauth-basic"}, argSecrets(args))
 }
 
+func TestArgSecrets_DecodesURLCredentials(t *testing.T) {
+	// A percent-encoded password is masked both as written and decoded, since a
+	// child may log either form.
+	got := argSecrets([]string{"postgresql://alice:long%40password@db.example/x"})
+	assert.Contains(t, got, "long%40password")
+	assert.Contains(t, got, "long@password")
+}
+
 func readJSONLines(t *testing.T, in string) string {
 	t.Helper()
 	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in))})
@@ -141,6 +149,20 @@ func readJSONLines(t *testing.T, in string) string {
 func TestJSONLines(t *testing.T) {
 	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n\r{\"d\":4}\n{\"b\":2}"
 	assert.Equal(t, "{\"a\":1}\r\n{\"c\":3}\n{\"d\":4}\n{\"b\":2}", readJSONLines(t, in))
+}
+
+func TestJSONLines_DroppedKeepsIndentForRedaction(t *testing.T) {
+	// A secret spanning lines with an indented continuation must reach the
+	// dropped stream byte-for-byte, so exact-match redaction still masks it.
+	secret := "alpha-secret\n  beta-secret"
+	in := "preamble\n" + secret + "\n{\"a\":1}\n"
+	var dropped outputTail
+	dropped.secrets = []string{secret}
+	kept, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in)), dropped: &dropped})
+	require.NoError(t, err)
+	assert.Equal(t, "{\"a\":1}\n", string(kept))
+	assert.NotContains(t, dropped.String(), "beta-secret")
+	assert.Contains(t, dropped.String(), "[redacted]")
 }
 
 func TestJSONLines_LongLines(t *testing.T) {

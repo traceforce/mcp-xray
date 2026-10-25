@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -60,6 +61,7 @@ func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 type jsonLines struct {
 	r       *bufio.Reader
 	dropped io.Writer // receives the dropped lines, when set
+	skipped []byte    // leading blanks of the current line, kept for a dropped line
 	mid     bool      // inside a line whose fate is decided
 	keep    bool      // and that line is JSON
 	rest    []byte    // unread part of the current kept chunk
@@ -77,8 +79,13 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 				l.err = err
 				continue
 			}
-			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
-				continue // leading blanks and empty lines: the decoder would skip them too
+			if b == '\r' || b == '\n' {
+				l.skipped = l.skipped[:0] // an empty line carries nothing to report
+				continue
+			}
+			if b == ' ' || b == '\t' {
+				l.skipped = append(l.skipped, b) // indent of this line; the decoder skips it
+				continue
 			}
 			l.mid, l.keep = true, b == '{'
 			_ = l.r.UnreadByte()
@@ -94,8 +101,12 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 		if l.keep {
 			l.rest = append(l.rest[:0], chunk...)
 		} else if l.dropped != nil {
+			// A dropped line's indent is written too, so a secret spanning lines
+			// stays byte-for-byte what the child wrote and redaction still matches.
+			_, _ = l.dropped.Write(l.skipped)
 			_, _ = l.dropped.Write(chunk)
 		}
+		l.skipped = l.skipped[:0]
 	}
 	n := copy(p, l.rest)
 	l.rest = l.rest[n:]
@@ -191,8 +202,13 @@ func argSecrets(args []string) []string {
 			authority, _, _ := strings.Cut(rest, "/")
 			if at := strings.LastIndex(authority, "@"); at >= 0 {
 				user, pass, _ := strings.Cut(authority[:at], ":")
-				add(user)
-				add(pass)
+				for _, v := range []string{user, pass} {
+					add(v)
+					// A child may log the decoded form, so mask that too.
+					if dec, err := url.PathUnescape(v); err == nil && dec != v {
+						add(dec)
+					}
+				}
 			}
 		}
 	}
