@@ -257,11 +257,13 @@ type headerTransport struct {
 	host    string
 
 	mu       sync.Mutex
-	withheld string // the first other origin the configured headers were withheld from
+	withheld string // the other origin the MOST RECENT request withheld the credential from, cleared once a request reaches the configured origin
 }
 
-// withheldOrigin is the first origin a configured credential header was not sent
-// to, or "" if none; a following 401 there is a redirect, not a missing credential.
+// withheldOrigin reports the other origin the last request withheld a configured
+// credential header from, or "" when the last request reached the configured
+// origin (so a redirect A→B→A ending in a 401 at A, where the bearer was sent,
+// reads as auth, not a redirect).
 func (t *headerTransport) withheldOrigin() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -275,16 +277,18 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// The configured headers go to the configured origin; a User-Agent is no
 	// credential, so a configured one goes everywhere.
 	same := strings.EqualFold(req.URL.Scheme, t.scheme) && sameHost(req.URL.Host, t.host)
+	withheldHere := false
 	for k, v := range t.headers {
 		if same || strings.EqualFold(k, "User-Agent") {
 			req.Header.Set(k, v)
 		} else {
-			t.noteWithheld(req.URL.Scheme + "://" + req.URL.Host)
+			withheldHere = true
 		}
 	}
 	if !same {
 		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
 	}
+	t.recordWithheld(same, req.URL.Scheme+"://"+req.URL.Host, withheldHere)
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
 	if _, ok := req.Header["User-Agent"]; !ok {
@@ -294,11 +298,17 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(req)
 }
 
-// noteWithheld records the first other origin a credential header was withheld from.
-func (t *headerTransport) noteWithheld(origin string) {
+// recordWithheld tracks the disposition of the request just sent: reaching the
+// configured origin clears the mark (the credential, if any, was sent there), a
+// cross-origin hop that withheld it records that origin. The final error is then
+// read against the last hop, not the first, so a redirect back to the configured
+// origin is not misread as a credential-free redirect.
+func (t *headerTransport) recordWithheld(same bool, origin string, withheldHere bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.withheld == "" {
+	if same {
+		t.withheld = ""
+	} else if withheldHere {
 		t.withheld = origin
 	}
 }

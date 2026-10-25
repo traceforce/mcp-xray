@@ -185,3 +185,31 @@ func TestNewSDKSession_WithheldBearerReadsAsRedirectNotAuth(t *testing.T) {
 	assert.Contains(t, err.Error(), "redirected to", err.Error())
 	assert.NotContains(t, err.Error(), "secret-0123456789")
 }
+
+func TestNewSDKSession_RedirectBackToConfiguredOriginIsAuth(t *testing.T) {
+	// A→B→A: the hop to B withholds the bearer, but the final request returns to
+	// the configured origin A, which does get the bearer. A 401 there is a real
+	// missing/invalid credential, not a redirect, so it must read as auth.
+	var a *httptest.Server
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Empty(t, r.Header.Get("Authorization"), "the other host must not get the bearer")
+		http.Redirect(w, r, a.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(other.Close)
+	a = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/start" {
+			http.Redirect(w, r, other.URL+"/hop", http.StatusTemporaryRedirect)
+			return
+		}
+		assert.Equal(t, "Bearer secret-0123456789", r.Header.Get("Authorization"), r.URL.Path)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(a.Close)
+
+	start := a.URL + "/start"
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{
+		Name: "s", URL: &start, Headers: map[string]string{"Authorization": "Bearer secret-0123456789"}, NonInteractive: true,
+	})
+	require.Error(t, err)
+	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err), "the bearer reached the configured origin, so its 401 is auth")
+}
