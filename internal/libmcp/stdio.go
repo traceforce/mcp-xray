@@ -60,7 +60,7 @@ func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 // client never sends one, and "[INFO]" log prefixes are common.
 type jsonLines struct {
 	r       *bufio.Reader
-	dropped io.Writer // receives every byte that is not part of a kept JSON line
+	dropped io.Writer // a byte-faithful copy of all of r, for the diagnostic tail
 	mid     bool      // inside a line whose fate is decided
 	keep    bool      // and that line is JSON
 	rest    []byte    // unread part of the current kept chunk
@@ -79,10 +79,7 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 				continue
 			}
 			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
-				// Blank lines and indent are skipped from the JSON stream but
-				// streamed straight to the bounded diagnostic tail, so a secret
-				// spanning lines stays byte-for-byte matchable and no buffer grows.
-				if l.dropped != nil {
+				if l.dropped != nil { // blank lines and indent: keep the diagnostic faithful
 					_, _ = l.dropped.Write([]byte{b})
 				}
 				continue
@@ -100,7 +97,10 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 		}
 		if l.keep {
 			l.rest = append(l.rest[:0], chunk...)
-		} else if l.dropped != nil {
+		}
+		// Every chunk is copied to the diagnostic, kept or not, so a secret that
+		// straddles a kept line and a dropped one still appears whole and redacts.
+		if l.dropped != nil {
 			_, _ = l.dropped.Write(chunk)
 		}
 	}
