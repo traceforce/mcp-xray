@@ -139,6 +139,13 @@ func TestArgSecrets_DecodesURLCredentials(t *testing.T) {
 	assert.Contains(t, got, "long@password")
 }
 
+func TestArgSecrets_AuthorityEndsBeforeQuery(t *testing.T) {
+	// A later '@' in the query must not extend the password past the authority.
+	got := argSecrets([]string{"postgresql://alice:longpassword@db?application_name=team@example.com"})
+	assert.Contains(t, got, "longpassword")
+	assert.NotContains(t, got, "longpassword@db?application_name=team")
+}
+
 func readJSONLines(t *testing.T, in string) string {
 	t.Helper()
 	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in))})
@@ -154,7 +161,7 @@ func TestJSONLines(t *testing.T) {
 func TestJSONLines_DroppedKeepsIndentForRedaction(t *testing.T) {
 	// A secret spanning lines with an indented continuation must reach the
 	// dropped stream byte-for-byte, so exact-match redaction still masks it.
-	secret := "alpha-secret\n  beta-secret"
+	secret := "alpha-secret\n\n  beta-secret"
 	in := "preamble\n" + secret + "\n{\"a\":1}\n"
 	var dropped outputTail
 	dropped.secrets = []string{secret}

@@ -60,8 +60,7 @@ func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 // client never sends one, and "[INFO]" log prefixes are common.
 type jsonLines struct {
 	r       *bufio.Reader
-	dropped io.Writer // receives the dropped lines, when set
-	skipped []byte    // leading blanks of the current line, kept for a dropped line
+	dropped io.Writer // receives every byte that is not part of a kept JSON line
 	mid     bool      // inside a line whose fate is decided
 	keep    bool      // and that line is JSON
 	rest    []byte    // unread part of the current kept chunk
@@ -79,12 +78,13 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 				l.err = err
 				continue
 			}
-			if b == '\r' || b == '\n' {
-				l.skipped = l.skipped[:0] // an empty line carries nothing to report
-				continue
-			}
-			if b == ' ' || b == '\t' {
-				l.skipped = append(l.skipped, b) // indent of this line; the decoder skips it
+			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
+				// Blank lines and indent are skipped from the JSON stream but
+				// streamed straight to the bounded diagnostic tail, so a secret
+				// spanning lines stays byte-for-byte matchable and no buffer grows.
+				if l.dropped != nil {
+					_, _ = l.dropped.Write([]byte{b})
+				}
 				continue
 			}
 			l.mid, l.keep = true, b == '{'
@@ -101,12 +101,8 @@ func (l *jsonLines) Read(p []byte) (int, error) {
 		if l.keep {
 			l.rest = append(l.rest[:0], chunk...)
 		} else if l.dropped != nil {
-			// A dropped line's indent is written too, so a secret spanning lines
-			// stays byte-for-byte what the child wrote and redaction still matches.
-			_, _ = l.dropped.Write(l.skipped)
 			_, _ = l.dropped.Write(chunk)
 		}
-		l.skipped = l.skipped[:0]
 	}
 	n := copy(p, l.rest)
 	l.rest = l.rest[n:]
@@ -199,7 +195,10 @@ func argSecrets(args []string) []string {
 			add(value)
 		}
 		for _, rest := range strings.Split(arg, "://")[1:] {
-			authority, _, _ := strings.Cut(rest, "/")
+			authority := rest
+			if i := strings.IndexAny(authority, "/?#"); i >= 0 {
+				authority = authority[:i] // userinfo lives before the path, query or fragment
+			}
 			if at := strings.LastIndex(authority, "@"); at >= 0 {
 				user, pass, _ := strings.Cut(authority[:at], ":")
 				for _, v := range []string{user, pass} {
