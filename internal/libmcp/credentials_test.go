@@ -134,6 +134,25 @@ func TestCredentialRefresh_RefusesRedirectsAndPlainHTTP(t *testing.T) {
 	assert.ErrorContains(t, err, "https")
 }
 
+func TestCredentialRefresh_TransportErrorHidesEncodedToken(t *testing.T) {
+	secret := "refresh/secret/1"
+	// A malformed Location Go cannot parse, echoing the token URL-encoded; Go's
+	// redirect error would carry it before CheckRedirect ever runs.
+	tok := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "https://%zz/cb?rt="+url.QueryEscape(secret))
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(tok.Close)
+	trustTokenServer(t, tok)
+
+	cred := Credential{TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: secret}
+	_, err := cred.refresh("https://mcp.example/mcp")
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), secret, "the raw refresh token must not reach the error")
+	assert.NotContains(t, err.Error(), url.QueryEscape(secret), "nor its URL-encoded form")
+	assert.Equal(t, OutcomeFailed, OutcomeForError(err), "a transport failure is failed, not a refused credential")
+}
+
 func TestCredentials_SaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.json")
 	creds, err := LoadCredentials(path)

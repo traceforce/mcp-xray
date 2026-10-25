@@ -367,8 +367,8 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	resp, err := tokenClient.Do(req) // a redirect would resend the code and client secret
 	if err != nil {
 		// A malformed redirect Location is parsed before the redirect is refused, so
-		// Go's error can echo the code or secret back; mask the submitted values.
-		return TokenResponse{}, fmt.Errorf("token exchange failed: %s", redact(err.Error(), []string{code, clientSecret, codeVerifier}, false))
+		// Go's error can echo the code or secret in any encoding; report nothing server-controlled.
+		return TokenResponse{}, errors.New("token exchange failed: the request to the token endpoint did not complete")
 	}
 	defer resp.Body.Close()
 
