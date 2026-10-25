@@ -43,7 +43,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	var got http.Header
-	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, host: "MCP.Example:8443",
+	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, scheme: "https", host: "MCP.Example:8443",
 		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			got = r.Header
 			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
@@ -64,6 +64,24 @@ func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://ς.example:8443/mcp", nil))
 	require.NoError(t, err)
 	assert.Empty(t, got.Get("Authorization"), "a Unicode spelling must match as written")
+}
+
+func TestHeaderTransport_OtherOriginGetsNoCredentialOrReferer(t *testing.T) {
+	var got http.Header
+	headers := map[string]string{"Authorization": "Bearer x", "User-Agent": "custom/1"}
+	ht := &headerTransport{headers: headers, scheme: "https", host: "mcp.example",
+		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			got = r.Header
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+		})}
+	// Same host over plain http: no bearer in cleartext, no Referer with the configured URL.
+	req := httptest.NewRequest(http.MethodPost, "http://mcp.example/mcp", nil)
+	req.Header.Set("Referer", "https://mcp.example/mcp?api_key=K")
+	_, err := ht.RoundTrip(req)
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"))
+	assert.Empty(t, got.Get("Referer"))
+	assert.Equal(t, "custom/1", got.Get("User-Agent"), "a configured User-Agent goes everywhere")
 }
 
 func TestNewSDKSession_SendsHeadersToConfiguredHostOnly(t *testing.T) {
@@ -89,6 +107,7 @@ func TestNewSDKSession_SendsHeadersToConfiguredHostOnly(t *testing.T) {
 			w.(http.Flusher).Flush()
 			<-r.Context().Done()
 		default:
+			assert.Equal(t, "Bearer secret-0123456789", r.Header.Get("Authorization"), r.URL.Path)
 			inner.Config.Handler.ServeHTTP(w, r)
 		}
 	}))

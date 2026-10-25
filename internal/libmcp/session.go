@@ -167,15 +167,16 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		// the server might not require authentication
 	}
 
-	// The configured headers go to the configured host only, so a redirect or
-	// an SSE endpoint event cannot carry them to another.
-	host := ""
+	// The configured headers go to the configured origin only, so a redirect or
+	// an SSE endpoint event cannot carry them to another, or to plain http.
+	scheme, host := "", ""
 	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
-		host = req.URL.Host // spelled as every request will spell it
+		scheme, host = req.URL.Scheme, req.URL.Host // spelled as every request will spell them
 	}
 	httpClient.Transport = &headerTransport{
 		base:    http.DefaultTransport,
 		headers: cfg.Headers,
+		scheme:  scheme,
 		host:    host,
 	}
 
@@ -201,22 +202,28 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// requests for the configured host, plus a User-Agent when they do not set one.
+// requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
-	host    string // the only host the configured headers are sent to
+	scheme  string // with host, the only origin the configured headers are sent to
+	host    string
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to a request for the configured host
-	if sameHost(req.URL.Host, t.host) {
-		for k, v := range t.headers {
+	// The configured headers go to the configured origin; a User-Agent is no
+	// credential, so a configured one goes everywhere.
+	same := strings.EqualFold(req.URL.Scheme, t.scheme) && sameHost(req.URL.Host, t.host)
+	for k, v := range t.headers {
+		if same || strings.EqualFold(k, "User-Agent") {
 			req.Header.Set(k, v)
 		}
+	}
+	if !same {
+		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
 	}
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
