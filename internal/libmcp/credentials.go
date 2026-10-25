@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -56,6 +56,11 @@ func LoadCredentials(path string) (Credentials, error) {
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&creds); err != nil {
 			return nil, fmt.Errorf("failed to parse credentials file: %w", err)
+		}
+		// A lone Decode accepts a valid value followed by another document or junk;
+		// reject that so a later save cannot silently drop the trailing content.
+		if err := dec.Decode(&struct{}{}); err != io.EOF {
+			return nil, fmt.Errorf("failed to parse credentials file: unexpected content after the first JSON value")
 		}
 	}
 	if creds == nil {
@@ -108,6 +113,11 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 // host itself when it has none, such as an IP address or localhost.
 func site(host string) string {
 	host = strings.ToLower(host)
+	// An IP is its own site; the public suffix list would read it as a domain and
+	// fold 192.0.2.10 and 198.51.2.10 both to "2.10", merging unrelated hosts.
+	if net.ParseIP(host) != nil {
+		return host
+	}
 	if s, err := publicsuffix.EffectiveTLDPlusOne(host); err == nil {
 		return s
 	}
@@ -135,7 +145,17 @@ var tokenClient = &http.Client{
 	Transport:     &headerTransport{base: http.DefaultTransport},
 }
 
-var oauthErrorCode = regexp.MustCompile(`^[a-z_]{1,40}$`)
+// oauthErrorCodes are the RFC 6749 section 5.2 token-endpoint error codes; only
+// these are ever reported, since any other value in a refused body is
+// server-controlled and could echo a token.
+var oauthErrorCodes = map[string]bool{
+	"invalid_request":        true,
+	"invalid_client":         true,
+	"invalid_grant":          true,
+	"unauthorized_client":    true,
+	"unsupported_grant_type": true,
+	"invalid_scope":          true,
+}
 
 // tokenReply is a token endpoint's answer; only its RFC 6749 error code is ever
 // reported, as the rest of a refused body may echo a token.
@@ -149,7 +169,7 @@ func readTokenReply(resp *http.Response) (tokenReply, string) {
 	_ = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&reply)
 	// The status code only: a server's status text is free text that could carry anything.
 	status := strconv.Itoa(resp.StatusCode)
-	if oauthErrorCode.MatchString(reply.Error) {
+	if oauthErrorCodes[reply.Error] {
 		return reply, status + " " + reply.Error
 	}
 	return reply, status

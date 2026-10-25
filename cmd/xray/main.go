@@ -235,18 +235,19 @@ func NewDumpToolsCommand() *cobra.Command {
 					fmt.Printf("Error: %v\n", err)
 					os.Exit(1)
 				}
+				// It is rewritten during the run, so no config or output file may be the same
+				// file. Checked before the first save, so an aliased file is never overwritten.
+				ci, _ := os.Stat(credentialsFile)
+				for _, other := range append([]string{toolsOutputFile, outcomesFile}, configPaths...) {
+					if oi, err := os.Stat(other); other != "" && err == nil && ci != nil && os.SameFile(ci, oi) {
+						fmt.Println("Error: --credentials-file must not be a config or output file")
+						os.Exit(1)
+					}
+				}
 				// Saved now, so an unwritable path fails before the run rather than after it.
 				if err := credentials.Save(credentialsFile); err != nil {
 					fmt.Printf("Error writing credentials file: %v\n", err)
 					os.Exit(1)
-				}
-				// It is rewritten during the run, so no config or output file may be the same file.
-				ci, _ := os.Stat(credentialsFile)
-				for _, other := range append([]string{toolsOutputFile, outcomesFile}, configPaths...) {
-					if oi, err := os.Stat(other); other != "" && err == nil && os.SameFile(ci, oi) {
-						fmt.Println("Error: --credentials-file must not be a config or output file")
-						os.Exit(1)
-					}
 				}
 			}
 

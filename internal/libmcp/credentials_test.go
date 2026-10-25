@@ -175,6 +175,8 @@ func TestKeepable_SameSiteHTTPSOnly(t *testing.T) {
 		{"https://a.github.io/mcp", "https://b.github.io/token", false}, // a public suffix is not one owner
 		{"http://mcp.supabase.com/mcp", "https://api.supabase.com/token", false},
 		{"https://mcp.supabase.com/mcp", "http://api.supabase.com/token", false},
+		{"https://192.0.2.10/mcp", "https://198.51.2.10/token", false}, // distinct IPs that share octets are not one site
+		{"https://192.0.2.10/mcp", "https://192.0.2.10/token", true},   // the same IP host is one site
 	} {
 		assert.Equal(t, tc.want, keepable(tc.mcp, Credential{TokenEndpoint: tc.token}, ""), tc)
 	}
