@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -90,22 +89,21 @@ type DCRResponse struct {
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token,omitempty"`
-	TokenType    string `json:"token_type"`
-	ExpiresIn    int    `json:"expires_in,omitempty"`
-	Scope        string `json:"scope,omitempty"`
 }
 
-func (o *OAuthConfig) OauthDiscovery() (string, error) {
+// OauthDiscovery runs the browser login and returns the access token, plus the
+// credential to log in again without a browser when a refresh token was issued.
+func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	fmt.Println("1) Discovering Protected Resource Metadata (PRM)…")
 	prm, err := o.DiscoverPRM()
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
 	asmd, err := o.DiscoverASMetadata(prm)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 
 	scopes := asmd.ScopesSupported
@@ -124,7 +122,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	dcr, err := o.DynamicClientRegister(asmd)
 	if err != nil {
 		if !errors.Is(err, ErrDCRForbidden) {
-			return "", err
+			return "", nil, err
 		}
 		// DCR returned 403 (e.g. Figma); use pre-registered client from config or PRM
 		if o.ClientID != "" {
@@ -134,12 +132,12 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 			fmt.Println("   Using client_id from Protected Resource Metadata")
 			clientID, clientSecret = prm.ClientID, prm.ClientSecret
 		} else {
-			return "", err
+			return "", nil, err
 		}
 	} else {
 		clientID, clientSecret = dcr.ClientID, dcr.ClientSecret
 		if clientID == "" {
-			log.Fatal("DCR failed: empty client_id")
+			return "", nil, errors.New("DCR failed: empty client_id")
 		}
 		fmt.Println("   client_id =", clientID)
 	}
@@ -154,13 +152,16 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 		fmt.Println("   If it doesn't open, paste this URL into your browser:")
 		fmt.Println(authURL)
 		openBrowser(authURL)
-		return "", fmt.Errorf("redirect_uri is set to %s; complete authorization in Cursor, then Cursor will store the token", o.redirectURI())
+		return "", nil, fmt.Errorf("redirect_uri is set to %s; complete authorization in Cursor, then Cursor will store the token", o.redirectURI())
 	}
 
 	fmt.Println("4) Starting local redirect server…")
 	codeCh := make(chan string, 1)
 	errCh := make(chan string, 1)
-	shutdownServer := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort)
+	shutdownServer, err := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
+	if err != nil {
+		return "", nil, err // never open the browser: whatever holds the port would receive the code
+	}
 	defer shutdownServer() // Ensure server is shut down when function returns
 
 	fmt.Println("5) Opening browser for login/consent…")
@@ -174,21 +175,23 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	case code = <-codeCh:
 		// Server will be shut down by defer
 	case err := <-errCh:
-		shutdownServer() // Shutdown before log.Fatalf (which exits)
-		log.Fatalf("OAuth error: %s", err)
+		return "", nil, fmt.Errorf("OAuth error: %s", err)
 	case <-time.After(3 * time.Minute):
-		shutdownServer() // Shutdown before log.Fatal (which exits)
-		log.Fatal("Timed out waiting for OAuth callback")
+		return "", nil, errors.New("timed out waiting for OAuth callback")
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
-	if tok.AccessToken == "" {
-		log.Fatal("Token exchange failed: no access_token")
+	tok, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
+	if err != nil {
+		return "", nil, err
 	}
 	fmt.Println("Access token acquired")
 
-	return tok.AccessToken, nil
+	var cred *Credential
+	if tok.RefreshToken != "" && strings.HasPrefix(asmd.TokenEndpoint, "https://") { // refresh refuses plain http
+		cred = &Credential{TokenEndpoint: asmd.TokenEndpoint, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
+	}
+	return tok.AccessToken, cred, nil
 }
 
 // ---------- OAuth discovery ----------
@@ -344,7 +347,7 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	return u.String()
 }
 
-func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) TokenResponse {
+func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -357,48 +360,61 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := o.httpClient.Do(req)
+	resp, err := tokenClient.Do(req) // a redirect would resend the code and client secret
 	if err != nil {
-		log.Fatalf("Token exchange failed: %v", err)
+		return TokenResponse{}, fmt.Errorf("token exchange failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(resp.Body)
-		log.Fatalf("Token exchange failed: %s %s", resp.Status, string(body))
-	}
-
 	var tr TokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
-		log.Fatalf("Token decode failed: %v", err)
+	if resp.StatusCode/100 != 2 {
+		_, reason := readTokenReply(resp)
+		return tr, fmt.Errorf("token exchange failed: %s", reason)
 	}
-	return tr
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
+		return tr, fmt.Errorf("token decode failed: %w", err)
+	}
+	if tr.AccessToken == "" {
+		return tr, errors.New("token exchange failed: no access_token")
+	}
+	return tr, nil
 }
 
-func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int) func() {
+func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int, state string) (func(), error) {
+	// Only the first result counts; a later callback must not block the handler.
+	send := func(ch chan<- string, v string) {
+		select {
+		case ch <- v:
+		default:
+		}
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(RedirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		// A callback for a login this run did not start is ignored, never exchanged.
+		if q.Get("state") != state {
+			http.Error(w, "State mismatch", 400)
+			return
+		}
 		if e := q.Get("error"); e != "" {
-			errCh <- e
+			send(errCh, e)
 			http.Error(w, "OAuth failed, you can close this tab.", 400)
 			return
 		}
 		code := q.Get("code")
 		if code == "" {
-			errCh <- "missing_code"
+			send(errCh, "missing_code")
 			http.Error(w, "Missing code", 400)
 			return
 		}
 		fmt.Fprintf(w, "<html><body><h3>%s MCP OAuth complete.</h3><p>You may close this tab.</p></body></html>", ApplicationName)
-		codeCh <- code
+		send(codeCh, code)
 	})
 
 	addr := fmt.Sprintf("%s:%d", host, port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		errCh <- fmt.Sprintf("redirect_listen_failed: %v", err)
-		return func() {} // Return no-op function if listen fails
+		return nil, fmt.Errorf("redirect_listen_failed: %w", err)
 	}
 	srv := &http.Server{Handler: mux}
 
@@ -418,7 +434,7 @@ func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string,
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
-	}
+	}, nil
 }
 
 // ---------- utilities ----------

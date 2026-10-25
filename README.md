@@ -80,6 +80,10 @@ Connect to the MCP servers and dump their tool definitions to a JSON file, witho
 
 # Never open a browser for OAuth and record one outcome per server
 ./mcpxray dump-tools /path/to/mcp/config.json --non-interactive --outcomes-output outcomes.json
+
+# Keep OAuth logins in creds.json, then reuse them without a browser
+./mcpxray dump-tools /path/to/mcp/config.json --credentials-file creds.json
+./mcpxray dump-tools /path/to/mcp/config.json --non-interactive --credentials-file creds.json
 ```
 
 Unlike `config-scan`, this command performs no connection, secrets, or tool analysis — it only lists tools and writes them to the tools JSON file (`tools_summary_<timestamp>.json` by default). The output is a single JSON array with one entry per server. Each tool is wrapped with classified actions derived from MCP annotations (`readOnlyHint` / `destructiveHint`) and name/description keywords:
@@ -105,6 +109,8 @@ Tool lists are paginated to completion; a server that never stops paging is repo
 ```
 
 `status` is `ok`, `empty` (connected, but the server lists no tools), `auth_required`, `unlaunchable` (the command could not be started), or `failed`. With `--non-interactive`, MCP X-Ray never opens a browser: a server that needs OAuth is reported as `auth_required` instead of waiting for a login.
+
+`--credentials-file` keeps OAuth logins between runs, keyed by the server URL as configured. A browser login that returns a refresh token is saved with its token endpoint and client; later runs, `--non-interactive` included, refresh it at that stored endpoint (https only, never rediscovered from the server) and save a rotated token back. A configured `Authorization: Bearer` header takes precedence, and a refused token is reported as `auth_required`. A login is kept only for an https server whose token endpoint is https on the same site (`mcp.example.com` and `auth.example.com`), or is the one the server's config pins with `oauth_token_endpoint` (for a hosted auth provider). The file holds secrets: on Unix it is written owner-only and refused if others can read it; on Windows it takes the folder's permissions, so keep it in a private folder.
 
 ### Pentest
 

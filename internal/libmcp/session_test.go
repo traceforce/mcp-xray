@@ -43,7 +43,7 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 
 func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	var got http.Header
-	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, host: "MCP.Example:8443",
+	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, scheme: "https", host: "MCP.Example:8443",
 		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			got = r.Header
 			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
@@ -56,6 +56,9 @@ func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	_, err := ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://mcp.example:9443/mcp", nil))
 	require.NoError(t, err)
 	assert.Empty(t, got.Get("Authorization"), "another port is another host")
+	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "http://mcp.example:8443/mcp", nil))
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"), "plain http to the same host gets no headers")
 	// Only ASCII folds: σ and ς fold alike yet encode to different names.
 	ht.host = "σ.example:8443"
 	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://σ.EXAMPLE:8443/mcp", nil))

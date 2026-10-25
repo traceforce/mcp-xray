@@ -25,6 +25,10 @@ type ToolsScanner struct {
 	toolsOutputFile string
 	// NonInteractive never starts browser OAuth; such servers are reported as auth_required.
 	NonInteractive bool
+	// Credentials holds stored logins by server URL; when nil, logins are not kept.
+	Credentials libmcp.Credentials
+	// CredentialsFile is where Credentials is saved after every change.
+	CredentialsFile string
 }
 
 func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string, maxRetries int) (*ToolsScanner, error) {
@@ -86,12 +90,12 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 
 	var results []serverToolsResult
 
-	// Add 60 seconds context timeout
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-
 	for _, server := range servers {
 		server.NonInteractive = s.NonInteractive
+		server.Credentials, server.CredentialsFile = s.Credentials, s.CredentialsFile
+		// 60 seconds per server, so one slow server or browser login cannot use up the next one's time.
+		ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
 		session, err := libmcp.NewSDKSession(ctx, server)
 		if err != nil {
 			// Handle connection errors gracefully - continue with other servers

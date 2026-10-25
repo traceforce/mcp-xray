@@ -146,9 +146,23 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
+	// A stored credential logs in without a browser; a configured bearer wins over it.
+	if cred, ok := cfg.Credentials[url]; ok && keepable(url, cred, cfg.OAuthTokenEndpoint) && !hasAccessToken(cfg.Headers) {
+		accessToken, err := cred.refresh(url)
+		switch {
+		case err == nil:
+			cfg.Credentials[url] = cred // keeps a rotated refresh token
+			cfg.saveCredentials()
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+		case cfg.NonInteractive:
+			return nil, false, err
+		default:
+			fmt.Printf("Warning: stored credential for MCP server '%s' not used: %v; logging in again\n", cfg.Name, err)
+		}
+	}
 	if !cfg.NonInteractive && !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
-		accessToken, err := oauthConfig.OauthDiscovery()
+		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
 			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
 				dcrSkippedAuth = true
@@ -158,24 +172,31 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 			}
 			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
-			if cfg.Headers == nil {
-				cfg.Headers = make(map[string]string)
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			if cfg.Credentials != nil {
+				if cred != nil && keepable(url, *cred, cfg.OAuthTokenEndpoint) {
+					cfg.Credentials[url] = *cred
+				} else {
+					delete(cfg.Credentials, url) // nothing this run may reuse
+					fmt.Printf("Login for MCP server '%s' not kept: no refresh token, or its token endpoint is not https on the server's own site\n", cfg.Name)
+				}
+				cfg.saveCredentials()
 			}
-			cfg.Headers["Authorization"] = "Bearer " + accessToken
 		}
 		// If we cannot discover the access token, just continue with the existing headers
 		// the server might not require authentication
 	}
 
-	// The configured headers go to the configured host only, so a redirect or
-	// an SSE endpoint event cannot carry them to another.
-	host := ""
+	// The configured headers go to the configured scheme and host only, so a
+	// redirect or an SSE endpoint event cannot carry them elsewhere or to plain http.
+	scheme, host := "", ""
 	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
-		host = req.URL.Host // spelled as every request will spell it
+		scheme, host = req.URL.Scheme, req.URL.Host // spelled as every request will spell them
 	}
 	httpClient.Transport = &headerTransport{
 		base:    http.DefaultTransport,
 		headers: cfg.Headers,
+		scheme:  scheme,
 		host:    host,
 	}
 
@@ -201,19 +222,20 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// requests for the configured host, plus a User-Agent when they do not set one.
+// requests for the configured scheme and host, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
-	host    string // the only host the configured headers are sent to
+	scheme  string // with host, the only origin the configured headers are sent to
+	host    string
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to a request for the configured host
-	if sameHost(req.URL.Host, t.host) {
+	// Add all configured headers to a request for the configured scheme and host
+	if req.URL.Scheme == t.scheme && sameHost(req.URL.Host, t.host) {
 		for k, v := range t.headers {
 			req.Header.Set(k, v)
 		}
@@ -249,6 +271,18 @@ func sameHost(a, b string) bool {
 	return true
 }
 
+// withBearer returns a copy of headers with the access token set, leaving the
+// caller's map as configured.
+func withBearer(headers map[string]string, token string) map[string]string {
+	out := map[string]string{"Authorization": "Bearer " + token}
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") { // another spelling would race this one onto the wire
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // Helper functions
 func envToSlice(env map[string]string) []string {
 	var result []string
@@ -258,21 +292,13 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-// hasAccessToken checks if the headers contain an access token
+// hasAccessToken checks if the headers contain a bearer token, in any spelling
+// of the header name or the scheme.
 func hasAccessToken(headers map[string]string) bool {
-	if headers == nil {
-		return false
+	for k, v := range headers {
+		if strings.EqualFold(k, "Authorization") && len(v) > 7 && strings.EqualFold(v[:7], "Bearer ") {
+			return true
+		}
 	}
-	// Check for "Authorization" key (case-sensitive since map keys are case-sensitive)
-	// HTTP headers are case-insensitive, but we check the common capitalized form
-	if authHeader, ok := headers["Authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
-	// Also check lowercase "authorization" in case it was stored that way
-	if authHeader, ok := headers["authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
 	return false
 }
