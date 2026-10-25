@@ -204,6 +204,16 @@ func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
 	assert.NotContains(t, err.Error(), "client-secret-xyz", "nor the client secret")
 }
 
+func TestExchangeCode_AcceptsUppercaseHTTPSScheme(t *testing.T) {
+	// URL schemes are case-insensitive; a mixed-case https endpoint is valid.
+	ts, _ := tokenServer(t, http.StatusOK, map[string]string{"access_token": "a"})
+	upper := "HTTPS://" + ts.URL[len("https://"):]
+	o := NewOAuthConfig("https://mcp.example/mcp", "c", "s", "http://127.0.0.1:8765/callback")
+	tok, err := o.exchangeCode(upper, "c", "s", "code", "verifier")
+	require.NoError(t, err, "a mixed-case https scheme must not be rejected")
+	assert.Equal(t, "a", tok.AccessToken)
+}
+
 func TestCredentials_SaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.json")
 	creds, err := LoadCredentials(path)

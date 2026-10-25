@@ -215,6 +215,12 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
+			// A failure after the code was obtained means the server is auth-gated;
+			// propagate it (failed) rather than retry anonymously and report auth_required.
+			var cee *CodeExchangeError
+			if errors.As(err, &cee) {
+				return nil, false, err
+			}
 			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)

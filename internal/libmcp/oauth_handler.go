@@ -183,12 +183,14 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	fmt.Println("6) Exchanging code for tokens…")
 	tok, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if err != nil {
-		return "", nil, err
+		// Past the code: the server is auth-gated, so the caller must not fall back
+		// to an anonymous connection that would mask the failure as auth_required.
+		return "", nil, &CodeExchangeError{Err: err}
 	}
 	fmt.Println("Access token acquired")
 
 	var cred *Credential
-	if tok.RefreshToken != "" && strings.HasPrefix(asmd.TokenEndpoint, "https://") { // refresh refuses plain http
+	if tok.RefreshToken != "" && isHTTPSURL(asmd.TokenEndpoint) { // refresh refuses plain http
 		cred = &Credential{TokenEndpoint: asmd.TokenEndpoint, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
 	}
 	return tok.AccessToken, cred, nil
@@ -349,7 +351,7 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 
 func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
 	// Never POST the code and client secret to a plain-http endpoint, as refresh refuses to.
-	if !strings.HasPrefix(tokenEP, "https://") {
+	if !isHTTPSURL(tokenEP) {
 		return TokenResponse{}, errors.New("token exchange failed: token endpoint is not https")
 	}
 	data := url.Values{}

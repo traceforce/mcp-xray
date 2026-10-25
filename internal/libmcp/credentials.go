@@ -40,6 +40,14 @@ type CredentialError struct{ Err error }
 func (e *CredentialError) Error() string { return e.Err.Error() }
 func (e *CredentialError) Unwrap() error { return e.Err }
 
+// CodeExchangeError marks a failure after the browser returned an authorization
+// code: the server is auth-gated, so a run must not fall back to an anonymous
+// connection that would only turn the token-endpoint outage into auth_required.
+type CodeExchangeError struct{ Err error }
+
+func (e *CodeExchangeError) Error() string { return e.Err.Error() }
+func (e *CodeExchangeError) Unwrap() error { return e.Err }
+
 // LoadCredentials reads a credentials file; a missing or empty file is an empty set.
 func LoadCredentials(path string) (Credentials, error) {
 	// Refused like an ssh key when others can read it (Unix only: Windows has no mode bits).
@@ -128,6 +136,13 @@ func site(host string) string {
 		return s
 	}
 	return ascii
+}
+
+// isHTTPSURL reports whether s parses as an https URL; the scheme is matched
+// case-insensitively, as url.Parse and http.NewRequest normalize it.
+func isHTTPSURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && strings.EqualFold(u.Scheme, "https")
 }
 
 // saveCredentials writes the credentials right after a change, so a rotated
