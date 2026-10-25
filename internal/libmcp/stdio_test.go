@@ -185,6 +185,16 @@ func TestJSONLines_DroppedRedactsJSONValuedSecret(t *testing.T) {
 	assert.Contains(t, dropped.String(), "[redacted]")
 }
 
+func TestSecretParts_MasksJSONEscapedForm(t *testing.T) {
+	// A child that JSON-logs a secret with a quote emits the escaped form; the
+	// escaped variant is a candidate, so redact still masks it.
+	var tail outputTail
+	tail.secrets = secretParts([]string{"s3cret\"credential42"})
+	fmt.Fprint(&tail, "log: {\"token\":\"s3cret\\\"credential42\"}")
+	assert.NotContains(t, tail.String(), "credential42")
+	assert.Contains(t, tail.String(), "[redacted]")
+}
+
 func TestJSONLines_KeptFrameStaysOutOfDiagnostic(t *testing.T) {
 	// A secret appears JSON-escaped inside a kept protocol frame; that frame must
 	// not reach the diagnostic, so the escaped form is never persisted.

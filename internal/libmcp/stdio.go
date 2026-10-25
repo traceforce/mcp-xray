@@ -2,6 +2,7 @@ package libmcp
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -213,23 +214,33 @@ func argSecrets(args []string) []string {
 	return secrets
 }
 
-// secretParts returns the values plus, for a multiline one, each of its lines of
-// 8 bytes or more. jsonLines may route a multiline secret's lines to the
-// diagnostic separately, so masking each line matches it however it is split.
+// secretParts returns the values to mask: each value, its lines when it spans
+// several (jsonLines may route them to the diagnostic separately), and the
+// JSON-escaped form of each, since a child that logs structured JSON emits a
+// value with its quotes, backslashes and newlines escaped.
 func secretParts(values []string) []string {
 	var out []string
 	seen := map[string]bool{}
 	add := func(v string) {
-		if len(v) >= 8 && !seen[v] {
-			seen[v] = true
-			out = append(out, v)
+		if len(v) < 8 || seen[v] {
+			return
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	addForms := func(v string) {
+		add(v)
+		if b, err := json.Marshal(v); err == nil {
+			if esc := string(b[1 : len(b)-1]); esc != v { // the quoted body, escapes and all
+				add(esc)
+			}
 		}
 	}
 	for _, v := range values {
-		add(v)
+		addForms(v)
 		if strings.Contains(v, "\n") {
 			for _, line := range strings.Split(v, "\n") {
-				add(strings.TrimSpace(line))
+				addForms(strings.TrimSpace(line))
 			}
 		}
 	}
