@@ -165,6 +165,10 @@ func TestNewSDKSession_StdioErrorBeforeTimeoutKeepsSDKError(t *testing.T) {
 	require.Error(t, err)
 	assert.NotErrorIs(t, err, context.DeadlineExceeded)
 	assert.True(t, strings.HasSuffix(err.Error(), "Unauthorized"), err.Error()) // OutcomeForError's auth_required match
+
+	t.Setenv("MCPXRAY_TEST_TOKEN", "Unauthorized") // an env value masks the suffix itself
+	_, err = NewSDKSession(context.Background(), cfg)
+	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err), err.Error())
 }
 
 func TestNewSDKSession_StdioRedactsSDKError(t *testing.T) {
