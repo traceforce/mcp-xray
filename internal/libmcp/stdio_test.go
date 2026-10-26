@@ -223,9 +223,7 @@ func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
 
 func TestValueParts(t *testing.T) {
 	got := valueParts("https://mcp.example.com/api/mcp/s/PLACEHOLDER_pathtoken1/sse?api_key=abc%2Bdef%2Fghij")
-	assert.Contains(t, got, "PLACEHOLDER_pathtoken1", "a long path segment, as an SSE endpoint URL echoes it")
 	assert.Contains(t, got, "abc+def/ghij", "the decoded query value")
-	assert.NotContains(t, got, "api", "a short path segment is a word")
 	assert.Contains(t, valueParts("Bearer PLACEHOLDER_envtok1"), "PLACEHOLDER_envtok1")
 }
 

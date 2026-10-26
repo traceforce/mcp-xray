@@ -200,8 +200,8 @@ func argSecrets(args []string) []string {
 
 // valueParts returns the parts of a value that may be a credential on their own:
 // the part after '=' in each '&'-separated piece, as written and decoded, the
-// last word of a value with spaces ("Bearer <token>"), and a URL's user,
-// password and long path segments.
+// last word of a value with spaces ("Bearer <token>"), and a URL's user and
+// password.
 func valueParts(v string) []string {
 	var parts []string
 	withDecoded := func(s string, unescape func(string) (string, error)) {
@@ -219,20 +219,14 @@ func valueParts(v string) []string {
 		parts = append(parts, words[len(words)-1])
 	}
 	for _, rest := range strings.Split(v, "://")[1:] {
-		authority, path := rest, ""
+		authority := rest
 		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-			authority, path = rest[:i], rest[i:] // userinfo lives before the path, query or fragment
+			authority = rest[:i] // userinfo lives before the path, query or fragment
 		}
 		if at := strings.LastIndex(authority, "@"); at >= 0 {
 			user, pass, _ := strings.Cut(authority[:at], ":")
 			withDecoded(user, url.PathUnescape)
 			withDecoded(pass, url.PathUnescape)
-		}
-		// ponytail: a path segment of 16 bytes or more may be a key (/s/<token>/sse); shorter ones are words.
-		for _, seg := range strings.FieldsFunc(path, func(r rune) bool { return strings.ContainsRune("/?#&=", r) }) {
-			if len(seg) >= 16 {
-				parts = append(parts, seg)
-			}
 		}
 	}
 	return parts
