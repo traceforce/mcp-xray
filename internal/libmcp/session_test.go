@@ -215,6 +215,34 @@ func TestHeaderTransport_SameHostHTTPHopAndDefaultPort(t *testing.T) {
 	assert.Equal(t, "Bearer x", got.Get("Authorization"), "the default port is the same origin")
 }
 
+func TestHeaderTransport_WithheldCredential401(t *testing.T) {
+	ht := &headerTransport{scheme: "https", host: "mcp.example",
+		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusUnauthorized, Body: http.NoBody}, nil
+		})}
+	other := func(method string, streamable bool) *http.Request {
+		r := httptest.NewRequest(method, "https://other.example/mcp", nil)
+		if streamable {
+			r.Header.Set("Mcp-Protocol-Version", "2025-06-18")
+		}
+		return r
+	}
+	for _, tc := range []struct {
+		header string
+		counts bool
+	}{{"Authorization", true}, {"Cookie", true}, {"X-Api-Key", true}, {"X-Password", true}, {"X-Client-Name", false}} {
+		ht.headers = map[string]string{tc.header: "v"}
+		_, err := ht.RoundTrip(other(http.MethodPost, true))
+		assert.Equal(t, tc.counts, err != nil, tc.header)
+	}
+	ht.headers = map[string]string{"Authorization": "Bearer x"}
+	resp, err := ht.RoundTrip(other(http.MethodGet, true))
+	require.NoError(t, err, "the streamable client's optional stream gets a response, not a retried error")
+	assert.Equal(t, http.StatusMisdirectedRequest, resp.StatusCode)
+	_, err = ht.RoundTrip(other(http.MethodGet, false))
+	assert.ErrorContains(t, err, "credentials are sent only to", "a legacy SSE stream keeps the explanation")
+}
+
 func TestNewSDKSession_WithheldBearerOnOptionalStreamStillConnects(t *testing.T) {
 	// The streamable GET stream is optional; a withheld-bearer 401 on it must not
 	// make the SDK retry with backoff and fail a session whose POSTs work.
