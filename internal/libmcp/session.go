@@ -34,7 +34,7 @@ type SDKSession struct {
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
 	cancel    context.CancelFunc // ends the context the transport connected with
-	secrets   []string           // config values masked in every error this session reports
+	secrets   []string           // the config's and environment's values that Redact masks
 }
 
 // Redact masks the config's secrets in an error from a call made after connect,
@@ -60,7 +60,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
-	var secrets []string  // config values that must never appear in an error
+	var secrets []string  // config and environment values that must never appear in an error
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
@@ -96,18 +96,20 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 				secrets = append(append(secrets, v), valueParts(v)...) // AUTH_HEADER="Bearer <token>"
 			}
 		}
-		args := commandArgs
-		if strings.Contains(executable, "=") { // NAME=<value> node server.js: exec reports the whole token
-			args = append([]string{executable}, args...)
-		}
-		secrets = secretParts(append(secrets, argSecrets(args)...))
+		secrets = secretParts(append(secrets, argSecrets(commandArgs)...))
 		stderr.secrets, stdout.secrets = secrets, secrets
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
 		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
-			return nil, &redactedError{msg: redact("failed to connect: "+err.Error(), secrets, false), err: err}
+			// exec reports only the executable token: mask a NAME=<value> before the
+			// command, not the paths inherited values name (USERPROFILE, APPDATA).
+			msg := "failed to connect: " + err.Error()
+			if _, v, ok := strings.Cut(executable, "="); ok {
+				msg = redact(msg, secretParts([]string{v}), false)
+			}
+			return nil, &redactedError{msg: msg, err: err}
 		}
 		transport = stdio
 

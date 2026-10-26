@@ -188,9 +188,10 @@ func TestArgSecrets(t *testing.T) {
 }
 
 func TestArgSecrets_ValueForms(t *testing.T) {
-	got := argSecrets([]string{"--api-key", "-PLACEHOLDER_abcdefgh", "-pPLACEHOLDER_abcdefgh",
+	got := argSecrets([]string{"--api-key", "-PLACEHOLDER_abcdefgh", "-transport", "stdio",
 		"https://x.example/mcp?client=x&api_key=PLACEHOLDER_query", "Authorization: Bearer PLACEHOLDER_header"})
-	for _, want := range []string{"-PLACEHOLDER_abcdefgh", "PLACEHOLDER_abcdefgh", "PLACEHOLDER_query", "PLACEHOLDER_header"} {
+	assert.NotContains(t, got, "ransport", "a Go-style single-dash flag is not split")
+	for _, want := range []string{"-PLACEHOLDER_abcdefgh", "PLACEHOLDER_query", "PLACEHOLDER_header"} {
 		assert.Contains(t, got, want)
 	}
 }
@@ -198,8 +199,8 @@ func TestArgSecrets_ValueForms(t *testing.T) {
 func TestSecretParts_MasksEveryLoggerEscaping(t *testing.T) {
 	// Node and slog leave & raw, Python escapes non-ASCII, and a child may trim.
 	secrets := secretParts([]string{"PLACEHOLDER\"VALUE&abcdefgh", "pässwort_abcdefgh", "PLACEHOLDER_trimmed \r\n"})
-	for _, logged := range []string{`"PLACEHOLDER\"VALUE&abcdefgh"`, `"PLACEHOLDER\"VALUE&abcdefgh"`,
-		`"pässwort_abcdefgh"`, "token: PLACEHOLDER_trimmed\nnext line"} {
+	for _, logged := range []string{`"PLACEHOLDER\"VALUE&abcdefgh"`, `"PLACEHOLDER\"VALUE\u0026abcdefgh"`,
+		`"p\u00e4sswort_abcdefgh"`, "token: PLACEHOLDER_trimmed\nnext line"} {
 		got := redact(logged, secrets, false)
 		assert.NotContains(t, got, "abcdefgh", logged)
 		assert.NotContains(t, got, "PLACEHOLDER_trimmed", logged)

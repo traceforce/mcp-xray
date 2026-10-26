@@ -172,10 +172,10 @@ func (t *outputTail) String() string {
 }
 
 // argSecrets returns the parts of a command line that may carry a credential,
-// 8 bytes or more: every argument but a bare flag name (a flag's value counts
-// even when it starts with '-'), an attached short-option value (-pVALUE), the
-// part after '=' in each '&'-separated piece, the last word of one with spaces
-// ("Authorization: Bearer <token>"), and a URL's user and password.
+// 8 bytes or more: every argument but a bare flag name, the argument after a
+// flag even when it starts with a single '-', and the valueParts of each.
+// ponytail: an attached value (-pVALUE) is not split off; Go-style -transport
+// flags would mask ordinary words.
 func argSecrets(args []string) []string {
 	var secrets []string
 	add := func(v string) {
@@ -186,11 +186,9 @@ func argSecrets(args []string) []string {
 	flagValue := false // the previous argument was a flag name, so this one is its value
 	for _, arg := range args {
 		isFlag := strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")
-		if !isFlag || (flagValue && !strings.HasPrefix(arg, "--")) { // a boolean flag can precede another flag
+		// "--" after a flag is the next flag, the first one being boolean.
+		if !isFlag || (flagValue && !strings.HasPrefix(arg, "--")) {
 			add(arg)
-		}
-		if isFlag && !strings.HasPrefix(arg, "--") && len(arg) > 2 {
-			add(arg[2:])
 		}
 		flagValue = isFlag
 		for _, part := range valueParts(arg) {
