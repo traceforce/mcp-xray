@@ -33,9 +33,7 @@ func TestNewOAuthConfig_UserAgent(t *testing.T) {
 }
 
 func TestNewSDKSession_SSEOutlivesConnectTimeout(t *testing.T) {
-	old := connectTimeout
-	t.Cleanup(func() { connectTimeout = old })
-	connectTimeout = 200 * time.Millisecond
+	const timeout = 200 * time.Millisecond
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0"}, nil)
 	server.AddTool(&mcp.Tool{Name: "t", InputSchema: map[string]any{"type": "object"}},
 		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -45,10 +43,10 @@ func TestNewSDKSession_SSEOutlivesConnectTimeout(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	sse := "sse"
-	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, Type: &sse, NonInteractive: true})
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, Type: &sse, NonInteractive: true, ConnectTimeout: timeout})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
-	time.Sleep(2 * connectTimeout)
+	time.Sleep(2 * timeout)
 	tools, err := ListAllTools(context.Background(), s.Session)
 	require.NoError(t, err)
 	assert.Len(t, tools, 1)
