@@ -352,3 +352,63 @@ func TestRedirectServer_IgnoresACallbackForAnotherLogin(t *testing.T) {
 	resp.Body.Close()
 	assert.Equal(t, "c", <-codeCh)
 }
+
+func TestCredentialRefresh_RetriesWithoutResourceOnInvalidTarget(t *testing.T) {
+	// Some authorization servers reject the RFC 8707 resource indicator at the token
+	// endpoint with invalid_target; the refresh must drop it and retry, not give up.
+	var sawResource []bool
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		has := r.PostForm.Has("resource")
+		sawResource = append(sawResource, has)
+		w.Header().Set("Content-Type", "application/json")
+		if has {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_target"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "access-2", "refresh_token": "refresh-2"})
+	}))
+	t.Cleanup(ts.Close)
+	trustTokenServer(t, ts)
+
+	cred := Credential{TokenEndpoint: ts.URL, ClientID: "c", RefreshToken: "refresh-1", Resource: "https://mcp.example/"}
+	at, err := cred.refresh("https://mcp.example/mcp")
+	require.NoError(t, err)
+	assert.Equal(t, "access-2", at)
+	assert.Equal(t, []bool{true, false}, sawResource, "first attempt sends the resource, the retry omits it")
+	assert.Equal(t, "refresh-2", cred.RefreshToken, "a rotated token from the successful retry is kept")
+}
+
+func TestCredentialRefresh_InvalidGrantDoesNotRetry(t *testing.T) {
+	// A genuine credential refusal must not trigger the resource retry.
+	var attempts int
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant"})
+	}))
+	t.Cleanup(ts.Close)
+	trustTokenServer(t, ts)
+
+	cred := Credential{TokenEndpoint: ts.URL, ClientID: "c", RefreshToken: "r", Resource: "https://mcp.example/"}
+	_, err := cred.refresh("https://mcp.example/mcp")
+	var ce *CredentialError
+	assert.ErrorAs(t, err, &ce)
+	assert.Equal(t, 1, attempts, "a real refusal is not retried without the resource")
+}
+
+func TestOAuthConfig_ResourceIndicatorInAuthURL(t *testing.T) {
+	o := NewOAuthConfig("https://mcp.example/mcp", "", "", "")
+	assert.Contains(t, o.buildAuthURL("https://as.example/authorize", "cid", "openid", "chal", "st"),
+		"resource=https%3A%2F%2Fmcp.example%2Fmcp", "defaults to the configured URL")
+
+	o.resource = "https://mcp.example/" // the PRM's canonical resource wins
+	assert.Contains(t, o.buildAuthURL("https://as.example/authorize", "cid", "openid", "chal", "st"),
+		"resource=https%3A%2F%2Fmcp.example%2F&", "the canonical resource is sent")
+
+	o.omitResource = true // a server that refused the indicator gets none
+	assert.NotContains(t, o.buildAuthURL("https://as.example/authorize", "cid", "openid", "chal", "st"),
+		"resource=", "no resource param once the server has refused it")
+}
