@@ -193,32 +193,65 @@ func argSecrets(args []string) []string {
 			add(arg[2:])
 		}
 		flagValue = isFlag
-		for _, piece := range strings.Split(arg, "&") {
-			if _, value, ok := strings.Cut(piece, "="); ok {
-				add(value)
-			}
-		}
-		if words := strings.Fields(arg); len(words) > 1 {
-			add(words[len(words)-1])
-		}
-		for _, rest := range strings.Split(arg, "://")[1:] {
-			authority := rest
-			if i := strings.IndexAny(authority, "/?#"); i >= 0 {
-				authority = authority[:i] // userinfo lives before the path, query or fragment
-			}
-			if at := strings.LastIndex(authority, "@"); at >= 0 {
-				user, pass, _ := strings.Cut(authority[:at], ":")
-				for _, v := range []string{user, pass} {
-					add(v)
-					// A child may log the decoded form, so mask that too.
-					if dec, err := url.PathUnescape(v); err == nil && dec != v {
-						add(dec)
-					}
-				}
-			}
+		for _, part := range valueParts(arg) {
+			add(part)
 		}
 	}
 	return secrets
+}
+
+// valueParts returns the parts of a value that may be a credential on their own:
+// the part after '=' in each '&'-separated piece, as written and decoded, the
+// last word of a value with spaces ("Bearer <token>"), and a URL's user,
+// password and long path segments.
+func valueParts(v string) []string {
+	var parts []string
+	withDecoded := func(s string, unescape func(string) (string, error)) {
+		parts = append(parts, s)
+		if dec, err := unescape(s); err == nil && dec != s { // a child may log the decoded form
+			parts = append(parts, dec)
+		}
+	}
+	for _, piece := range strings.Split(v, "&") {
+		if _, value, ok := strings.Cut(piece, "="); ok {
+			withDecoded(value, url.QueryUnescape)
+		}
+	}
+	if words := strings.Fields(v); len(words) > 1 {
+		parts = append(parts, words[len(words)-1])
+	}
+	for _, rest := range strings.Split(v, "://")[1:] {
+		authority, path := rest, ""
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			authority, path = rest[:i], rest[i:] // userinfo lives before the path, query or fragment
+		}
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
+			user, pass, _ := strings.Cut(authority[:at], ":")
+			withDecoded(user, url.PathUnescape)
+			withDecoded(pass, url.PathUnescape)
+		}
+		// ponytail: a path segment of 16 bytes or more may be a key (/s/<token>/sse); shorter ones are words.
+		for _, seg := range strings.FieldsFunc(path, func(r rune) bool { return strings.ContainsRune("/?#&=", r) }) {
+			if len(seg) >= 16 {
+				parts = append(parts, seg)
+			}
+		}
+	}
+	return parts
+}
+
+// remoteSecrets returns the masking candidates of a remote config: its URL and
+// header values, whole and in parts.
+func remoteSecrets(rawURL string, headers map[string]string) []string {
+	values := []string{rawURL}
+	for _, v := range headers {
+		values = append(values, v)
+	}
+	var all []string
+	for _, v := range values {
+		all = append(append(all, v), valueParts(v)...)
+	}
+	return secretParts(all)
 }
 
 // secretParts returns the values to mask, each without surrounding whitespace

@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -210,23 +208,24 @@ func TestSecretParts_MasksEveryLoggerEscaping(t *testing.T) {
 }
 
 func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(w, "bad key %s %s", r.URL.Query().Get("api_key"), r.Header.Get("X-Api-Key"))
-	}))
-	t.Cleanup(ts.Close)
-	u := ts.URL + "/mcp?api_key=PLACEHOLDER_query1"
-	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u,
-		Headers: map[string]string{"X-Api-Key": "PLACEHOLDER_header1"}, NonInteractive: true})
-	if err == nil {
-		_ = s.Close()
-	}
+	// Nothing listens there, so Go's error quotes the URL, key included.
+	u := "http://127.0.0.1:1/mcp?api_key=PLACEHOLDER_query1"
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u, NonInteractive: true})
 	require.Error(t, err)
+	assert.Contains(t, errors.Unwrap(err).Error(), "PLACEHOLDER_query1", "the SDK error does carry the key")
 	assert.NotContains(t, err.Error(), "PLACEHOLDER_query1")
-	assert.NotContains(t, err.Error(), "PLACEHOLDER_header1")
 
-	s = &SDKSession{secrets: secretParts([]string{"PLACEHOLDER_header1"})}
-	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad key PLACEHOLDER_header1`)), `calling "tools/list": bad key [redacted]`)
+	s := &SDKSession{secrets: remoteSecrets(u, map[string]string{"Authorization": "Bearer --PLACEHOLDER_header1"})}
+	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad token --PLACEHOLDER_header1`)), `calling "tools/list": bad token [redacted]`)
+	assert.NoError(t, (*SDKSession)(nil).Redact(nil))
+}
+
+func TestValueParts(t *testing.T) {
+	got := valueParts("https://mcp.example.com/api/mcp/s/PLACEHOLDER_pathtoken1/sse?api_key=abc%2Bdef%2Fghij")
+	assert.Contains(t, got, "PLACEHOLDER_pathtoken1", "a long path segment, as an SSE endpoint URL echoes it")
+	assert.Contains(t, got, "abc+def/ghij", "the decoded query value")
+	assert.NotContains(t, got, "api", "a short path segment is a word")
+	assert.Contains(t, valueParts("Bearer PLACEHOLDER_envtok1"), "PLACEHOLDER_envtok1")
 }
 
 func TestNewSDKSession_StartErrorMasksEnvPrefix(t *testing.T) {

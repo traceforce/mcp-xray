@@ -40,8 +40,8 @@ type SDKSession struct {
 // Redact masks the config's secrets in an error from a call made after connect,
 // such as tools/list, before it becomes an outcome reason or a finding.
 func (s *SDKSession) Redact(err error) error {
-	if err == nil {
-		return nil
+	if err == nil || s == nil {
+		return err
 	}
 	return &redactedError{msg: redact(err.Error(), s.secrets, false), err: err}
 }
@@ -93,7 +93,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		// Inherited values count too: the child may echo any of them.
 		for _, kv := range cmd.Environ() {
 			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-				secrets = append(secrets, v)
+				secrets = append(append(secrets, v), valueParts(v)...) // AUTH_HEADER="Bearer <token>"
 			}
 		}
 		args := commandArgs
@@ -117,6 +117,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -127,6 +128,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -134,13 +136,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	default:
 		return nil, fmt.Errorf("unsupported transport type: %v", transportType)
-	}
-	if transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO { // a remote error can echo the URL's key or a header value
-		values := []string{*cfg.URL}
-		for _, v := range cfg.Headers {
-			values = append(values, v)
-		}
-		secrets = secretParts(argSecrets(values))
 	}
 
 	timeout := cfg.ConnectTimeout
@@ -190,6 +185,16 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	}, nil
 }
 
+// transportSecrets returns what a remote error can echo: the URL's and the
+// headers' values, including a bearer OAuth discovery added for this client.
+func transportSecrets(cfg MCPServerConfig, c *http.Client) []string {
+	headers := cfg.Headers
+	if ht, ok := c.Transport.(*headerTransport); ok {
+		headers = ht.headers
+	}
+	return remoteSecrets(*cfg.URL, headers)
+}
+
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	// Note: The official SDK does not yet support HTTP transport directly
 	// Return error to fall back to custom implementation
@@ -212,7 +217,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
 			} else {
-				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+				fmt.Printf("Warning: OAuth discovery failed: %s\n", redact(err.Error(), remoteSecrets(url, cfg.Headers), false))
 			}
 			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
