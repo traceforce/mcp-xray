@@ -207,7 +207,7 @@ func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	o := NewOAuthConfig("https://mcp.example/mcp", "c", "client-secret-xyz", "http://127.0.0.1:8765/callback")
-	_, err := o.exchangeCode(ts.URL, "c", "client-secret-xyz", "auth-code-xyz", "verifier")
+	_, _, err := o.exchangeCode(ts.URL, "c", "client-secret-xyz", "auth-code-xyz", "verifier")
 	require.Error(t, err)
 	assert.EqualError(t, err, "token exchange failed: 200", "a malformed body yields only the status")
 	assert.NotContains(t, err.Error(), "auth-code-xyz", "the authorization code never reaches the error")
@@ -227,9 +227,10 @@ func TestExchangeCode_LoopbackHTTPAndSameOriginRedirect(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 	o := NewOAuthConfig("https://mcp.example/mcp", "c", "s", "http://127.0.0.1:8765/callback")
-	tok, err := o.exchangeCode(ts.URL+"/token", "c", "s", "code", "verifier")
+	tok, endpoint, err := o.exchangeCode(ts.URL+"/token", "c", "s", "code", "verifier")
 	require.NoError(t, err)
 	assert.Equal(t, "a", tok.AccessToken)
+	assert.Equal(t, ts.URL+"/token/", endpoint, "a refresh, which follows no redirect, goes where the exchange ended")
 }
 
 func TestCredentials_SaveAndLoad(t *testing.T) {

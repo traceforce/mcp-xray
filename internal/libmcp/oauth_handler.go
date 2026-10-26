@@ -181,7 +181,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
+	tok, tokenEP, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if err != nil {
 		return "", nil, &LoginError{Err: err}
 	}
@@ -189,7 +189,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 
 	var cred *Credential
 	if tok.RefreshToken != "" { // newHTTPClient stores it only if keepable: https on the server's site
-		cred = &Credential{TokenEndpoint: asmd.TokenEndpoint, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
+		cred = &Credential{TokenEndpoint: tokenEP, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
 	}
 	return tok.AccessToken, cred, nil
 }
@@ -347,7 +347,9 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	return u.String()
 }
 
-func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
+// exchangeCode also returns the token endpoint that answered, after any redirect,
+// since a refresh at the stored endpoint never follows one.
+func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, string, error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -366,14 +368,14 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
 		// Report nothing server-controlled: Go's error quotes the URL a redirect chose.
-		return TokenResponse{}, errors.New("token exchange failed: the request to the token endpoint did not complete")
+		return TokenResponse{}, "", errors.New("token exchange failed: the request to the token endpoint did not complete")
 	}
 	defer resp.Body.Close()
 	tr, reason := readTokenReply(resp)
 	if resp.StatusCode/100 != 2 || tr.AccessToken == "" {
-		return TokenResponse{}, fmt.Errorf("token exchange failed: %s", reason)
+		return TokenResponse{}, "", fmt.Errorf("token exchange failed: %s", reason)
 	}
-	return tr.TokenResponse, nil
+	return tr.TokenResponse, resp.Request.URL.String(), nil
 }
 
 // callbackErrorCodes are the RFC 6749 section 4.1.2.1 authorization error codes.

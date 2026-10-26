@@ -72,7 +72,7 @@ func LoadCredentials(path string) (Credentials, error) {
 			return nil, fmt.Errorf("failed to parse credentials file: unexpected content after the first JSON value")
 		}
 		for server, c := range creds { // {"mcpServers": {}} decodes too
-			if !strings.HasPrefix(server, "http") || c.TokenEndpoint == "" || c.RefreshToken == "" {
+			if c.TokenEndpoint == "" || c.RefreshToken == "" {
 				return nil, fmt.Errorf("failed to parse credentials file: %q is not a stored login", server)
 			}
 		}
