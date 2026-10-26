@@ -193,7 +193,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
-	// A stored credential logs in without a browser; a configured bearer wins over it.
+	// A stored credential logs in without a browser; a configured Authorization wins over it.
 	refreshed := false
 	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
 	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
@@ -345,12 +345,13 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	resp, err := t.base.RoundTrip(req)
 	// A 401 from an origin the credential was withheld from is a wrong endpoint, not
-	// a missing credential. Failing here covers connect and every later call, and the
-	// error must not end in "Unauthorized", which OutcomeForError reads as auth_required.
+	// a missing credential, on connect and on every later call; the error must not end
+	// in "Unauthorized", which OutcomeForError reads as auth_required.
 	if err == nil && withheld && resp.StatusCode == http.StatusUnauthorized {
-		if req.Method == http.MethodGet {
-			// An error would make the SDK retry its optional SSE stream with backoff and
-			// then fail the session; a 4xx it ignores, and a legacy SSE stream reads it as failed.
+		if req.Method == http.MethodGet && req.Header.Get("Mcp-Protocol-Version") != "" {
+			// The streamable client's optional SSE stream: an error would be retried with
+			// backoff until it fails the session. As a response its first GET is skipped,
+			// and a reconnect ends as Misdirected Request (failed), not auth_required.
 			resp.StatusCode, resp.Status = http.StatusMisdirectedRequest, "421 Misdirected Request"
 			return resp, nil
 		}

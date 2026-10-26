@@ -160,7 +160,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	errCh := make(chan string, 1)
 	shutdownServer, err := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
 	if err != nil {
-		return "", nil, err // never open the browser: whatever holds the port would receive the code
+		return "", nil, &LoginError{Err: err} // never open the browser: whatever holds the port would receive the code
 	}
 	defer shutdownServer() // Ensure server is shut down when function returns
 
@@ -175,21 +175,21 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	case code = <-codeCh:
 		// Server will be shut down by defer
 	case err := <-errCh:
-		return "", nil, fmt.Errorf("OAuth error: %s", err)
+		return "", nil, &LoginError{Err: fmt.Errorf("OAuth error: %s", err)}
 	case <-time.After(3 * time.Minute):
 		return "", nil, &LoginError{Err: errors.New("timed out waiting for OAuth callback")}
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
-	tok, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
+	tok, tokenEP, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if err != nil {
 		return "", nil, &LoginError{Err: err}
 	}
 	fmt.Println("Access token acquired")
 
 	var cred *Credential
-	if tok.RefreshToken != "" && isHTTPSURL(asmd.TokenEndpoint) { // refresh refuses plain http
-		cred = &Credential{TokenEndpoint: asmd.TokenEndpoint, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
+	if tok.RefreshToken != "" { // newHTTPClient stores it only if keepable: https on the server's site
+		cred = &Credential{TokenEndpoint: tokenEP, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
 	}
 	return tok.AccessToken, cred, nil
 }
@@ -347,7 +347,9 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	return u.String()
 }
 
-func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
+// exchangeCode also returns the token endpoint that answered, after any redirect,
+// since a refresh at the stored endpoint never follows one.
+func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, string, error) {
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -362,29 +364,23 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 
 	// The client and its redirect policy are base's: the token endpoint is one the
 	// server named, so refusing its redirects would protect nothing. Only a login
-	// on an https endpoint is ever stored (OauthDiscovery).
+	// keepable allows is ever stored (newHTTPClient).
 	resp, err := o.httpClient.Do(req)
 	if err != nil {
 		// Report nothing server-controlled: Go's error quotes the URL a redirect chose.
-		return TokenResponse{}, errors.New("token exchange failed: the request to the token endpoint did not complete")
+		return TokenResponse{}, "", errors.New("token exchange failed: the request to the token endpoint did not complete")
 	}
 	defer resp.Body.Close()
-
-	var tr TokenResponse
-	if resp.StatusCode/100 != 2 {
-		_, reason := readTokenReply(resp)
-		return tr, fmt.Errorf("token exchange failed: %s", reason)
+	tr, reason := readTokenReply(resp)
+	if resp.StatusCode/100 != 2 || tr.AccessToken == "" {
+		return TokenResponse{}, "", fmt.Errorf("token exchange failed: %s", reason)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tr); err != nil {
-		// A malformed success body can surface read or syntax errors that quote bytes
-		// the server chose; report a constant message with no server-controlled text.
-		return tr, errors.New("token exchange failed: the token response could not be read")
-	}
-	if tr.AccessToken == "" {
-		return tr, errors.New("token exchange failed: no access_token")
-	}
-	return tr, nil
+	return tr.TokenResponse, resp.Request.URL.String(), nil
 }
+
+// callbackErrorCodes are the RFC 6749 section 4.1.2.1 authorization error codes.
+var callbackErrorCodes = map[string]bool{"invalid_request": true, "unauthorized_client": true, "access_denied": true,
+	"unsupported_response_type": true, "invalid_scope": true, "server_error": true, "temporarily_unavailable": true}
 
 func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int, state string) (func(), error) {
 	// Only the first result counts; a later callback must not block the handler.
@@ -403,6 +399,9 @@ func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string,
 			return
 		}
 		if e := q.Get("error"); e != "" {
+			if !callbackErrorCodes[e] { // the authorization server chose e: report only an RFC 6749 code
+				e = "unrecognized_error"
+			}
 			send(errCh, e)
 			http.Error(w, "OAuth failed, you can close this tab.", 400)
 			return

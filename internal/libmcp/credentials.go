@@ -41,8 +41,8 @@ type CredentialError struct{ Err error }
 func (e *CredentialError) Error() string { return e.Err.Error() }
 func (e *CredentialError) Unwrap() error { return e.Err }
 
-// LoginError marks a browser login that began and then failed (no callback in
-// time, or the code exchange): the server is auth-gated, so a run must not fall
+// LoginError marks a browser login that began and then failed (no free callback
+// port, an error or no callback, or the code exchange): the server is auth-gated, so a run must not fall
 // back to an anonymous connection whose 401 would hide the cause as auth_required.
 type LoginError struct{ Err error }
 
@@ -53,7 +53,7 @@ func (e *LoginError) Unwrap() error { return e.Err }
 func LoadCredentials(path string) (Credentials, error) {
 	// Refused like an ssh key when others can read it (Unix only: Windows has no mode bits).
 	if info, err := os.Stat(path); err == nil && runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("credentials file %s is readable by others; run chmod 600 on it", path)
+		return nil, fmt.Errorf("credentials file %s is accessible by group or others; run chmod 600 on it", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -71,6 +71,11 @@ func LoadCredentials(path string) (Credentials, error) {
 		// reject that so a later save cannot silently drop the trailing content.
 		if err := dec.Decode(&struct{}{}); err != io.EOF {
 			return nil, fmt.Errorf("failed to parse credentials file: unexpected content after the first JSON value")
+		}
+		for server, c := range creds { // {"mcpServers": {}} decodes too
+			if c.TokenEndpoint == "" || c.RefreshToken == "" {
+				return nil, fmt.Errorf("failed to parse credentials file: %q is not a stored login", server)
+			}
 		}
 	}
 	if creds == nil {
@@ -202,13 +207,6 @@ func site(host string) string {
 	return ascii
 }
 
-// isHTTPSURL reports whether s parses as an https URL; the scheme is matched
-// case-insensitively, as url.Parse and http.NewRequest normalize it.
-func isHTTPSURL(s string) bool {
-	u, err := url.Parse(s)
-	return err == nil && strings.EqualFold(u.Scheme, "https")
-}
-
 // saveCredentials writes url's entry right after it changes, merged into the file
 // as it is now, so a rotated refresh token survives a crash later in the run and
 // a run overlapping this one keeps its own rotations.
@@ -236,9 +234,8 @@ var credentialsSaveFailed atomic.Bool
 func CredentialsSaveFailed() bool { return credentialsSaveFailed.Load() }
 
 // tokenClient never follows a redirect: it would resend the refresh token in the
-// form body to the Location. Its headerTransport adds the configured User-Agent
-// (it carries no credential headers of its own), so token-endpoint calls are not
-// sent as Go's default agent, which some providers refuse.
+// form body to the Location. Its headerTransport adds MCP X-Ray's User-Agent, so
+// token-endpoint calls are not sent as Go's default agent, which some providers refuse.
 var tokenClient = &http.Client{
 	Timeout:       20 * time.Second,
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
@@ -304,14 +301,13 @@ func (c *Credential) refresh(resource string) (string, error) {
 	defer resp.Body.Close()
 	tok, reason := readTokenReply(resp)
 	// Refused, so a new login is worth it: an RFC 6749 error code whatever the status
-	// (Atlassian sends 403 unauthorized_client, some servers 200), a 400 or 401 with
-	// none, or an endpoint gone or moved for good, which a new login rediscovers.
+	// (Atlassian sends 403 unauthorized_client, some servers 200), any 400 or 401
+	// (invalid_target, invalid_token), or an endpoint gone or moved for good, which a
+	// new login rediscovers.
 	// Anything else, such as a WAF's HTML 403, a 405 or a 5xx, is an outage.
 	refused := oauthErrorCodes[tok.Error]
 	switch resp.StatusCode {
-	case http.StatusBadRequest, http.StatusUnauthorized:
-		refused = refused || tok.Error == ""
-	case http.StatusNotFound, http.StatusGone, http.StatusMovedPermanently, http.StatusPermanentRedirect:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusGone, http.StatusMovedPermanently, http.StatusPermanentRedirect:
 		refused = true
 	}
 	switch {
