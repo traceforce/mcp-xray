@@ -561,6 +561,7 @@ func NewPentestCommand() *cobra.Command {
 				fmt.Printf("Error creating pentest tool: %v\n", err)
 				os.Exit(1)
 			}
+			pentestTool.ConnectTimeout, _ = cmd.Flags().GetDuration("connect-timeout")
 
 			// Run pentest
 			ctx := context.Background()
@@ -626,6 +627,7 @@ func NewPentestCommand() *cobra.Command {
 	}
 	cmd.Flags().String("llm-model", "", "LLM model to use for pentest plan generation (required)")
 	cmd.Flags().Int("llm-max-retries", 3, "Maximum number of retries on transient LLM errors (rate limits, timeouts, 5xx), 0 = no retries")
+	cmd.Flags().Duration("connect-timeout", 60*time.Second, "How long each MCP server may take to start and answer initialize; raise it for a first-run docker pull or npx install (0 = 60s)")
 	cmd.Flags().String("test-plan", "", "Test plan YAML file to use (must exist). If specified, uses this file for all servers.")
 	cmd.Flags().String("test-directory", "", "Directory to store generated test plans (default: pentest_plans_<timestamp>). Must exist if specified.")
 	cmd.Flags().StringP("output", "o", "", "Output file path for SARIF report (default: findings_<timestamp>.sarif.json)")
