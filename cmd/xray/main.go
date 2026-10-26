@@ -316,6 +316,7 @@ func NewDumpToolsCommand() *cobra.Command {
 			// Each change was saved, merged, as it happened; a failed save only logged, so
 			// fail the run now. Rewriting the whole map would revert an overlapping run.
 			if libmcp.CredentialsSaveFailed() {
+				fmt.Println("Error writing credentials file: a save during the run failed (see above)")
 				os.Exit(1)
 			}
 		},

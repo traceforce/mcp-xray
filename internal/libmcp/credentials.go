@@ -91,18 +91,9 @@ func (c Credentials) Save(path string) error {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
 		path = target
 	}
-	if err := writeAtomic(path, data); err != nil {
-		if os.WriteFile(path, data, 0600) != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func writeAtomic(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
 	if err != nil {
-		return err
+		return writeInPlace(path, data, err)
 	}
 	defer os.Remove(tmp.Name()) // a no-op once renamed
 	if _, err := tmp.Write(data); err != nil {
@@ -116,7 +107,19 @@ func writeAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return writeInPlace(path, data, err)
+	}
+	return nil
+}
+
+// writeInPlace rewrites a file whose directory refuses a temp file or a rename,
+// as a single-file bind mount does; any other write error keeps the old file.
+func writeInPlace(path string, data []byte, cause error) error {
+	if os.WriteFile(path, data, 0600) != nil {
+		return cause
+	}
+	return nil
 }
 
 // keepable reports whether a login may be stored for and reused by an MCP URL:
@@ -215,15 +218,12 @@ func (cfg MCPServerConfig) saveCredentials(url string) {
 		return
 	}
 	disk, err := LoadCredentials(cfg.CredentialsFile)
-	if err == nil {
-		if c, ok := cfg.Credentials[url]; ok {
-			disk[url] = c
-		} else {
-			delete(disk, url)
-		}
-		err = disk.Save(cfg.CredentialsFile)
-	}
 	if err != nil {
+		disk = cfg.Credentials // unreadable now: still keep this run's rotated token
+	} else {
+		disk[url] = cfg.Credentials[url]
+	}
+	if err := disk.Save(cfg.CredentialsFile); err != nil {
 		credentialsSaveFailed.Store(true)
 		fmt.Printf("Error writing credentials file: %v\n", err)
 	}

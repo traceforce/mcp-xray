@@ -196,7 +196,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	// A stored credential logs in without a browser; a configured bearer wins over it.
 	refreshed := false
 	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
-	if useStored && cfg.CredentialsFile != "" { // another run may have rotated it since this one started
+	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
 		if disk, err := LoadCredentials(cfg.CredentialsFile); err == nil {
 			if c, ok := disk[url]; ok {
 				cfg.Credentials[url] = c
