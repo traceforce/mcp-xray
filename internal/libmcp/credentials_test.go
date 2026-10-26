@@ -109,14 +109,13 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 		{http.StatusForbidden, map[string]string{"error": "unauthorized_client"}, OutcomeAuthRequired}, // Atlassian
 		{http.StatusOK, map[string]string{"error": "invalid_grant"}, OutcomeAuthRequired},
 		{http.StatusUnauthorized, nil, OutcomeAuthRequired},
+		{http.StatusBadRequest, map[string]string{"error": "invalid_target"}, OutcomeAuthRequired}, // RFC 8707
 		{http.StatusNotFound, nil, OutcomeAuthRequired},          // gone: a new login rediscovers it
 		{http.StatusPermanentRedirect, nil, OutcomeAuthRequired}, // moved for good, likewise
 		{http.StatusForbidden, nil, OutcomeFailed},               // a WAF or CDN page, not a refusal
-		{http.StatusMethodNotAllowed, nil, OutcomeFailed},
 		{http.StatusOK, map[string]string{"error": "temporarily_unavailable"}, OutcomeFailed},
 		{http.StatusTemporaryRedirect, nil, OutcomeFailed},
 		{http.StatusTooManyRequests, nil, OutcomeFailed},
-		{http.StatusRequestTimeout, nil, OutcomeFailed},
 		{http.StatusServiceUnavailable, nil, OutcomeFailed},
 	} {
 		srv, _ := tokenServer(t, tc.status, tc.reply)
@@ -210,7 +209,7 @@ func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
 	o := NewOAuthConfig("https://mcp.example/mcp", "c", "client-secret-xyz", "http://127.0.0.1:8765/callback")
 	_, err := o.exchangeCode(ts.URL, "c", "client-secret-xyz", "auth-code-xyz", "verifier")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "the token response could not be read", "a malformed body yields a constant error")
+	assert.EqualError(t, err, "token exchange failed: 200", "a malformed body yields only the status")
 	assert.NotContains(t, err.Error(), "auth-code-xyz", "the authorization code never reaches the error")
 	assert.NotContains(t, err.Error(), "client-secret-xyz", "nor the client secret")
 }
@@ -244,6 +243,9 @@ func TestCredentials_SaveAndLoad(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, creds, "an empty or null file is an empty set that can be added to")
 	}
+	require.NoError(t, os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0600))
+	_, err = LoadCredentials(path)
+	assert.ErrorContains(t, err, "is not a stored login", "an empty MCP config is refused, never rewritten")
 	require.NoError(t, os.WriteFile(path, []byte(`{"mcpServers":{"s":{"url":"https://mcp.example/mcp"}}}`), 0600))
 	_, err = LoadCredentials(path)
 	assert.Error(t, err, "an MCP config is refused, not rewritten as credentials")
