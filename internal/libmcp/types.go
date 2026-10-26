@@ -20,6 +20,7 @@ type MCPServerConfig struct {
 	NonInteractive     bool        // Never start browser OAuth; a server that needs it fails to connect instead
 	Credentials        Credentials // Stored logins by server URL; a browser login is added to it
 	CredentialsFile    string      // Where Credentials is saved after every change; empty keeps them in memory
+	skipStoredLogin    bool        // set for the browser login retried after a refreshed stored login is refused
 }
 
 // EnrichedTool wraps an MCP tool with classified action labels

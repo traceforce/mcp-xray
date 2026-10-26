@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/idna"
@@ -79,12 +80,26 @@ func LoadCredentials(path string) (Credentials, error) {
 }
 
 // Save writes the credentials through a temporary file, so the file is never
-// half written; on Unix it is created owner-only.
+// half written; on Unix it is created owner-only. A symlink keeps pointing at
+// the file it names, and where the rename is refused (a single-file bind mount,
+// a directory the run cannot write) the file is rewritten in place instead.
 func (c Credentials) Save(path string) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
+	if err := writeAtomic(path, data); err != nil {
+		if os.WriteFile(path, data, 0600) != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeAtomic(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
 	if err != nil {
 		return err
@@ -115,7 +130,48 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 	if err1 != nil || err2 != nil || m.Scheme != "https" || t.Scheme != "https" {
 		return false
 	}
-	return c.TokenEndpoint == pinned || site(m.Hostname()) == site(t.Hostname())
+	return sameEndpoint(c.TokenEndpoint, pinned) || site(m.Hostname()) == site(t.Hostname())
+}
+
+// sameEndpoint compares two https URLs as the client dials them: scheme and host
+// without case, port 443 implied, and a trailing slash ignored.
+func sameEndpoint(a, b string) bool {
+	u, err1 := url.Parse(a)
+	v, err2 := url.Parse(b)
+	if err1 != nil || err2 != nil || b == "" {
+		return false
+	}
+	key := func(u *url.URL) [4]string {
+		port := u.Port()
+		if port == "443" {
+			port = ""
+		}
+		return [4]string{strings.ToLower(u.Hostname()), port, strings.TrimSuffix(u.EscapedPath(), "/"), u.RawQuery}
+	}
+	return u.Scheme == v.Scheme && key(u) == key(v)
+}
+
+// storedLogin returns the login stored for url when this entry may use it, and
+// otherwise why not ("" when none is stored).
+func (cfg MCPServerConfig) storedLogin(url string) (Credential, bool, string) {
+	cred, ok := cfg.Credentials[url]
+	switch {
+	case !ok:
+		return cred, false, ""
+	case cfg.OAuthClientID != "" && cred.ClientID != cfg.OAuthClientID:
+		return cred, false, "it was made with another oauth_client_id"
+	case !keepable(url, cred, cfg.OAuthTokenEndpoint):
+		return cred, false, cfg.notKeepable()
+	}
+	return cred, true, ""
+}
+
+// notKeepable says why a login is not kept or used, naming the pin when there is one.
+func (cfg MCPServerConfig) notKeepable() string {
+	if cfg.OAuthTokenEndpoint != "" {
+		return "no refresh token, or its token endpoint is neither the pinned " + cfg.OAuthTokenEndpoint + " nor https on the server's own site"
+	}
+	return "no refresh token, or its token endpoint is not https on the server's own site"
 }
 
 // site is a host's registrable domain (mcp.example.com -> example.com), or the
@@ -150,16 +206,34 @@ func isHTTPSURL(s string) bool {
 	return err == nil && strings.EqualFold(u.Scheme, "https")
 }
 
-// saveCredentials writes the credentials right after a change, so a rotated
-// refresh token survives a crash or cancel later in the run.
-func (cfg MCPServerConfig) saveCredentials() {
+// saveCredentials writes url's entry right after it changes, merged into the file
+// as it is now, so a rotated refresh token survives a crash later in the run and
+// a run overlapping this one keeps its own rotations.
+// ponytail: no file lock; two runs rotating the same login at the same instant can still race.
+func (cfg MCPServerConfig) saveCredentials(url string) {
 	if cfg.CredentialsFile == "" {
 		return
 	}
-	if err := cfg.Credentials.Save(cfg.CredentialsFile); err != nil {
+	disk, err := LoadCredentials(cfg.CredentialsFile)
+	if err == nil {
+		if c, ok := cfg.Credentials[url]; ok {
+			disk[url] = c
+		} else {
+			delete(disk, url)
+		}
+		err = disk.Save(cfg.CredentialsFile)
+	}
+	if err != nil {
+		credentialsSaveFailed.Store(true)
 		fmt.Printf("Error writing credentials file: %v\n", err)
 	}
 }
+
+var credentialsSaveFailed atomic.Bool
+
+// CredentialsSaveFailed reports whether a save during the run failed, so the run
+// can fail at its end after the other servers were still tried.
+func CredentialsSaveFailed() bool { return credentialsSaveFailed.Load() }
 
 // tokenClient never follows a redirect: it would resend the refresh token in the
 // form body to the Location. Its headerTransport adds the configured User-Agent
