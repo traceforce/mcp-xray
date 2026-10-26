@@ -4,9 +4,12 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -129,6 +132,53 @@ func TestArgSecrets(t *testing.T) {
 		"https://ghp_0123456789:x-oauth-basic@github.com/o/r"}
 	assert.Equal(t, []string{"sk-0123456789", "--token=ghp_0123456789", "ghp_0123456789",
 		"https://ghp_0123456789:x-oauth-basic@github.com/o/r", "ghp_0123456789", "x-oauth-basic"}, argSecrets(args))
+}
+
+func TestArgSecrets_ValueForms(t *testing.T) {
+	got := argSecrets([]string{"--api-key", "-PLACEHOLDER_abcdefgh", "-pPLACEHOLDER_abcdefgh",
+		"https://x.example/mcp?client=x&api_key=PLACEHOLDER_query", "Authorization: Bearer PLACEHOLDER_header"})
+	for _, want := range []string{"-PLACEHOLDER_abcdefgh", "PLACEHOLDER_abcdefgh", "PLACEHOLDER_query", "PLACEHOLDER_header"} {
+		assert.Contains(t, got, want)
+	}
+}
+
+func TestSecretParts_MasksEveryLoggerEscaping(t *testing.T) {
+	// Node and slog leave & raw, Python escapes non-ASCII, and a child may trim.
+	secrets := secretParts([]string{"PLACEHOLDER\"VALUE&abcdefgh", "pässwort_abcdefgh", "PLACEHOLDER_trimmed \r\n"})
+	for _, logged := range []string{`"PLACEHOLDER\"VALUE&abcdefgh"`, `"PLACEHOLDER\"VALUE&abcdefgh"`,
+		`"pässwort_abcdefgh"`, "token: PLACEHOLDER_trimmed\nnext line"} {
+		got := redact(logged, secrets, false)
+		assert.NotContains(t, got, "abcdefgh", logged)
+		assert.NotContains(t, got, "PLACEHOLDER_trimmed", logged)
+	}
+	assert.Equal(t, "token: [redacted]\nnext line", redact("token: PLACEHOLDER_trimmed\nnext line", secrets, false))
+}
+
+func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, "bad key %s %s", r.URL.Query().Get("api_key"), r.Header.Get("X-Api-Key"))
+	}))
+	t.Cleanup(ts.Close)
+	u := ts.URL + "/mcp?api_key=PLACEHOLDER_query1"
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u,
+		Headers: map[string]string{"X-Api-Key": "PLACEHOLDER_header1"}, NonInteractive: true})
+	if err == nil {
+		_ = s.Close()
+	}
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_query1")
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_header1")
+
+	s = &SDKSession{secrets: secretParts([]string{"PLACEHOLDER_header1"})}
+	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad key PLACEHOLDER_header1`)), `calling "tools/list": bad key [redacted]`)
+}
+
+func TestNewSDKSession_StartErrorMasksEnvPrefix(t *testing.T) {
+	cmd := "NAME=PLACEHOLDER_startvalue node server.js"
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", Command: &cmd})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_startvalue")
 }
 
 func TestArgSecrets_DecodesURLCredentials(t *testing.T) {

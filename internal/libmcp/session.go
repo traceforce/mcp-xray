@@ -34,6 +34,16 @@ type SDKSession struct {
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
 	cancel    context.CancelFunc // ends the context the transport connected with
+	secrets   []string           // config values masked in every error this session reports
+}
+
+// Redact masks the config's secrets in an error from a call made after connect,
+// such as tools/list, before it becomes an outcome reason or a finding.
+func (s *SDKSession) Redact(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &redactedError{msg: redact(err.Error(), s.secrets, false), err: err}
 }
 
 // connectTimeout bounds initialize, so a child that prints only non-JSON and
@@ -49,6 +59,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
+	var secrets []string  // config values that must never appear in an error
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // the non-JSON lines it wrote to stdout, likewise
 
@@ -81,18 +92,21 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		// Inherited values count too: the child may echo any of them.
 		for _, kv := range cmd.Environ() {
 			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-				stderr.secrets = append(stderr.secrets, v)
+				secrets = append(secrets, v)
 			}
 		}
-		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
-		stderr.secrets = secretParts(stderr.secrets) // mask each line of a multiline secret too
-		stdout.secrets = stderr.secrets
+		args := commandArgs
+		if strings.Contains(executable, "=") { // NAME=<value> node server.js: exec reports the whole token
+			args = append([]string{executable}, args...)
+		}
+		secrets = secretParts(append(secrets, argSecrets(args)...))
+		stderr.secrets, stdout.secrets = secrets, secrets
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
 		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect: %w", err)
+			return nil, &redactedError{msg: redact("failed to connect: "+err.Error(), secrets, false), err: err}
 		}
 		transport = stdio
 
@@ -119,6 +133,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	default:
 		return nil, fmt.Errorf("unsupported transport type: %v", transportType)
+	}
+	if transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO { // a remote error can echo the URL's key or a header value
+		values := []string{*cfg.URL}
+		for _, v := range cfg.Headers {
+			values = append(values, v)
+		}
+		secrets = secretParts(argSecrets(values))
 	}
 
 	// SSE reads its stream with the context it connects with, so that context
@@ -151,7 +172,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			// The SDK error stays last: OutcomeForError classifies by its suffix.
 			msg = fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err)
 		}
-		return nil, &redactedError{msg: redact(msg, stderr.secrets, false), err: err}
+		return nil, &redactedError{msg: redact(msg, secrets, false), err: err}
 	}
 
 	return &SDKSession{
@@ -160,6 +181,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Type:      transportType,
 		Transport: transport,
 		cancel:    cancel,
+		secrets:   secrets,
 	}, nil
 }
 

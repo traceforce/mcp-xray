@@ -2,6 +2,7 @@ package libmcp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -178,8 +181,10 @@ func (t *outputTail) String() string {
 }
 
 // argSecrets returns the parts of a command line that may carry a credential,
-// 8 bytes or more: every argument but a bare flag name, the part after '=' in
-// one, and a URL's user and password.
+// 8 bytes or more: every argument but a bare flag name (a flag's value counts
+// even when it starts with '-'), an attached short-option value (-pVALUE), the
+// part after '=' in each '&'-separated piece, the last word of one with spaces
+// ("Authorization: Bearer <token>"), and a URL's user and password.
 func argSecrets(args []string) []string {
 	var secrets []string
 	add := func(v string) {
@@ -187,12 +192,23 @@ func argSecrets(args []string) []string {
 			secrets = append(secrets, v)
 		}
 	}
+	flagValue := false // the previous argument was a flag name, so this one is its value
 	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		isFlag := strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")
+		if !isFlag || (flagValue && !strings.HasPrefix(arg, "--")) { // a boolean flag can precede another flag
 			add(arg)
 		}
-		if _, value, ok := strings.Cut(arg, "="); ok {
-			add(value)
+		if isFlag && !strings.HasPrefix(arg, "--") && len(arg) > 2 {
+			add(arg[2:])
+		}
+		flagValue = isFlag
+		for _, piece := range strings.Split(arg, "&") {
+			if _, value, ok := strings.Cut(piece, "="); ok {
+				add(value)
+			}
+		}
+		if words := strings.Fields(arg); len(words) > 1 {
+			add(words[len(words)-1])
 		}
 		for _, rest := range strings.Split(arg, "://")[1:] {
 			authority := rest
@@ -214,9 +230,11 @@ func argSecrets(args []string) []string {
 	return secrets
 }
 
-// secretParts returns the values to mask: each value, its lines when it spans
-// several (jsonLines may route them to the diagnostic separately), and the
-// JSON-escaped form of each, since a child that logs structured JSON emits a
+// secretParts returns the values to mask, each without surrounding whitespace
+// (a child that trims a value before logging it must still match, and a
+// trailing newline must not join two reason lines): each value, its lines when
+// it spans several (jsonLines may route them to the diagnostic separately), and
+// the JSON-escaped forms of each, since a child that logs structured JSON emits a
 // value with its quotes, backslashes and newlines escaped.
 func secretParts(values []string) []string {
 	var out []string
@@ -229,22 +247,47 @@ func secretParts(values []string) []string {
 		out = append(out, v)
 	}
 	addForms := func(v string) {
+		v = strings.TrimSpace(v)
 		add(v)
-		if b, err := json.Marshal(v); err == nil {
-			if esc := string(b[1 : len(b)-1]); esc != v { // the quoted body, escapes and all
-				add(esc)
-			}
+		for _, esc := range jsonEscapes(v) {
+			add(esc)
 		}
 	}
 	for _, v := range values {
 		addForms(v)
 		if strings.Contains(v, "\n") {
 			for _, line := range strings.Split(v, "\n") {
-				addForms(strings.TrimSpace(line))
+				addForms(line)
 			}
 		}
 	}
 	return out
+}
+
+// jsonEscapes returns the quoted bodies a JSON logger may print for v: Go's
+// json.Marshal (&, < and > escaped), Node's JSON.stringify and Go's slog (those
+// left raw), and Python's json.dumps (non-ASCII escaped as \uXXXX).
+func jsonEscapes(v string) []string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return nil
+	}
+	raw := strings.TrimSuffix(buf.String(), "\n")
+	raw = raw[1 : len(raw)-1]
+	var ascii strings.Builder
+	for _, r := range raw {
+		if r < utf8.RuneSelf {
+			ascii.WriteRune(r)
+			continue
+		}
+		for _, u := range utf16.Encode([]rune{r}) {
+			fmt.Fprintf(&ascii, `\u%04x`, u)
+		}
+	}
+	html, _ := json.Marshal(v)
+	return []string{string(html[1 : len(html)-1]), raw, ascii.String()}
 }
 
 // redactedError reports msg, err's text with the child's secrets masked, and
