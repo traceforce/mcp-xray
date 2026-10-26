@@ -146,7 +146,7 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 func sameEndpoint(a, b string) bool {
 	u, err1 := url.Parse(a)
 	v, err2 := url.Parse(b)
-	if err1 != nil || err2 != nil || b == "" {
+	if err1 != nil || err2 != nil {
 		return false
 	}
 	key := func(u *url.URL) [4]string {

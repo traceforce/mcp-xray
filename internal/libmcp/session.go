@@ -105,7 +105,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
-		retryLogin = loginRefreshed(httpClient) && !cfg.NonInteractive
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -116,7 +116,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
-		retryLogin = loginRefreshed(httpClient) && !cfg.NonInteractive
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -298,12 +298,6 @@ func (s *SDKSession) Close() error {
 	}
 }
 
-// loginRefreshed reports whether c's bearer came from a refreshed stored login.
-func loginRefreshed(c *http.Client) bool {
-	ht, ok := c.Transport.(*headerTransport)
-	return ok && ht.refreshed
-}
-
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
 // requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
@@ -311,7 +305,7 @@ type headerTransport struct {
 	headers   map[string]string
 	scheme    string // with host, the only origin the configured headers are sent to
 	host      string
-	refreshed bool // the bearer came from a stored login
+	refreshed bool // the bearer came from a refreshed stored login
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
