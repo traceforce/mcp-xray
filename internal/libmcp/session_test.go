@@ -187,6 +187,62 @@ func TestHeaderTransport_UpgradeKeepsAndNonCredentialCannotExplain401(t *testing
 	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 }
 
+func TestHeaderTransport_SameHostHTTPHopAndDefaultPort(t *testing.T) {
+	var got http.Header
+	ht := &headerTransport{headers: map[string]string{"Authorization": "Bearer x"}, scheme: "https", host: "mcp.example",
+		base: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			got = r.Header
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+		})}
+	// https -> http -> https on one host, as a TLS proxy's slash redirect does: only
+	// the http hop goes without the bearer.
+	hop := func(u string, prev *http.Request) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, u, nil)
+		if prev != nil {
+			r.Response = &http.Response{Request: prev}
+		}
+		return r
+	}
+	plain := hop("http://mcp.example/mcp/", hop("https://mcp.example/mcp", nil))
+	_, err := ht.RoundTrip(plain)
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"))
+	_, err = ht.RoundTrip(hop("https://mcp.example/mcp/", plain))
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer x", got.Get("Authorization"), "back on https at the origin")
+	_, err = ht.RoundTrip(hop("https://mcp.example:443/mcp", nil))
+	require.NoError(t, err)
+	assert.Equal(t, "Bearer x", got.Get("Authorization"), "the default port is the same origin")
+}
+
+func TestNewSDKSession_WithheldBearerOnOptionalStreamStillConnects(t *testing.T) {
+	// The streamable GET stream is optional; a withheld-bearer 401 on it must not
+	// make the SDK retry with backoff and fail a session whose POSTs work.
+	inner := jsonrpcServer(t, func(int) string { return "" })
+	login := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(login.Close)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			http.Redirect(w, r, login.URL+"/login", http.StatusFound)
+			return
+		}
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	s, err := NewSDKSession(ctx, MCPServerConfig{
+		Name: "s", URL: &ts.URL, Headers: map[string]string{"Authorization": "Bearer secret-0123456789"}, NonInteractive: true,
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	tools, err := ListAllTools(ctx, s.Session)
+	require.NoError(t, err)
+	assert.Len(t, tools, 1)
+}
+
 func TestNewSDKSession_WithheldBearerReadsAsRedirectNotAuth(t *testing.T) {
 	// The redirect target 401s; because the bearer was withheld there, the
 	// outcome must point at the redirect and not read as a missing credential.

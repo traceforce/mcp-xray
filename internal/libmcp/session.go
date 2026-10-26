@@ -208,7 +208,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	// an SSE endpoint event cannot carry them to another, or to plain http.
 	scheme, host := "", ""
 	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
-		scheme, host = req.URL.Scheme, req.URL.Host // spelled as every request will spell them
+		scheme, host = req.URL.Scheme, hostKey(req.URL)
 	}
 	httpClient.Transport = &headerTransport{
 		base:    http.DefaultTransport,
@@ -254,12 +254,13 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// The configured headers go to the configured origin, and like Go's redirect
-	// policy, never again once a redirect chain has left it. A User-Agent is no
-	// credential, so a configured one goes everywhere.
+	// The configured headers go to the configured origin, and never again once a
+	// redirect chain has left its host, as Go strips them (Go also allows the host's
+	// subdomains; this does not). A same-host http hop only withholds them for that
+	// hop. A User-Agent is no credential, so a configured one goes everywhere.
 	same := t.isOrigin(req.URL)
 	for r := req.Response; same && r != nil && r.Request != nil; r = r.Request.Response {
-		same = t.isOrigin(r.Request.URL)
+		same = sameHost(hostKey(r.Request.URL), t.host)
 	}
 	withheld := false
 	for k, v := range t.headers {
@@ -283,8 +284,14 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// a missing credential. Failing here covers connect and every later call, and the
 	// error must not end in "Unauthorized", which OutcomeForError reads as auth_required.
 	if err == nil && withheld && resp.StatusCode == http.StatusUnauthorized {
+		if req.Method == http.MethodGet {
+			// An error would make the SDK retry its optional SSE stream with backoff and
+			// then fail the session; a 4xx it ignores, and a legacy SSE stream reads it as failed.
+			resp.StatusCode, resp.Status = http.StatusMisdirectedRequest, "421 Misdirected Request"
+			return resp, nil
+		}
 		_ = resp.Body.Close()
-		return nil, fmt.Errorf("%s://%s answered 401; the configured credentials are sent only to %s://%s", req.URL.Scheme, req.URL.Host, t.scheme, t.host)
+		return nil, fmt.Errorf("answered 401; the configured credentials are sent only to %s://%s", t.scheme, t.host)
 	}
 	return resp, err
 }
@@ -292,15 +299,28 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // isOrigin reports whether u is the configured origin, or its https form: an
 // upgrade on the same host protects the credential, a downgrade would expose it.
 func (t *headerTransport) isOrigin(u *url.URL) bool {
-	return sameHost(u.Host, t.host) && (strings.EqualFold(u.Scheme, t.scheme) || strings.EqualFold(u.Scheme, "https"))
+	return sameHost(hostKey(u), t.host) && (strings.EqualFold(u.Scheme, t.scheme) || strings.EqualFold(u.Scheme, "https"))
+}
+
+// hostKey is u's host and port with the scheme's default port left out, so
+// https://h and https://h:443 are one origin.
+func hostKey(u *url.URL) string {
+	if p := u.Port(); (p == "443" && strings.EqualFold(u.Scheme, "https")) || (p == "80" && strings.EqualFold(u.Scheme, "http")) {
+		return strings.TrimSuffix(u.Host, ":"+p)
+	}
+	return u.Host
 }
 
 // isCredentialHeader reports whether a configured header may carry a credential;
 // withholding any other, such as X-Client-Name, cannot explain a 401.
 func isCredentialHeader(k string) bool {
 	k = strings.ToLower(k)
-	return k == "cookie" || strings.Contains(k, "auth") || strings.Contains(k, "key") ||
-		strings.Contains(k, "token") || strings.Contains(k, "secret")
+	for _, part := range []string{"auth", "key", "token", "secret", "pass", "session", "sig", "cred"} {
+		if strings.Contains(k, part) {
+			return true
+		}
+	}
+	return k == "cookie"
 }
 
 // sameHost reports whether two authorities name one server: ASCII letters fold
