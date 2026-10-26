@@ -108,6 +108,7 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 	}{
 		{http.StatusForbidden, map[string]string{"error": "unauthorized_client"}, OutcomeAuthRequired}, // Atlassian
 		{http.StatusOK, map[string]string{"error": "invalid_grant"}, OutcomeAuthRequired},
+		{http.StatusOK, map[string]string{"error": "invalid_grant", "access_token": "stale"}, OutcomeAuthRequired},
 		{http.StatusUnauthorized, nil, OutcomeAuthRequired},
 		{http.StatusBadRequest, map[string]string{"error": "invalid_target"}, OutcomeAuthRequired}, // RFC 8707
 		{http.StatusNotFound, nil, OutcomeAuthRequired},          // gone: a new login rediscovers it

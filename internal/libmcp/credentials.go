@@ -237,7 +237,7 @@ func (c *Credential) refresh(resource string) (string, error) {
 		refused = true
 	}
 	switch {
-	case refused && tok.AccessToken == "":
+	case refused: // a refusal wins over any access_token sent with it
 		return "", &CredentialError{Err: fmt.Errorf("token endpoint refused the stored refresh token: %s", reason)}
 	case resp.StatusCode/100 != 2 || tok.AccessToken == "":
 		return "", fmt.Errorf("token refresh failed: %s", reason)
