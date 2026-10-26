@@ -57,6 +57,33 @@ func TestMain(m *testing.M) {
 		fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"bad key %s"}}`+"\n", req.ID, os.Getenv("MCPXRAY_TEST_TOKEN"))
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		return
+	case "noisy": // answers initialize, then prints a debug line with no newline before the tools/list reply
+		in := bufio.NewReader(os.Stdin)
+		for {
+			line, err := in.ReadString('\n')
+			if err != nil {
+				return
+			}
+			var req struct {
+				ID     json.RawMessage
+				Method string
+			}
+			_ = json.Unmarshal([]byte(line), &req)
+			switch req.Method {
+			case "initialize":
+				fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"n","version":"0"}}}`+"\n", req.ID)
+			case "tools/list":
+				fmt.Printf(`debug: listing tools{"jsonrpc":"2.0","id":%s,"result":{"tools":[]}}`+"\n", req.ID)
+			}
+		}
+	case "unauthorized":
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		var req struct{ ID json.RawMessage }
+		_ = json.Unmarshal([]byte(line), &req)
+		fmt.Printf(`{"jsonrpc":"2.0","id":%s,"error":{"code":-32001,"message":"Unauthorized"}}`+"\n", req.ID)
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		time.Sleep(3 * time.Second)
+		return
 	}
 	os.Exit(m.Run())
 }
@@ -110,13 +137,41 @@ func TestNewSDKSession_StdioExitReportsStdout(t *testing.T) {
 }
 
 func TestNewSDKSession_StdioConnectTimesOut(t *testing.T) {
-	old := connectTimeout
-	t.Cleanup(func() { connectTimeout = old })
-	connectTimeout = 500 * time.Millisecond
-	_, err := NewSDKSession(context.Background(), childConfig(t, "listen"))
+	cfg := childConfig(t, "listen")
+	cfg.ConnectTimeout = 500 * time.Millisecond
+	_, err := NewSDKSession(context.Background(), cfg)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "(stdout: MCP server listening on http://localhost:3000)")
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotContains(t, err.Error(), "canceled") // the timer's own cancel is not a second cause
+}
+
+func TestNewSDKSession_StdioNoiseAfterInitializeFailsFast(t *testing.T) {
+	// Noise sharing a line with a later response must fail the call, as at base,
+	// not drop the response and leave a caller without a deadline (pentest) waiting.
+	s, err := NewSDKSession(context.Background(), childConfig(t, "noisy"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err = s.Session.ListTools(ctx, &mcp.ListToolsParams{})
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestNewSDKSession_StdioErrorBeforeTimeoutKeepsSDKError(t *testing.T) {
+	// The child refuses initialize at once but takes 3 seconds to exit, so the timer
+	// fires during the SDK's cleanup; the refusal must not be relabelled a timeout.
+	cfg := childConfig(t, "unauthorized")
+	cfg.ConnectTimeout = 1500 * time.Millisecond // headroom for the child to start on a slow runner
+	_, err := NewSDKSession(context.Background(), cfg)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded)
+	assert.True(t, strings.HasSuffix(err.Error(), "Unauthorized"), err.Error()) // OutcomeForError's auth_required match
+
+	t.Setenv("MCPXRAY_TEST_TOKEN", "Unauthorized") // an env value masks the suffix itself
+	_, err = NewSDKSession(context.Background(), cfg)
+	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err), err.Error())
 }
 
 func TestNewSDKSession_StdioRedactsSDKError(t *testing.T) {
@@ -198,14 +253,17 @@ func TestArgSecrets_AuthorityEndsBeforeQuery(t *testing.T) {
 
 func readJSONLines(t *testing.T, in string) string {
 	t.Helper()
-	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in))})
+	got, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in)), dropped: io.Discard})
 	require.NoError(t, err)
 	return string(got)
 }
 
 func TestJSONLines(t *testing.T) {
-	in := "Starting server...\n\n{\"a\":1}\r\n  {\"c\":3}\n[INFO] x\nlog line\n\r{\"d\":4}\n{\"b\":2}"
-	assert.Equal(t, "{\"a\":1}\r\n{\"c\":3}\n{\"d\":4}\n{\"b\":2}", readJSONLines(t, in))
+	// Only what comes before the first message is filtered; from there on stdout
+	// passes through untouched, so a pretty-printed message arrives whole.
+	after := "{\n  \"a\": 1\n}\n[INFO] x\n{\"b\":2}"
+	assert.Equal(t, after, readJSONLines(t, "Starting server...\n\n[INFO] up\n  "+after))
+	assert.Equal(t, "[{\"a\":1}]\n", readJSONLines(t, "\xef\xbb\xbf[INFO] up\n\xef\xbb\xbf[{\"a\":1}]\n"), "a BOM and a batch")
 }
 
 func TestJSONLines_DroppedKeepsIndentForRedaction(t *testing.T) {
@@ -219,19 +277,6 @@ func TestJSONLines_DroppedKeepsIndentForRedaction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "{\"a\":1}\n", string(kept))
 	assert.NotContains(t, dropped.String(), "beta-secret")
-	assert.Contains(t, dropped.String(), "[redacted]")
-}
-
-func TestJSONLines_DroppedRedactsJSONValuedSecret(t *testing.T) {
-	// A secret that is itself JSON starts with '{', so its first line is kept and
-	// its body dropped; masking each line (secretParts) still catches the token.
-	secret := "{\n  \"access_token\": \"ghp_secret_0123456789\"\n}"
-	in := secret + "\n{\"a\":1}\n"
-	var dropped outputTail
-	dropped.secrets = secretParts([]string{secret})
-	_, err := io.ReadAll(&jsonLines{r: bufio.NewReader(strings.NewReader(in)), dropped: &dropped})
-	require.NoError(t, err)
-	assert.NotContains(t, dropped.String(), "ghp_secret_0123456789")
 	assert.Contains(t, dropped.String(), "[redacted]")
 }
 

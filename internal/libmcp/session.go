@@ -46,9 +46,10 @@ func (s *SDKSession) Redact(err error) error {
 	return &redactedError{msg: redact(err.Error(), s.secrets, false), err: err}
 }
 
-// connectTimeout bounds initialize, so a child that prints only non-JSON and
-// waits, or a remote server that never answers, fails instead of hanging.
-var connectTimeout = 60 * time.Second
+// connectTimeout bounds initialize unless the config sets its own, so a child
+// that prints only non-JSON and waits, or a remote server that never answers,
+// fails instead of hanging.
+const connectTimeout = 60 * time.Second
 
 // NewSDKSession creates a new session using the official MCP SDK
 func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error) {
@@ -61,7 +62,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	var dcrSkipped bool
 	var secrets []string  // config values that must never appear in an error
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
-	var stdout outputTail // the non-JSON lines it wrote to stdout, likewise
+	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -142,18 +143,22 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		secrets = secretParts(argSecrets(values))
 	}
 
+	timeout := cfg.ConnectTimeout
+	if timeout <= 0 {
+		timeout = connectTimeout
+	}
 	// SSE reads its stream with the context it connects with, so that context
 	// lives as long as the session; the timer cancels it only while initialize runs.
 	connectCtx, cancel := context.WithCancel(ctx)
-	timer := time.AfterFunc(connectTimeout, cancel)
+	timer := time.AfterFunc(timeout, cancel)
 	session, err := client.Connect(connectCtx, transport, nil)
-	if !timer.Stop() {
+	// A timeout only when the timer is what ended Connect: a server error that came
+	// first stays as it is, even if the timer fires while the SDK cleans up.
+	if !timer.Stop() && (err == nil || (errors.Is(err, context.Canceled) && ctx.Err() == nil)) {
 		if err == nil {
 			_ = session.Close()
-			err = fmt.Errorf("%w after %v", context.DeadlineExceeded, connectTimeout)
-		} else {
-			err = fmt.Errorf("%w after %v (%v)", context.DeadlineExceeded, connectTimeout, err)
 		}
+		err = fmt.Errorf("%w after %v", context.DeadlineExceeded, timeout)
 	}
 	if err != nil {
 		cancel()
