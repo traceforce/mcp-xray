@@ -262,7 +262,7 @@ func TestCredentials_SaveAndLoad(t *testing.T) {
 		assert.Equal(t, os.FileMode(0600), info.Mode().Perm())
 		require.NoError(t, os.Chmod(path, 0644))
 		_, err = LoadCredentials(path)
-		assert.ErrorContains(t, err, "readable by others")
+		assert.ErrorContains(t, err, "accessible by group or others")
 	}
 }
 
