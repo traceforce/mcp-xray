@@ -408,20 +408,18 @@ func TestNewSDKSession_StoredCredentialIsReadAgainBeforeRefresh(t *testing.T) {
 	assert.Equal(t, "r2", form.Load().(url.Values).Get("refresh_token"))
 }
 
-func TestStoredLogin_ClientAndPin(t *testing.T) {
+func TestStoredLogin_Pin(t *testing.T) {
 	u := "https://mcp.example.com/mcp"
 	cred := Credential{TokenEndpoint: "https://auth.other.example/token", ClientID: "c1", RefreshToken: "r"}
 	cfg := MCPServerConfig{Credentials: Credentials{u: cred}, OAuthTokenEndpoint: "HTTPS://Auth.Other.Example:443/token/"}
 	_, ok, why := cfg.storedLogin(u)
 	assert.True(t, ok, why) // the pin matches as the client dials it
-	cfg.OAuthClientID = "c2"
-	_, ok, why = cfg.storedLogin(u)
-	assert.False(t, ok)
-	assert.Contains(t, why, "oauth_client_id")
-	cfg.OAuthClientID, cfg.OAuthTokenEndpoint = "", "https://auth.other.example/token2"
+	assert.False(t, sameEndpoint("https://İ.com/token", "https://i.com/token"), "the dialed IDNA host differs")
+	cfg.OAuthTokenEndpoint = "https://auth.other.example/token2"
 	_, ok, why = cfg.storedLogin(u)
 	assert.False(t, ok)
 	assert.Contains(t, why, "the pinned https://auth.other.example/token2", "the message names the pin")
 	assert.False(t, sameEndpoint("https://a.example/t", ""), "no pin matches nothing")
 	assert.False(t, sameEndpoint("https://a.example/t", "https://a.example/t?x=1"))
+	assert.False(t, sameEndpoint("https://a.example:8443/t", "https://a.example:8/t"))
 }

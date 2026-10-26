@@ -141,22 +141,25 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 	return sameEndpoint(c.TokenEndpoint, pinned) || site(m.Hostname()) == site(t.Hostname())
 }
 
-// sameEndpoint compares two https URLs as the client dials them: scheme and host
-// without case, port 443 implied, and a trailing slash ignored.
+// sameEndpoint compares two https URLs as the client dials them: the host in its
+// IDNA form (so İ.com and i.com stay apart), port 443 implied, and a trailing
+// slash ignored.
 func sameEndpoint(a, b string) bool {
 	u, err1 := url.Parse(a)
 	v, err2 := url.Parse(b)
-	if err1 != nil || err2 != nil {
+	if err1 != nil || err2 != nil || u.Scheme != v.Scheme {
 		return false
 	}
-	key := func(u *url.URL) [4]string {
-		port := u.Port()
-		if port == "443" {
-			port = ""
+	uh, err1 := idna.Lookup.ToASCII(u.Hostname())
+	vh, err2 := idna.Lookup.ToASCII(v.Hostname())
+	port := func(u *url.URL) string {
+		if u.Port() == "443" {
+			return ""
 		}
-		return [4]string{strings.ToLower(u.Hostname()), port, strings.TrimSuffix(u.EscapedPath(), "/"), u.RawQuery}
+		return u.Port()
 	}
-	return u.Scheme == v.Scheme && key(u) == key(v)
+	return err1 == nil && err2 == nil && uh == vh && port(u) == port(v) && u.RawQuery == v.RawQuery &&
+		strings.TrimSuffix(u.EscapedPath(), "/") == strings.TrimSuffix(v.EscapedPath(), "/")
 }
 
 // storedLogin returns the login stored for url when this entry may use it, and
@@ -166,8 +169,6 @@ func (cfg MCPServerConfig) storedLogin(url string) (Credential, bool, string) {
 	switch {
 	case !ok:
 		return cred, false, ""
-	case cfg.OAuthClientID != "" && cred.ClientID != cfg.OAuthClientID:
-		return cred, false, "it was made with another oauth_client_id"
 	case !keepable(url, cred, cfg.OAuthTokenEndpoint):
 		return cred, false, cfg.notKeepable()
 	}
@@ -210,18 +211,17 @@ func site(host string) string {
 // saveCredentials writes url's entry right after it changes, merged into the file
 // as it is now, so a rotated refresh token survives a crash later in the run and
 // a run overlapping this one keeps its own rotations.
-// ponytail: no file lock; two runs rotating the same login at the same instant can still race.
+// ponytail: no file lock; two runs saving at the same instant can still race.
 func (cfg MCPServerConfig) saveCredentials(url string) {
 	if cfg.CredentialsFile == "" {
 		return
 	}
 	disk, err := LoadCredentials(cfg.CredentialsFile)
-	if err != nil {
-		disk = cfg.Credentials // unreadable now: still keep this run's rotated token
-	} else {
+	if err == nil {
 		disk[url] = cfg.Credentials[url]
+		err = disk.Save(cfg.CredentialsFile)
 	}
-	if err := disk.Save(cfg.CredentialsFile); err != nil {
+	if err != nil { // the file is left as it is
 		credentialsSaveFailed.Store(true)
 		fmt.Printf("Error writing credentials file: %v\n", err)
 	}
