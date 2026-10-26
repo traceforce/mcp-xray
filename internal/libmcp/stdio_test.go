@@ -191,6 +191,7 @@ func TestArgSecrets_ValueForms(t *testing.T) {
 	got := argSecrets([]string{"--api-key", "-PLACEHOLDER_abcdefgh", "-transport", "stdio",
 		"https://x.example/mcp?client=x&api_key=PLACEHOLDER_query", "Authorization: Bearer PLACEHOLDER_header"})
 	assert.NotContains(t, got, "ransport", "a Go-style single-dash flag is not split")
+	assert.Contains(t, argSecrets([]string{"--password=PLACEHOLDER&suffixXYZ"}), "PLACEHOLDER&suffixXYZ")
 	for _, want := range []string{"-PLACEHOLDER_abcdefgh", "PLACEHOLDER_query", "PLACEHOLDER_header"} {
 		assert.Contains(t, got, want)
 	}

@@ -203,6 +203,9 @@ func argSecrets(args []string) []string {
 // spaces ("Bearer <token>"), and a URL's user and password, as written and decoded.
 func valueParts(v string) []string {
 	var parts []string
+	if _, value, ok := strings.Cut(v, "="); ok {
+		parts = append(parts, value) // --password=a&b: the whole value too
+	}
 	for _, piece := range strings.Split(v, "&") {
 		if _, value, ok := strings.Cut(piece, "="); ok {
 			parts = append(parts, value)
