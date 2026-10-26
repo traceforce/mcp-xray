@@ -412,3 +412,12 @@ func TestOAuthConfig_ResourceIndicatorInAuthURL(t *testing.T) {
 	assert.NotContains(t, o.buildAuthURL("https://as.example/authorize", "cid", "openid", "chal", "st"),
 		"resource=", "no resource param once the server has refused it")
 }
+
+func TestOAuthConfig_CanonicalResourceRejectsOffSite(t *testing.T) {
+	o := NewOAuthConfig("https://mcp.example.com/mcp", "", "", "")
+	assert.Equal(t, "https://mcp.example.com/", o.canonicalResource("https://mcp.example.com/"), "same site is trusted")
+	assert.Equal(t, "https://api.example.com/", o.canonicalResource("https://api.example.com/"), "a sibling on the same registrable site is trusted")
+	assert.Empty(t, o.canonicalResource("https://victim-api.example/"), "a server cannot steer the audience to another site")
+	assert.Empty(t, o.canonicalResource("http://mcp.example.com/"), "a non-https resource is not trusted")
+	assert.Empty(t, o.canonicalResource(""), "no PRM resource")
+}

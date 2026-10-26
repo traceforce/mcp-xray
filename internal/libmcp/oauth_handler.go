@@ -59,6 +59,21 @@ func (o *OAuthConfig) resourceIndicator() string {
 	}
 }
 
+// canonicalResource returns the PRM's resource only when it is https and on the
+// MCP server's own site (RFC 9728 §3.3), so a server cannot steer the token's
+// audience to another host; otherwise "", which falls back to the configured URL.
+func (o *OAuthConfig) canonicalResource(prmResource string) string {
+	if prmResource == "" {
+		return ""
+	}
+	r, err1 := url.Parse(prmResource)
+	m, err2 := url.Parse(o.MCPUrl)
+	if err1 != nil || err2 != nil || !strings.EqualFold(r.Scheme, "https") || site(r.Hostname()) != site(m.Hostname()) {
+		return ""
+	}
+	return prmResource
+}
+
 func NewOAuthConfig(mcpUrl string, clientID, clientSecret string, redirectURI string) *OAuthConfig {
 	return &OAuthConfig{
 		MCPUrl:       mcpUrl,
@@ -117,7 +132,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	o.resource = prm.Resource // send the server's canonical resource, not the raw URL
+	o.resource = o.canonicalResource(prm.Resource) // the server's canonical resource, if it is its own
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
 	asmd, err := o.DiscoverASMetadata(prm)
