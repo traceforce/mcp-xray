@@ -183,7 +183,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
-	// A stored credential logs in without a browser; a configured bearer wins over it.
+	// A stored credential logs in without a browser; a configured Authorization wins over it.
 	if cred, ok := cfg.Credentials[url]; ok && keepable(url, cred, cfg.OAuthTokenEndpoint) && !hasAccessToken(cfg.Headers) {
 		accessToken, err := cred.refresh(url)
 		switch {
