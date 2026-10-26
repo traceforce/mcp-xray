@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
 	metadata "mcpxray/internal/metadata"
@@ -50,7 +50,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
-	var remote *headerTransport // set for HTTP/SSE, to tell a redirect from a real 401
 	var stderr outputTail       // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail       // the non-JSON lines it wrote to stdout, likewise
 
@@ -104,7 +103,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
-		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -115,7 +113,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
-		remote, _ = httpClient.Transport.(*headerTransport)
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -142,15 +139,6 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		cancel()
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
-		}
-		// A 401 after the bearer was withheld from a redirect target is a wrong
-		// endpoint, not a missing credential. The explanation must be the suffix,
-		// not the 401: OutcomeForError reads the last word, so a trailing
-		// "Unauthorized" would still count as auth_required.
-		if remote != nil && strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized") {
-			if origin := remote.withheldOrigin(); origin != "" {
-				err = fmt.Errorf("%v (server redirected to %s, where the configured headers are not sent)", err, origin)
-			}
 		}
 		var output []string
 		if tail := stderr.String(); tail != "" {
@@ -255,62 +243,59 @@ type headerTransport struct {
 	headers map[string]string
 	scheme  string // with host, the only origin the configured headers are sent to
 	host    string
-
-	mu       sync.Mutex
-	withheld string // the other origin the MOST RECENT request withheld the credential from, cleared once a request reaches the configured origin
-}
-
-// withheldOrigin reports the other origin the last request withheld a configured
-// credential header from, or "" when the last request reached the configured
-// origin (so a redirect A→B→A ending in a 401 at A, where the bearer was sent,
-// reads as auth, not a redirect).
-func (t *headerTransport) withheldOrigin() string {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.withheld
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// The configured headers go to the configured origin; a User-Agent is no
+	// The configured headers go to the configured origin, and like Go's redirect
+	// policy, never again once a redirect chain has left it. A User-Agent is no
 	// credential, so a configured one goes everywhere.
-	same := strings.EqualFold(req.URL.Scheme, t.scheme) && sameHost(req.URL.Host, t.host)
-	withheldHere := false
+	same := t.isOrigin(req.URL)
+	for r := req.Response; same && r != nil && r.Request != nil; r = r.Request.Response {
+		same = t.isOrigin(r.Request.URL)
+	}
+	withheld := false
 	for k, v := range t.headers {
 		if same || strings.EqualFold(k, "User-Agent") {
 			req.Header.Set(k, v)
-		} else {
-			withheldHere = true
+		} else if isCredentialHeader(k) {
+			withheld = true
 		}
 	}
 	if !same {
 		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
 	}
-	t.recordWithheld(same, req.URL.Scheme+"://"+req.URL.Host, withheldHere)
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", metadata.Name+"/"+metadata.Version)
 	}
 
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	// A 401 from an origin the credential was withheld from is a wrong endpoint, not
+	// a missing credential. Failing here covers connect and every later call, and the
+	// error must not end in "Unauthorized", which OutcomeForError reads as auth_required.
+	if err == nil && withheld && resp.StatusCode == http.StatusUnauthorized {
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("%s://%s answered 401; the configured credentials are sent only to %s://%s", req.URL.Scheme, req.URL.Host, t.scheme, t.host)
+	}
+	return resp, err
 }
 
-// recordWithheld tracks the disposition of the request just sent: reaching the
-// configured origin clears the mark (the credential, if any, was sent there), a
-// cross-origin hop that withheld it records that origin. The final error is then
-// read against the last hop, not the first, so a redirect back to the configured
-// origin is not misread as a credential-free redirect.
-func (t *headerTransport) recordWithheld(same bool, origin string, withheldHere bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if same {
-		t.withheld = ""
-	} else if withheldHere {
-		t.withheld = origin
-	}
+// isOrigin reports whether u is the configured origin, or its https form: an
+// upgrade on the same host protects the credential, a downgrade would expose it.
+func (t *headerTransport) isOrigin(u *url.URL) bool {
+	return sameHost(u.Host, t.host) && (strings.EqualFold(u.Scheme, t.scheme) || strings.EqualFold(u.Scheme, "https"))
+}
+
+// isCredentialHeader reports whether a configured header may carry a credential;
+// withholding any other, such as X-Client-Name, cannot explain a 401.
+func isCredentialHeader(k string) bool {
+	k = strings.ToLower(k)
+	return k == "cookie" || strings.Contains(k, "auth") || strings.Contains(k, "key") ||
+		strings.Contains(k, "token") || strings.Contains(k, "secret")
 }
 
 // sameHost reports whether two authorities name one server: ASCII letters fold
