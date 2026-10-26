@@ -356,14 +356,14 @@ func TestCredentials_SaveKeepsSymlinkAndMergesOtherRuns(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "private.json")
 	link := filepath.Join(dir, "creds.json")
-	require.NoError(t, Credentials{"x": {RefreshToken: "x1"}, "y": {RefreshToken: "y1"}}.Save(target))
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y1"}}.Save(target))
 	symlinked := os.Symlink(target, link) == nil // Windows needs a privilege for it
 	if !symlinked {
 		link = target
 	}
 	// Another run rotated y after this one loaded the file; this run rotates x.
-	mine := Credentials{"x": {RefreshToken: "x2"}, "y": {RefreshToken: "y1"}}
-	require.NoError(t, Credentials{"x": {RefreshToken: "x1"}, "y": {RefreshToken: "y2"}}.Save(link))
+	mine := Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x2"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y1"}}
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y2"}}.Save(link))
 	MCPServerConfig{Credentials: mine, CredentialsFile: link}.saveCredentials("x")
 
 	if symlinked {
@@ -387,7 +387,7 @@ func TestCredentials_SaveWritesInPlaceWhenRenameIsRefused(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte("{}"), 0600))
 	require.NoError(t, os.Chmod(dir, 0500)) // like a single-file bind mount: no temp file beside it
 	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
-	require.NoError(t, Credentials{"x": {RefreshToken: "x1"}}.Save(path))
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}}.Save(path))
 	got, err := LoadCredentials(path)
 	require.NoError(t, err)
 	assert.Equal(t, "x1", got["x"].RefreshToken)
