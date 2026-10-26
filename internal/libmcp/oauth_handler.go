@@ -177,15 +177,13 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	case err := <-errCh:
 		return "", nil, fmt.Errorf("OAuth error: %s", err)
 	case <-time.After(3 * time.Minute):
-		return "", nil, errors.New("timed out waiting for OAuth callback")
+		return "", nil, &LoginError{Err: errors.New("timed out waiting for OAuth callback")}
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
 	tok, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if err != nil {
-		// Past the code: the server is auth-gated, so the caller must not fall back
-		// to an anonymous connection that would mask the failure as auth_required.
-		return "", nil, &CodeExchangeError{Err: err}
+		return "", nil, &LoginError{Err: err}
 	}
 	fmt.Println("Access token acquired")
 
@@ -350,10 +348,6 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 }
 
 func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVerifier string) (TokenResponse, error) {
-	// Never POST the code and client secret to a plain-http endpoint, as refresh refuses to.
-	if !isHTTPSURL(tokenEP) {
-		return TokenResponse{}, errors.New("token exchange failed: token endpoint is not https")
-	}
 	data := url.Values{}
 	data.Set("grant_type", "authorization_code")
 	data.Set("client_id", clientID)
@@ -366,10 +360,12 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := tokenClient.Do(req) // a redirect would resend the code and client secret
+	// The client and its redirect policy are base's: the token endpoint is one the
+	// server named, so refusing its redirects would protect nothing. Only a login
+	// on an https endpoint is ever stored (OauthDiscovery).
+	resp, err := o.httpClient.Do(req)
 	if err != nil {
-		// A malformed redirect Location is parsed before the redirect is refused, so
-		// Go's error can echo the code or secret in any encoding; report nothing server-controlled.
+		// Report nothing server-controlled: Go's error quotes the URL a redirect chose.
 		return TokenResponse{}, errors.New("token exchange failed: the request to the token endpoint did not complete")
 	}
 	defer resp.Body.Close()

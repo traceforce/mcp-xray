@@ -40,13 +40,13 @@ type CredentialError struct{ Err error }
 func (e *CredentialError) Error() string { return e.Err.Error() }
 func (e *CredentialError) Unwrap() error { return e.Err }
 
-// CodeExchangeError marks a failure after the browser returned an authorization
-// code: the server is auth-gated, so a run must not fall back to an anonymous
-// connection that would only turn the token-endpoint outage into auth_required.
-type CodeExchangeError struct{ Err error }
+// LoginError marks a browser login that began and then failed (no callback in
+// time, or the code exchange): the server is auth-gated, so a run must not fall
+// back to an anonymous connection whose 401 would hide the cause as auth_required.
+type LoginError struct{ Err error }
 
-func (e *CodeExchangeError) Error() string { return e.Err.Error() }
-func (e *CodeExchangeError) Unwrap() error { return e.Err }
+func (e *LoginError) Error() string { return e.Err.Error() }
+func (e *LoginError) Unwrap() error { return e.Err }
 
 // LoadCredentials reads a credentials file; a missing or empty file is an empty set.
 func LoadCredentials(path string) (Credentials, error) {
@@ -229,13 +229,21 @@ func (c *Credential) refresh(resource string) (string, error) {
 	}
 	defer resp.Body.Close()
 	tok, reason := readTokenReply(resp)
-	// A 4xx other than 408/429 refuses the grant; some servers send their error with 200.
-	// 408 and 429 are transient (timeout, rate limit), not a refused token.
-	ok := resp.StatusCode/100 == 2
+	// Refused, so a new login is worth it: an RFC 6749 error code whatever the status
+	// (Atlassian sends 403 unauthorized_client, some servers 200), a 400 or 401 with
+	// none, or an endpoint gone or moved for good, which a new login rediscovers.
+	// Anything else, such as a WAF's HTML 403, a 405 or a 5xx, is an outage.
+	refused := oauthErrorCodes[tok.Error]
+	switch resp.StatusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized:
+		refused = refused || tok.Error == ""
+	case http.StatusNotFound, http.StatusGone, http.StatusMovedPermanently, http.StatusPermanentRedirect:
+		refused = true
+	}
 	switch {
-	case (resp.StatusCode/100 == 4 && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode != http.StatusRequestTimeout) || (ok && tok.AccessToken == "" && tok.Error != ""):
+	case refused && tok.AccessToken == "":
 		return "", &CredentialError{Err: fmt.Errorf("token endpoint refused the stored refresh token: %s", reason)}
-	case !ok || tok.AccessToken == "":
+	case resp.StatusCode/100 != 2 || tok.AccessToken == "":
 		return "", fmt.Errorf("token refresh failed: %s", reason)
 	}
 	if tok.RefreshToken != "" {

@@ -3,12 +3,14 @@ package libmcp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -54,10 +56,16 @@ func bearerServer(t *testing.T, want string) *httptest.Server {
 		inner.Config.Handler.ServeHTTP(w, r)
 	}))
 	t.Cleanup(ts.Close)
+	trustMCPServer(t, ts)
+	return ts
+}
+
+// trustMCPServer makes the session's transport trust a TLS test server for the test.
+func trustMCPServer(t *testing.T, ts *httptest.Server) {
+	t.Helper()
 	saved := http.DefaultTransport
 	http.DefaultTransport = ts.Client().Transport
 	t.Cleanup(func() { http.DefaultTransport = saved })
-	return ts
 }
 
 func TestNewSDKSession_StoredCredentialKeepsRotatedToken(t *testing.T) {
@@ -83,6 +91,7 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 	var asked atomic.Bool
 	ts := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { asked.Store(true) }))
 	t.Cleanup(ts.Close)
+	trustMCPServer(t, ts) // so asked would record a connection the code wrongly made
 	creds := Credentials{ts.URL: {TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: "refresh-secret-1"}}
 
 	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
@@ -92,26 +101,29 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 	assert.NotContains(t, err.Error(), "refresh-secret-1", "the token endpoint's body is never reported")
 	assert.False(t, asked.Load(), "the server is not tried without a login")
 
-	// Any 4xx but 429 refuses the grant (Atlassian answers 403 unauthorized_client).
-	forbidden, _ := tokenServer(t, http.StatusForbidden, map[string]string{"error": "unauthorized_client"})
-	creds[ts.URL] = Credential{TokenEndpoint: forbidden.URL, ClientID: "c", RefreshToken: "r"}
-	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
-	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err))
-
-	// A token endpoint that is down, throttling or unreachable is a failure, not a refused credential.
-	busy, _ := tokenServer(t, http.StatusTooManyRequests, nil)
-	creds[ts.URL] = Credential{TokenEndpoint: busy.URL, ClientID: "c", RefreshToken: "r"}
-	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
-	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
-	// A 408 request timeout is transient too, not a refused credential.
-	slow, _ := tokenServer(t, http.StatusRequestTimeout, nil)
-	creds[ts.URL] = Credential{TokenEndpoint: slow.URL, ClientID: "c", RefreshToken: "r"}
-	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
-	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
-	down, _ := tokenServer(t, http.StatusServiceUnavailable, nil)
-	creds[ts.URL] = Credential{TokenEndpoint: down.URL, ClientID: "c", RefreshToken: "r"}
-	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
-	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
+	for _, tc := range []struct {
+		status int
+		reply  map[string]string
+		want   string
+	}{
+		{http.StatusForbidden, map[string]string{"error": "unauthorized_client"}, OutcomeAuthRequired}, // Atlassian
+		{http.StatusOK, map[string]string{"error": "invalid_grant"}, OutcomeAuthRequired},
+		{http.StatusUnauthorized, nil, OutcomeAuthRequired},
+		{http.StatusNotFound, nil, OutcomeAuthRequired},          // gone: a new login rediscovers it
+		{http.StatusPermanentRedirect, nil, OutcomeAuthRequired}, // moved for good, likewise
+		{http.StatusForbidden, nil, OutcomeFailed},               // a WAF or CDN page, not a refusal
+		{http.StatusMethodNotAllowed, nil, OutcomeFailed},
+		{http.StatusOK, map[string]string{"error": "temporarily_unavailable"}, OutcomeFailed},
+		{http.StatusTemporaryRedirect, nil, OutcomeFailed},
+		{http.StatusTooManyRequests, nil, OutcomeFailed},
+		{http.StatusRequestTimeout, nil, OutcomeFailed},
+		{http.StatusServiceUnavailable, nil, OutcomeFailed},
+	} {
+		srv, _ := tokenServer(t, tc.status, tc.reply)
+		creds[ts.URL] = Credential{TokenEndpoint: srv.URL, ClientID: "c", RefreshToken: "r"}
+		_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
+		assert.Equal(t, tc.want, OutcomeForError(err), "%d %v", tc.status, tc.reply)
+	}
 	tok.Close()
 	creds[ts.URL] = Credential{TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: "r"}
 	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
@@ -189,12 +201,11 @@ func TestNewHTTPClient_InteractiveKeepsTransientOutageFailed(t *testing.T) {
 }
 
 func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
-	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"access_token":"`)) // a truncated 200 body the decoder chokes on
 	}))
 	t.Cleanup(ts.Close)
-	trustTokenServer(t, ts)
 
 	o := NewOAuthConfig("https://mcp.example/mcp", "c", "client-secret-xyz", "http://127.0.0.1:8765/callback")
 	_, err := o.exchangeCode(ts.URL, "c", "client-secret-xyz", "auth-code-xyz", "verifier")
@@ -204,13 +215,21 @@ func TestExchangeCode_MalformedBodyReturnsConstantError(t *testing.T) {
 	assert.NotContains(t, err.Error(), "client-secret-xyz", "nor the client secret")
 }
 
-func TestExchangeCode_AcceptsUppercaseHTTPSScheme(t *testing.T) {
-	// URL schemes are case-insensitive; a mixed-case https endpoint is valid.
-	ts, _ := tokenServer(t, http.StatusOK, map[string]string{"access_token": "a"})
-	upper := "HTTPS://" + ts.URL[len("https://"):]
+func TestExchangeCode_LoopbackHTTPAndSameOriginRedirect(t *testing.T) {
+	// As at base: a loopback http token endpoint works, and a 307 to /token/ is
+	// followed with the form re-posted.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			http.Redirect(w, r, "/token/", http.StatusTemporaryRedirect)
+			return
+		}
+		assert.Equal(t, "code", r.PostFormValue("code"))
+		_, _ = w.Write([]byte(`{"access_token":"a"}`))
+	}))
+	t.Cleanup(ts.Close)
 	o := NewOAuthConfig("https://mcp.example/mcp", "c", "s", "http://127.0.0.1:8765/callback")
-	tok, err := o.exchangeCode(upper, "c", "s", "code", "verifier")
-	require.NoError(t, err, "a mixed-case https scheme must not be rejected")
+	tok, err := o.exchangeCode(ts.URL+"/token", "c", "s", "code", "verifier")
+	require.NoError(t, err)
 	assert.Equal(t, "a", tok.AccessToken)
 }
 
@@ -271,12 +290,18 @@ func TestKeepable_SameSiteHTTPSOnly(t *testing.T) {
 }
 
 func TestNewSDKSession_StoredCredentialFromAnotherSiteIsNotUsed(t *testing.T) {
-	_, form := tokenServer(t, http.StatusOK, map[string]string{"access_token": "a"})
+	var sent atomic.Bool // any token request at all, wherever it would go
+	saved := tokenClient.Transport
+	tokenClient.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		sent.Store(true)
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"access_token":"a"}`))}, nil
+	})
+	t.Cleanup(func() { tokenClient.Transport = saved })
 	ts := bearerServer(t, "Bearer a")
 	creds := Credentials{ts.URL: {TokenEndpoint: "https://auth.other.example/token", ClientID: "c", RefreshToken: "r"}}
 	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: creds})
 	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(err))
-	assert.Nil(t, form.Load(), "the refresh token is not sent to a token endpoint off the server's site")
+	assert.False(t, sent.Load(), "the refresh token is not sent to a token endpoint off the server's site")
 }
 
 func TestNewSDKSession_StoredCredentialNeedsHTTPS(t *testing.T) {
@@ -295,7 +320,8 @@ func TestNewSDKSession_StoredCredentialNeedsHTTPS(t *testing.T) {
 func TestWithBearer_ReplacesEverySpellingOfAuthorization(t *testing.T) {
 	headers := map[string]string{"authorization": "Basic x", "AUTHORIZATION": "bearer old", "X-Custom": "1"}
 	assert.True(t, hasAccessToken(headers), "a bearer counts in any spelling")
-	assert.False(t, hasAccessToken(map[string]string{"authorization": "Basic x"}))
+	assert.True(t, hasAccessToken(map[string]string{"authorization": "Basic x"}), "so does any configured scheme")
+	assert.False(t, hasAccessToken(map[string]string{"Authorization": " "}))
 	assert.Equal(t, map[string]string{"Authorization": "Bearer new", "X-Custom": "1"}, withBearer(headers, "new"))
 	assert.Len(t, headers, 3, "the caller's map is left as configured")
 }

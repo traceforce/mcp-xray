@@ -215,10 +215,8 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
-			// A failure after the code was obtained means the server is auth-gated;
-			// propagate it (failed) rather than retry anonymously and report auth_required.
-			var cee *CodeExchangeError
-			if errors.As(err, &cee) {
+			var le *LoginError // the login began: report its failure, not an anonymous retry's 401
+			if errors.As(err, &le) {
 				return nil, false, err
 			}
 			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
@@ -389,11 +387,12 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-// hasAccessToken checks if the headers contain a bearer token, in any spelling
-// of the header name or the scheme.
+// hasAccessToken reports whether the headers configure an Authorization value in
+// any spelling and scheme (Bearer, Basic, token): a configured credential wins
+// over a stored or browser login.
 func hasAccessToken(headers map[string]string) bool {
 	for k, v := range headers {
-		if strings.EqualFold(k, "Authorization") && len(v) > 7 && strings.EqualFold(v[:7], "Bearer ") {
+		if strings.EqualFold(k, "Authorization") && strings.TrimSpace(v) != "" {
 			return true
 		}
 	}
