@@ -28,6 +28,7 @@ type Credential struct {
 	ClientID      string `json:"client_id"`
 	ClientSecret  string `json:"client_secret,omitempty"`
 	RefreshToken  string `json:"refresh_token"`
+	Resource      string `json:"resource,omitempty"` // RFC 8707 resource indicator a strict server validates on refresh
 }
 
 // Credentials maps an MCP server URL, as configured, to its stored credential.
@@ -178,6 +179,7 @@ var oauthErrorCodes = map[string]bool{
 	"unauthorized_client":    true,
 	"unsupported_grant_type": true,
 	"invalid_scope":          true,
+	"invalid_target":         true, // RFC 8707: the server rejects the resource indicator
 }
 
 // tokenReply is a token endpoint's answer; only its RFC 6749 error code is ever
@@ -208,11 +210,27 @@ func (c *Credential) refresh(resource string) (string, error) {
 	if u, err := url.Parse(c.TokenEndpoint); err != nil || u.Scheme != "https" {
 		return "", errors.New("token refresh failed: token endpoint is not https")
 	}
+	if c.Resource != "" {
+		resource = c.Resource // the canonical resource the login used, which a strict server requires again
+	}
+	// Some servers reject the RFC 8707 resource indicator at the token endpoint with
+	// invalid_target, as they do at login; retry once without it, never otherwise.
+	token, err := c.refreshWith(resource)
+	var ce *CredentialError
+	if resource != "" && errors.As(err, &ce) && strings.HasSuffix(err.Error(), "invalid_target") {
+		token, err = c.refreshWith("")
+	}
+	return token, err
+}
+
+func (c *Credential) refreshWith(resource string) (string, error) {
 	form := url.Values{
 		"grant_type":    {"refresh_token"},
 		"refresh_token": {c.RefreshToken},
 		"client_id":     {c.ClientID},
-		"resource":      {resource},
+	}
+	if resource != "" {
+		form.Set("resource", resource)
 	}
 	if c.ClientSecret != "" {
 		form.Set("client_secret", c.ClientSecret)

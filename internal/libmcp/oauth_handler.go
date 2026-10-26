@@ -39,6 +39,39 @@ type OAuthConfig struct {
 	ClientID     string // pre-registered client when server does not support DCR (e.g. Figma)
 	ClientSecret string
 	RedirectURI  string // from config; when set, used as redirect_uri (e.g. cursor://...); when empty, default http://127.0.0.1:8765/callback
+	resource     string // RFC 8707 resource indicator: the PRM's canonical resource once discovered
+	omitResource bool   // set after a server rejects the resource indicator with invalid_target
+}
+
+// resourceIndicator is the RFC 8707 resource value sent to the authorization and
+// token endpoints, or "" to send none: the PRM's canonical resource when the
+// server advertises one (some, such as Semgrep, validate it strictly and reject
+// the raw URL with invalid_target), otherwise the configured MCP URL. It is empty
+// once a server has refused the indicator, since not every server supports one.
+func (o *OAuthConfig) resourceIndicator() string {
+	switch {
+	case o.omitResource:
+		return ""
+	case o.resource != "":
+		return o.resource
+	default:
+		return o.MCPUrl
+	}
+}
+
+// canonicalResource returns the PRM's resource only when it is https and on the
+// MCP server's own site (RFC 9728 §3.3), so a server cannot steer the token's
+// audience to another host; otherwise "", which falls back to the configured URL.
+func (o *OAuthConfig) canonicalResource(prmResource string) string {
+	if prmResource == "" {
+		return ""
+	}
+	r, err1 := url.Parse(prmResource)
+	m, err2 := url.Parse(o.MCPUrl)
+	if err1 != nil || err2 != nil || !strings.EqualFold(r.Scheme, "https") || site(r.Hostname()) != site(m.Hostname()) {
+		return ""
+	}
+	return prmResource
 }
 
 func NewOAuthConfig(mcpUrl string, clientID, clientSecret string, redirectURI string) *OAuthConfig {
@@ -99,6 +132,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	if err != nil {
 		return "", nil, err
 	}
+	o.resource = o.canonicalResource(prm.Resource) // the server's canonical resource, if it is its own
 
 	fmt.Println("2) Discovering Authorization Server Metadata…")
 	asmd, err := o.DiscoverASMetadata(prm)
@@ -142,42 +176,54 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 		fmt.Println("   client_id =", clientID)
 	}
 
-	verifier, challenge := makePKCE()
-	state := randB64URL(16)
-	authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, clientID, scopeStr, challenge, state)
+	// A server that refuses the RFC 8707 resource indicator answers invalid_target
+	// before login; retry once without it, since not every server accepts one.
+	var verifier, code string
+	for attempt := 0; ; attempt++ {
+		var challenge string
+		verifier, challenge = makePKCE()
+		state := randB64URL(16)
+		authURL := o.buildAuthURL(asmd.AuthorizationEndpoint, clientID, scopeStr, challenge, state)
 
-	if !o.useLocalRedirectServer() {
-		fmt.Println("4) Redirect URI is a custom scheme (e.g. cursor://); callback will go to Cursor.")
+		if !o.useLocalRedirectServer() {
+			fmt.Println("4) Redirect URI is a custom scheme (e.g. cursor://); callback will go to Cursor.")
+			fmt.Println("5) Opening browser for login/consent…")
+			fmt.Println("   If it doesn't open, paste this URL into your browser:")
+			fmt.Println(authURL)
+			openBrowser(authURL)
+			return "", nil, fmt.Errorf("redirect_uri is set to %s; complete authorization in Cursor, then Cursor will store the token", o.redirectURI())
+		}
+
+		fmt.Println("4) Starting local redirect server…")
+		codeCh := make(chan string, 1)
+		errCh := make(chan string, 1)
+		shutdownServer, err := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
+		if err != nil {
+			return "", nil, &LoginError{Err: err} // never open the browser: whatever holds the port would receive the code
+		}
+
 		fmt.Println("5) Opening browser for login/consent…")
 		fmt.Println("   If it doesn't open, paste this URL into your browser:")
 		fmt.Println(authURL)
 		openBrowser(authURL)
-		return "", nil, fmt.Errorf("redirect_uri is set to %s; complete authorization in Cursor, then Cursor will store the token", o.redirectURI())
-	}
 
-	fmt.Println("4) Starting local redirect server…")
-	codeCh := make(chan string, 1)
-	errCh := make(chan string, 1)
-	shutdownServer, err := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
-	if err != nil {
-		return "", nil, &LoginError{Err: err} // never open the browser: whatever holds the port would receive the code
-	}
-	defer shutdownServer() // Ensure server is shut down when function returns
-
-	fmt.Println("5) Opening browser for login/consent…")
-	fmt.Println("   If it doesn't open, paste this URL into your browser:")
-	fmt.Println(authURL)
-	openBrowser(authURL)
-
-	// Wait for callback (no background promises; we block right here)
-	var code string
-	select {
-	case code = <-codeCh:
-		// Server will be shut down by defer
-	case err := <-errCh:
-		return "", nil, &LoginError{Err: fmt.Errorf("OAuth error: %s", err)}
-	case <-time.After(3 * time.Minute):
-		return "", nil, &LoginError{Err: errors.New("timed out waiting for OAuth callback")}
+		// Wait for callback (no background promises; we block right here)
+		select {
+		case code = <-codeCh:
+			shutdownServer()
+		case e := <-errCh:
+			shutdownServer()
+			if attempt == 0 && e == "invalid_target" && !o.omitResource {
+				fmt.Println("   Server rejected the resource indicator; retrying without it…")
+				o.omitResource = true
+				continue
+			}
+			return "", nil, &LoginError{Err: fmt.Errorf("OAuth error: %s", e)}
+		case <-time.After(3 * time.Minute):
+			shutdownServer()
+			return "", nil, &LoginError{Err: errors.New("timed out waiting for OAuth callback")}
+		}
+		break
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
@@ -189,7 +235,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 
 	var cred *Credential
 	if tok.RefreshToken != "" { // newHTTPClient stores it only if keepable: https on the server's site
-		cred = &Credential{TokenEndpoint: tokenEP, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken}
+		cred = &Credential{TokenEndpoint: tokenEP, ClientID: clientID, ClientSecret: clientSecret, RefreshToken: tok.RefreshToken, Resource: o.resourceIndicator()}
 	}
 	return tok.AccessToken, cred, nil
 }
@@ -340,8 +386,10 @@ func (o *OAuthConfig) buildAuthURL(authEP, clientID, scope, codeChallenge, state
 	q.Set("code_challenge", codeChallenge)
 	q.Set("code_challenge_method", "S256")
 	q.Set("state", state)
-	// MCP recommends RFC8707 resource indicator
-	q.Set("resource", o.MCPUrl)
+	// MCP recommends an RFC 8707 resource indicator, but not every server accepts one.
+	if r := o.resourceIndicator(); r != "" {
+		q.Set("resource", r)
+	}
 
 	u.RawQuery = q.Encode()
 	return u.String()
@@ -357,7 +405,9 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	data.Set("code", code)
 	data.Set("redirect_uri", o.redirectURI())
 	data.Set("code_verifier", codeVerifier)
-	data.Set("resource", o.MCPUrl)
+	if r := o.resourceIndicator(); r != "" {
+		data.Set("resource", r)
+	}
 
 	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -378,9 +428,12 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	return tr.TokenResponse, resp.Request.URL.String(), nil
 }
 
-// callbackErrorCodes are the RFC 6749 section 4.1.2.1 authorization error codes.
+// callbackErrorCodes are the RFC 6749 section 4.1.2.1 authorization error codes,
+// plus RFC 8707's invalid_target, which a server returns when it rejects the
+// resource indicator; all are spec-defined and safe to surface.
 var callbackErrorCodes = map[string]bool{"invalid_request": true, "unauthorized_client": true, "access_denied": true,
-	"unsupported_response_type": true, "invalid_scope": true, "server_error": true, "temporarily_unavailable": true}
+	"unsupported_response_type": true, "invalid_scope": true, "server_error": true, "temporarily_unavailable": true,
+	"invalid_target": true}
 
 func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int, state string) (func(), error) {
 	// Only the first result counts; a later callback must not block the handler.
