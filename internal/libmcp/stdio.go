@@ -34,8 +34,8 @@ const (
 
 // startStdio starts cmd and returns a transport over its pipes. The SDK's
 // CommandTransport hands stdout straight to its JSON decoder, so a server that
-// prints a banner before its first message fails initialize; jsonLines keeps
-// only the JSON lines and writes the others to dropped.
+// prints a banner before its first message fails initialize; jsonLines writes
+// what comes before the first message to dropped and passes the rest through.
 func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -55,58 +55,49 @@ func startStdio(cmd *exec.Cmd, dropped io.Writer) (mcp.Transport, error) {
 	}, nil
 }
 
-// jsonLines passes through the lines of r whose first non-blank byte is '{'
-// and drops the rest, chunk by chunk, so a child that streams progress output
-// without newlines cannot grow memory. Dropped lines include '[' batches: this
-// client never sends one, and "[INFO]" log prefixes are common.
+// jsonLines drops what a child prints before its first JSON-RPC message: each
+// line whose first non-blank byte is not '{' (or "[{", a batch), and a UTF-8
+// BOM, chunk by chunk, so progress output without newlines cannot grow memory.
+// From the first message on, stdout passes through as is, as at base: a
+// pretty-printed message decodes whole, and later non-JSON output fails the
+// call at once instead of being dropped together with a response.
 type jsonLines struct {
 	r       *bufio.Reader
-	dropped io.Writer // the non-JSON lines of r, for the diagnostic tail
-	mid     bool      // inside a line whose fate is decided
-	keep    bool      // and that line is JSON
-	rest    []byte    // unread part of the current kept chunk
-	err     error     // returned once rest is drained
+	dropped io.Writer // what was dropped, for the diagnostic tail (masked by redact)
+	mid     bool      // inside a dropped line
+	started bool      // the first message began
 }
 
 func (l *jsonLines) Read(p []byte) (int, error) {
-	for len(l.rest) == 0 {
-		if l.err != nil {
-			return 0, l.err
-		}
+	for !l.started {
 		if !l.mid {
+			if bom, _ := l.r.Peek(3); string(bom) == "\xef\xbb\xbf" {
+				_, _ = l.r.Discard(3)
+			}
 			b, err := l.r.ReadByte()
 			if err != nil {
-				l.err = err
-				continue
+				return 0, err
 			}
 			if b == ' ' || b == '\t' || b == '\r' || b == '\n' {
-				if l.dropped != nil { // blank lines and indent: keep the diagnostic faithful
-					_, _ = l.dropped.Write([]byte{b})
-				}
+				_, _ = l.dropped.Write([]byte{b}) // blank lines and indent: keep the diagnostic faithful
 				continue
 			}
-			l.mid, l.keep = true, b == '{'
 			_ = l.r.UnreadByte()
+			if next, _ := l.r.Peek(2); next[0] == '{' || string(next) == "[{" {
+				l.started = true
+				continue
+			}
+			l.mid = true
 		}
 		chunk, err := l.r.ReadSlice('\n')
-		switch err {
-		case nil:
+		_, _ = l.dropped.Write(chunk)
+		if err == nil {
 			l.mid = false
-		case bufio.ErrBufferFull:
-		default:
-			l.err = err // EOF or a read error, after the chunk is delivered
-		}
-		if l.keep {
-			l.rest = append(l.rest[:0], chunk...)
-		} else if l.dropped != nil {
-			// Only non-JSON output reaches the diagnostic; a kept protocol frame,
-			// where a secret would appear JSON-escaped, is never persisted there.
-			_, _ = l.dropped.Write(chunk)
+		} else if err != bufio.ErrBufferFull {
+			return 0, err
 		}
 	}
-	n := copy(p, l.rest)
-	l.rest = l.rest[n:]
-	return n, nil
+	return l.r.Read(p)
 }
 
 // stdinCloser closes the child's stdin and then waits for it to exit,

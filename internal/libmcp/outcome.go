@@ -62,6 +62,9 @@ func ListAllTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool,
 // format) is unlaunchable; a server that answers 401, or whose stored
 // credential the token endpoint refuses, is auth_required.
 func OutcomeForError(err error) string {
+	if re := (*redactedError)(nil); errors.As(err, &re) {
+		err = re.err // classify what the SDK said, not its masked display text
+	}
 	var execErr *exec.Error
 	var pathErr *fs.PathError
 	var dcrErr *DCRUnauthorizedError
