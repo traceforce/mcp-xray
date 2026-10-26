@@ -40,9 +40,6 @@ type SDKSession struct {
 // Redact masks the config's secrets in an error from a call made after connect,
 // such as tools/list, before it becomes an outcome reason or a finding.
 func (s *SDKSession) Redact(err error) error {
-	if err == nil || s == nil {
-		return err
-	}
 	return &redactedError{msg: redact(err.Error(), s.secrets, false), err: err}
 }
 
@@ -93,7 +90,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		// Inherited values count too: the child may echo any of them.
 		for _, kv := range cmd.Environ() {
 			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-				secrets = append(append(secrets, v), valueParts(v)...) // AUTH_HEADER="Bearer <token>"
+				secrets = append(secrets, v)
 			}
 		}
 		secrets = secretParts(append(secrets, argSecrets(commandArgs)...))
@@ -190,11 +187,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 // transportSecrets returns what a remote error can echo: the URL's and the
 // headers' values, including a bearer OAuth discovery added for this client.
 func transportSecrets(cfg MCPServerConfig, c *http.Client) []string {
-	headers := cfg.Headers
-	if ht, ok := c.Transport.(*headerTransport); ok {
-		headers = ht.headers
-	}
-	return remoteSecrets(*cfg.URL, headers)
+	return remoteSecrets(*cfg.URL, c.Transport.(*headerTransport).headers)
 }
 
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {

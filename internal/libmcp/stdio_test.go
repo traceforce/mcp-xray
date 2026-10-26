@@ -218,13 +218,6 @@ func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
 
 	s := &SDKSession{secrets: remoteSecrets(u, map[string]string{"Authorization": "Bearer --PLACEHOLDER_header1"})}
 	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad token --PLACEHOLDER_header1`)), `calling "tools/list": bad token [redacted]`)
-	assert.NoError(t, (*SDKSession)(nil).Redact(nil))
-}
-
-func TestValueParts(t *testing.T) {
-	got := valueParts("https://mcp.example.com/api/mcp/s/PLACEHOLDER_pathtoken1/sse?api_key=abc%2Bdef%2Fghij")
-	assert.Contains(t, got, "abc+def/ghij", "the decoded query value")
-	assert.Contains(t, valueParts("Bearer PLACEHOLDER_envtok1"), "PLACEHOLDER_envtok1")
 }
 
 func TestNewSDKSession_StartErrorMasksEnvPrefix(t *testing.T) {

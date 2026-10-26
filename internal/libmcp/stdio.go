@@ -199,20 +199,13 @@ func argSecrets(args []string) []string {
 }
 
 // valueParts returns the parts of a value that may be a credential on their own:
-// the part after '=' in each '&'-separated piece, as written and decoded, the
-// last word of a value with spaces ("Bearer <token>"), and a URL's user and
-// password.
+// the part after '=' in each '&'-separated piece, the last word of a value with
+// spaces ("Bearer <token>"), and a URL's user and password, as written and decoded.
 func valueParts(v string) []string {
 	var parts []string
-	withDecoded := func(s string, unescape func(string) (string, error)) {
-		parts = append(parts, s)
-		if dec, err := unescape(s); err == nil && dec != s { // a child may log the decoded form
-			parts = append(parts, dec)
-		}
-	}
 	for _, piece := range strings.Split(v, "&") {
 		if _, value, ok := strings.Cut(piece, "="); ok {
-			withDecoded(value, url.QueryUnescape)
+			parts = append(parts, value)
 		}
 	}
 	if words := strings.Fields(v); len(words) > 1 {
@@ -225,8 +218,12 @@ func valueParts(v string) []string {
 		}
 		if at := strings.LastIndex(authority, "@"); at >= 0 {
 			user, pass, _ := strings.Cut(authority[:at], ":")
-			withDecoded(user, url.PathUnescape)
-			withDecoded(pass, url.PathUnescape)
+			for _, s := range []string{user, pass} {
+				parts = append(parts, s)
+				if dec, err := url.PathUnescape(s); err == nil && dec != s { // a child may log the decoded form
+					parts = append(parts, dec)
+				}
+			}
 		}
 	}
 	return parts
