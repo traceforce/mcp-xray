@@ -146,13 +146,16 @@ func sameEndpoint(a, b string) bool {
 	}
 	uh, err1 := idna.Lookup.ToASCII(u.Hostname())
 	vh, err2 := idna.Lookup.ToASCII(v.Hostname())
+	if err1 != nil || err2 != nil { // IDNA rejects ':' and '_': an IPv6 or underscore host is dialed as written
+		uh, vh = u.Hostname(), v.Hostname()
+	}
 	port := func(u *url.URL) string {
 		if u.Port() == "443" {
 			return ""
 		}
 		return u.Port()
 	}
-	return err1 == nil && err2 == nil && uh == vh && port(u) == port(v) && u.RawQuery == v.RawQuery &&
+	return sameHost(uh, vh) && port(u) == port(v) && u.RawQuery == v.RawQuery &&
 		strings.TrimSuffix(u.EscapedPath(), "/") == strings.TrimSuffix(v.EscapedPath(), "/")
 }
 

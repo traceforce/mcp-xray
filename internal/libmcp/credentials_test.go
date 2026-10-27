@@ -475,4 +475,19 @@ func TestStoredLogin_Pin(t *testing.T) {
 	assert.False(t, sameEndpoint("https://a.example/t", ""), "no pin matches nothing")
 	assert.False(t, sameEndpoint("https://a.example/t", "https://a.example/t?x=1"))
 	assert.False(t, sameEndpoint("https://a.example:8443/t", "https://a.example:8/t"))
+	// IDNA rejects ':' and '_', so these hosts compare as net/http dials them.
+	assert.True(t, sameEndpoint("https://[2001:db8::1]/token", "https://[2001:DB8::1]/token"))
+	assert.True(t, sameEndpoint("https://keycloak_auth:8443/t", "https://keycloak_auth:8443/t"))
+	assert.False(t, sameEndpoint("https://keycloak_auth/t", "https://keycloak-auth/t"))
+}
+
+func TestNewSDKSession_UnreadableFileDoesNotFailServerWithoutLogin(t *testing.T) {
+	// Another run's in-place write can leave the file briefly partial. A server with
+	// no stored login has no token to protect, so it still connects.
+	ts := bearerServer(t, "")
+	path := filepath.Join(t.TempDir(), "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"https://other.example/mcp": {`), 0o600))
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: Credentials{}, CredentialsFile: path})
+	require.NoError(t, err)
+	_ = s.Close()
 }

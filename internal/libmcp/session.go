@@ -198,8 +198,10 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
 	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
 		disk, err := LoadCredentials(cfg.CredentialsFile)
-		if err != nil {
-			return nil, false, err // never spend the token loaded at startup, which may be spent
+		// Never spend the token loaded at startup, which may be spent; a server with no
+		// stored login has none to spend, so an unreadable file does not fail it.
+		if _, stored := cfg.Credentials[url]; err != nil && stored {
+			return nil, false, err
 		}
 		if c, ok := disk[url]; ok {
 			cfg.Credentials[url] = c
