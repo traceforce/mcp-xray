@@ -1,6 +1,10 @@
 package libmcp
 
-import "github.com/modelcontextprotocol/go-sdk/mcp"
+import (
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
 
 // MCPServerConfig is the normalized representation returned by all parsers
 type MCPServerConfig struct {
@@ -15,8 +19,9 @@ type MCPServerConfig struct {
 	RawJSON           string
 	OAuthClientID     string
 	OAuthClientSecret string
-	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
-	NonInteractive    bool   // Never start browser OAuth; a server that needs it fails to connect instead
+	RedirectURI       string        // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
+	NonInteractive    bool          // Never start browser OAuth; a server that needs it fails to connect instead
+	ConnectTimeout    time.Duration // How long initialize may take; 0 means 60 seconds
 }
 
 // EnrichedTool wraps an MCP tool with classified action labels

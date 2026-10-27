@@ -61,6 +61,9 @@ func ListAllTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool,
 // A command that cannot be found or started (missing, not executable, wrong
 // format) is unlaunchable; a server that answers 401 is auth_required.
 func OutcomeForError(err error) string {
+	if re := (*redactedError)(nil); errors.As(err, &re) {
+		err = re.err // classify what the SDK said, not its masked display text
+	}
 	var execErr *exec.Error
 	var pathErr *fs.PathError
 	var dcrErr *DCRUnauthorizedError

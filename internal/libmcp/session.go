@@ -33,7 +33,13 @@ type SDKSession struct {
 	Client    *mcp.Client
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
+	cancel    context.CancelFunc // ends the context the transport connected with
 }
+
+// connectTimeout bounds initialize unless the config sets its own, so a child
+// that prints only non-JSON and waits, or a remote server that never answers,
+// fails instead of hanging.
+const connectTimeout = 60 * time.Second
 
 // NewSDKSession creates a new session using the official MCP SDK
 func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error) {
@@ -44,6 +50,8 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
+	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
+	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -71,8 +79,23 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if cfg.Env != nil {
 			cmd.Env = append(os.Environ(), envToSlice(cfg.Env)...)
 		}
+		// Inherited values count too: the child may echo any of them.
+		for _, kv := range cmd.Environ() {
+			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
+				stderr.secrets = append(stderr.secrets, v)
+			}
+		}
+		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
+		stderr.secrets = secretParts(stderr.secrets) // add each line and JSON-escaped form
+		stdout.secrets = stderr.secrets
+		cmd.Stderr = &stderr
+		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
-		transport = &mcp.CommandTransport{Command: cmd}
+		stdio, err := startStdio(cmd, &stdout)
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect: %w", err)
+		}
+		transport = stdio
 
 	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
 		httpClient, dcrSkippedAuth, err := newHTTPClient(cfg)
@@ -99,12 +122,42 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		return nil, fmt.Errorf("unsupported transport type: %v", transportType)
 	}
 
-	session, err := client.Connect(ctx, transport, nil)
+	timeout := cfg.ConnectTimeout
+	if timeout <= 0 {
+		timeout = connectTimeout
+	}
+	// SSE reads its stream with the context it connects with, so that context
+	// lives as long as the session; the timer cancels it only while initialize runs.
+	connectCtx, cancel := context.WithCancel(ctx)
+	timer := time.AfterFunc(timeout, cancel)
+	session, err := client.Connect(connectCtx, transport, nil)
+	// A timeout only when the timer is what ended Connect: a server error that came
+	// first stays as it is, even if the timer fires while the SDK cleans up.
+	if !timer.Stop() && (err == nil || (errors.Is(err, context.Canceled) && ctx.Err() == nil)) {
+		if err == nil {
+			_ = session.Close()
+		}
+		err = fmt.Errorf("%w after %v", context.DeadlineExceeded, timeout)
+	}
 	if err != nil {
+		cancel()
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
-		return nil, fmt.Errorf("failed to connect: %w", err)
+		var output []string
+		if tail := stderr.String(); tail != "" {
+			output = append(output, "stderr: "+tail)
+		}
+		if tail := stdout.String(); tail != "" {
+			output = append(output, "stdout: "+tail)
+		}
+		brief := redact("failed to connect: "+err.Error(), stderr.secrets, false)
+		msg := brief
+		if len(output) > 0 {
+			// The SDK error stays last: OutcomeForError classifies by its suffix.
+			msg = redact(fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err), stderr.secrets, false)
+		}
+		return nil, &redactedError{msg: msg, brief: brief, err: err}
 	}
 
 	return &SDKSession{
@@ -112,6 +165,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Client:    client,
 		Type:      transportType,
 		Transport: transport,
+		cancel:    cancel,
 	}, nil
 }
 
@@ -150,12 +204,10 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		// the server might not require authentication
 	}
 
-	// If headers are configured, wrap the transport to add them to all requests
-	if len(cfg.Headers) > 0 {
-		httpClient.Transport = &headerTransport{
-			base:    http.DefaultTransport,
-			headers: cfg.Headers,
-		}
+	// Add the configured headers, and a User-Agent when they do not set one, to all requests
+	httpClient.Transport = &headerTransport{
+		base:    http.DefaultTransport,
+		headers: cfg.Headers,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -163,6 +215,9 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 
 // Close closes the session
 func (s *SDKSession) Close() error {
+	if s.cancel != nil {
+		defer s.cancel()
+	}
 	// Add timeout to prevent hanging when MCP server is stuck
 	done := make(chan error, 1)
 	go func() {
@@ -173,14 +228,14 @@ func (s *SDKSession) Close() error {
 	case err := <-done:
 		return err
 	case <-time.After(30 * time.Second):
-		// Timeout after 30 seconds - the MCP server might be stuck
-		// For stdio transport, we can't force kill the process from here,
-		// but at least we won't hang forever
+		// Timeout after 30 seconds - the MCP server might be stuck.
+		// For stdio, Session.Close escalates to SIGTERM and SIGKILL (stdinCloser); this only bounds how long we wait for that.
 		return fmt.Errorf("session close timed out after 30 seconds")
 	}
 }
 
-// headerTransport wraps an http.RoundTripper and adds headers to all requests
+// headerTransport wraps an http.RoundTripper and adds the configured headers to
+// all requests, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
@@ -194,11 +249,12 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	for k, v := range t.headers {
 		req.Header.Set(k, v)
 	}
-
-	// Use the base transport to perform the request
-	if t.base == nil {
-		t.base = http.DefaultTransport
+	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
+	// An explicitly empty configured value means send none, so test presence, not emptiness.
+	if _, ok := req.Header["User-Agent"]; !ok {
+		req.Header.Set("User-Agent", metadata.Name+"/"+metadata.Version)
 	}
+
 	return t.base.RoundTrip(req)
 }
 
