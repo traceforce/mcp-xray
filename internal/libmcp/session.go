@@ -93,6 +93,9 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 				secrets = append(secrets, v)
 			}
 		}
+		for _, v := range cfg.Env { // configured values in parts too: AUTH_HEADER="Bearer <token>"
+			secrets = append(secrets, valueParts(v)...)
+		}
 		secrets = secretParts(append(secrets, argSecrets(commandArgs)...))
 		stderr.secrets, stdout.secrets = secrets, secrets
 		cmd.Stderr = &stderr

@@ -199,14 +199,16 @@ func argSecrets(args []string) []string {
 }
 
 // valueParts returns the parts of a value that may be a credential on their own:
-// the part after '=' in each '&'-separated piece, the last word of a value with
-// spaces ("Bearer <token>"), and a URL's user and password, as written and decoded.
+// the part after '=' in each '&'- or ';'-separated piece (a query or a cookie),
+// the last word of a value with spaces ("Bearer <token>"), the value of a
+// "Name:value" header, and a URL's user and password, as written and decoded,
+// and its long path segments.
 func valueParts(v string) []string {
 	var parts []string
 	if _, value, ok := strings.Cut(v, "="); ok && strings.Contains(value, "&") {
 		parts = append(parts, value) // --password=a&b: the whole value too
 	}
-	for _, piece := range strings.Split(v, "&") {
+	for _, piece := range strings.FieldsFunc(v, func(r rune) bool { return r == '&' || r == ';' }) {
 		if _, value, ok := strings.Cut(piece, "="); ok {
 			parts = append(parts, value)
 		}
@@ -214,10 +216,23 @@ func valueParts(v string) []string {
 	if words := strings.Fields(v); len(words) > 1 {
 		parts = append(parts, words[len(words)-1])
 	}
+	// mcp-remote's --header X-API-Key:<key> has no space after the colon. A URL
+	// (https://) or a path (C:\...) is not a header.
+	if name, value, ok := strings.Cut(v, ":"); ok && isHeaderName(name) && !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, `\`) {
+		parts = append(parts, value)
+	}
 	for _, rest := range strings.Split(v, "://")[1:] {
-		authority := rest
+		authority, path := rest, ""
 		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
-			authority = rest[:i] // userinfo lives before the path, query or fragment
+			authority, path = rest[:i], rest[i:] // userinfo lives before the path, query or fragment
+		}
+		// ponytail: a path segment of 16 bytes or more may be a key (/mcp/<key>/sse): an
+		// error can quote the URL in another form than configured (a masked password, an
+		// SSE messages endpoint), so the whole URL alone does not cover it. Shorter ones are words.
+		for _, seg := range strings.FieldsFunc(path, func(r rune) bool { return strings.ContainsRune("/?#&=", r) }) {
+			if len(seg) >= 16 {
+				parts = append(parts, seg)
+			}
 		}
 		if at := strings.LastIndex(authority, "@"); at >= 0 {
 			user, pass, _ := strings.Cut(authority[:at], ":")
@@ -230,6 +245,13 @@ func valueParts(v string) []string {
 		}
 	}
 	return parts
+}
+
+// isHeaderName reports whether s is a header name: letters, digits and '-'.
+func isHeaderName(s string) bool {
+	return s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return r != '-' && (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
+	}) < 0
 }
 
 // remoteSecrets returns the masking candidates of a remote config: its URL and

@@ -38,6 +38,10 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "token:", os.Getenv("MCPXRAY_TEST_TOKEN"))
 		fmt.Fprintln(os.Stderr, "npm error E401 Unauthorized")
 		os.Exit(1)
+	case "lastword": // logs only the token of MCPXRAY_TEST_TOKEN="Bearer <token>"
+		words := strings.Fields(os.Getenv("MCPXRAY_TEST_TOKEN"))
+		fmt.Fprintln(os.Stderr, "invalid token", words[len(words)-1])
+		os.Exit(1)
 	case "args":
 		fmt.Fprintln(os.Stderr, "args:", strings.Join(os.Args[1:], " "))
 		os.Exit(1)
@@ -219,6 +223,34 @@ func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
 
 	s := &SDKSession{secrets: remoteSecrets(u, map[string]string{"Authorization": "Bearer --PLACEHOLDER_header1"})}
 	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad token --PLACEHOLDER_header1`)), `calling "tools/list": bad token [redacted]`)
+
+	// Go quotes the URL with its password as ***, so the whole URL no longer matches
+	// and only the path segment covers the key.
+	u = "http://deploy:pw_X@127.0.0.1:1/mcp/sk-ak-PLACEHOLDERKEY123"
+	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u, NonInteractive: true})
+	require.Error(t, err)
+	assert.Contains(t, errors.Unwrap(err).Error(), "sk-ak-PLACEHOLDERKEY123", "the SDK error does carry the key")
+	assert.NotContains(t, err.Error(), "sk-ak-PLACEHOLDERKEY123")
+}
+
+func TestValueParts_KeyForms(t *testing.T) {
+	got := valueParts("https://mcp.example.com/api/mcp/s/PLACEHOLDER_pathtoken1/sse")
+	assert.Contains(t, got, "PLACEHOLDER_pathtoken1", "a long path segment, as an SSE messages endpoint echoes it")
+	assert.NotContains(t, got, "api", "a short path segment is a word")
+	assert.Contains(t, valueParts("X-API-Key:sk-live-0123456789"), "sk-live-0123456789", "mcp-remote's --header Name:value")
+	assert.Contains(t, valueParts("session=PLACEHOLDER_cookie1; theme=dark"), "PLACEHOLDER_cookie1", "a cookie piece")
+	assert.Empty(t, valueParts(`C:\Users\someone\server.js`), "a Windows path is not a header")
+}
+
+func TestNewSDKSession_StdioMasksConfiguredEnvInParts(t *testing.T) {
+	// mcp-remote's Windows pattern: --header Authorization:${AUTH_HEADER} with
+	// AUTH_HEADER="Bearer <token>", and a child that logs the token alone.
+	cfg := childConfig(t, "lastword")
+	cfg.Env["MCPXRAY_TEST_TOKEN"] = "Bearer PLACEHOLDER_envtoken1"
+	_, err := NewSDKSession(context.Background(), cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid token [redacted]")
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_envtoken1")
 }
 
 func TestNewSDKSession_StartErrorMasksEnvPrefix(t *testing.T) {
