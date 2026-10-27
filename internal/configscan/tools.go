@@ -26,6 +26,10 @@ type ToolsScanner struct {
 	toolsOutputFile string
 	// NonInteractive never starts browser OAuth; such servers are reported as auth_required.
 	NonInteractive bool
+	// Credentials holds stored logins by server URL; when nil, logins are not kept.
+	Credentials libmcp.Credentials
+	// CredentialsFile is where Credentials is saved after every change.
+	CredentialsFile string
 }
 
 func NewToolsScanner(configPath string, analyzerType string, model string, toolsOutputFile string, maxRetries int) (*ToolsScanner, error) {
@@ -89,6 +93,7 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 	var results []serverToolsResult
 	for _, server := range servers {
 		server.NonInteractive = s.NonInteractive
+		server.Credentials, server.CredentialsFile = s.Credentials, s.CredentialsFile
 		results = append(results, s.listServerTools(ctx, server))
 	}
 	return results, nil

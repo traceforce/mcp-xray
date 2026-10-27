@@ -183,22 +183,59 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
+	// A stored credential logs in without a browser; a configured Authorization wins over it.
+	if cred, ok := cfg.Credentials[url]; ok && keepable(url, cred, cfg.OAuthTokenEndpoint) && !hasAccessToken(cfg.Headers) {
+		accessToken, err := cred.refresh(url)
+		switch {
+		case err == nil:
+			cfg.Credentials[url] = cred // keeps a rotated refresh token
+			cfg.saveCredentials()
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+		case cfg.NonInteractive:
+			return nil, false, err
+		default:
+			// Only a refused token (CredentialError) is worth a fresh browser login; a
+			// transient or transport outage stays a failure, not auth_required after an
+			// unauthenticated retry that hides the real cause.
+			var ce *CredentialError
+			if !errors.As(err, &ce) {
+				return nil, false, err
+			}
+			fmt.Printf("Warning: stored credential for MCP server '%s' refused: %v; logging in again\n", cfg.Name, err)
+		}
+	}
 	if !cfg.NonInteractive && !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
-		accessToken, err := oauthConfig.OauthDiscovery()
+		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
-			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
+			switch {
+			case errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "":
+				// DCR 403 with no configured client: show the hint and let the anonymous
+				// attempt report auth_required.
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
-			} else {
+				fmt.Printf("Attempting connection without authentication...\n")
+			case oauthConfig.probeUnauthorized:
+				// The server requires auth (the unauthenticated probe returned 401): report
+				// the real login or discovery failure, never hide it behind an anonymous 401.
+				return nil, false, err
+			default:
+				// Optional-auth server: the unauthenticated probe answered, so a declined or
+				// failed login falls back to the anonymous connection.
 				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+				fmt.Printf("Attempting connection without authentication...\n")
 			}
-			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
-			if cfg.Headers == nil {
-				cfg.Headers = make(map[string]string)
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			if cfg.Credentials != nil {
+				if cred != nil && keepable(url, *cred, cfg.OAuthTokenEndpoint) {
+					cfg.Credentials[url] = *cred
+				} else {
+					delete(cfg.Credentials, url) // nothing this run may reuse
+					fmt.Printf("Login for MCP server '%s' not kept: no refresh token, or its token endpoint is not https on the server's own site\n", cfg.Name)
+				}
+				cfg.saveCredentials()
 			}
-			cfg.Headers["Authorization"] = "Bearer " + accessToken
 		}
 		// If we cannot discover the access token, just continue with the existing headers
 		// the server might not require authentication
@@ -346,6 +383,18 @@ func sameHost(a, b string) bool {
 	return true
 }
 
+// withBearer returns a copy of headers with the access token set, leaving the
+// caller's map as configured.
+func withBearer(headers map[string]string, token string) map[string]string {
+	out := map[string]string{"Authorization": "Bearer " + token}
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") { // another spelling would race this one onto the wire
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // Helper functions
 func envToSlice(env map[string]string) []string {
 	var result []string
@@ -355,21 +404,25 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-// hasAccessToken checks if the headers contain an access token
+// hasAccessToken reports whether the headers configure an Authorization value in
+// any spelling and scheme (Bearer, Basic, token): a configured credential wins
+// over a stored or browser login.
 func hasAccessToken(headers map[string]string) bool {
-	if headers == nil {
-		return false
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		// mcp-xray does not expand header placeholders, so an unexpanded ${env:…} or
+		// {{TOKEN}} is not a credential and must not block a stored or browser login.
+		if strings.Contains(v, "${") || strings.Contains(v, "{{") {
+			continue
+		}
+		// A real Authorization is a scheme plus a non-empty credential ("Bearer x");
+		// a bare scheme ("Bearer") carries nothing.
+		if scheme, cred, ok := strings.Cut(v, " "); ok && scheme != "" && strings.TrimSpace(cred) != "" {
+			return true
+		}
 	}
-	// Check for "Authorization" key (case-sensitive since map keys are case-sensitive)
-	// HTTP headers are case-insensitive, but we check the common capitalized form
-	if authHeader, ok := headers["Authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
-	// Also check lowercase "authorization" in case it was stored that way
-	if authHeader, ok := headers["authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
 	return false
 }

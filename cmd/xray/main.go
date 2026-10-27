@@ -228,6 +228,34 @@ func NewDumpToolsCommand() *cobra.Command {
 
 			nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 			outcomesFile, _ := cmd.Flags().GetString("outcomes-output")
+			credentialsFile, _ := cmd.Flags().GetString("credentials-file")
+			var credentials libmcp.Credentials
+			if credentialsFile != "" {
+				if credentials, err = libmcp.LoadCredentials(credentialsFile); err != nil {
+					fmt.Printf("Error: %v\n", err)
+					os.Exit(1)
+				}
+				// It is rewritten during the run, so no config or output file may be the
+				// same file. Run before the first save so an existing aliased file is not
+				// overwritten, and again after it so a path the save itself creates (the
+				// credentials file did not exist yet) is still caught before any login.
+				checkNoAlias := func() {
+					ci, _ := os.Stat(credentialsFile)
+					for _, other := range append([]string{toolsOutputFile, outcomesFile}, configPaths...) {
+						if oi, err := os.Stat(other); other != "" && err == nil && ci != nil && os.SameFile(ci, oi) {
+							fmt.Println("Error: --credentials-file must not be a config or output file")
+							os.Exit(1)
+						}
+					}
+				}
+				checkNoAlias()
+				// Saved now, so an unwritable path fails before the run rather than after it.
+				if err := credentials.Save(credentialsFile); err != nil {
+					fmt.Printf("Error writing credentials file: %v\n", err)
+					os.Exit(1)
+				}
+				checkNoAlias()
+			}
 
 			ctx := context.Background()
 			// Aggregate tools across all config files so nothing is overwritten.
@@ -238,6 +266,7 @@ func NewDumpToolsCommand() *cobra.Command {
 				fmt.Printf("\nDumping tools: %s\n", configPath)
 				scanner := configscan.NewToolsScannerForDump(configPath)
 				scanner.NonInteractive = nonInteractive
+				scanner.Credentials, scanner.CredentialsFile = credentials, credentialsFile
 				serverToolsData, outcomes, connectionFindings, err := scanner.DumpTools(ctx)
 				if err != nil {
 					fmt.Printf("Warning: Error dumping tools for %s: %v\n", configPath, err)
@@ -283,12 +312,21 @@ func NewDumpToolsCommand() *cobra.Command {
 				totalTools += len(sd.Tools)
 			}
 			fmt.Printf("\nDumped %d tools from %d server(s) to %s\n", totalTools, len(allToolsData), toolsOutputFile)
+
+			// The per-change saves only log a write error; this final save fails the run if the credentials could not be written.
+			if credentialsFile != "" {
+				if err := credentials.Save(credentialsFile); err != nil {
+					fmt.Printf("Error writing credentials file: %v\n", err)
+					os.Exit(1)
+				}
+			}
 		},
 	}
 	cmd.Flags().String("tools-output", "", "Output file path for tools JSON (default: tools_summary_<timestamp>.json)")
 	cmd.Flags().Bool("scan-known-configs", false, "Dump tools from all known MCP config paths")
 	cmd.Flags().Bool("non-interactive", false, "Never open a browser for OAuth; servers that need it are reported as auth_required")
 	cmd.Flags().String("outcomes-output", "", "Output file path for per-server outcomes JSON (status ok, empty, auth_required, unlaunchable, or failed)")
+	cmd.Flags().String("credentials-file", "", "File path for stored OAuth logins JSON; reused to log in without a browser and updated with new or rotated refresh tokens")
 	return cmd
 }
 

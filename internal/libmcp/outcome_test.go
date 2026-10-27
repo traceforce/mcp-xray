@@ -159,6 +159,7 @@ func TestOutcomeForError_Unlaunchable(t *testing.T) {
 
 func TestOutcomeForError(t *testing.T) {
 	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(&DCRUnauthorizedError{ServerName: "s"}))
+	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(&CredentialError{Err: errors.New("token endpoint refused the stored refresh token: 400 Bad Request invalid_grant")}))
 	assert.Equal(t, OutcomeAuthRequired, OutcomeForError(errors.New("failed to write: 401 Unauthorized")))
 	assert.Equal(t, OutcomeFailed, OutcomeForError(errors.New(`Post "http://h/Unauthorized": dial tcp: connection refused`)))
 	assert.Equal(t, OutcomeUnlaunchable, OutcomeForError(&fs.PathError{Op: "fork/exec", Path: "/no/such/server", Err: fs.ErrNotExist}))

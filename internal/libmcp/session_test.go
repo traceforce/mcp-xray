@@ -94,6 +94,9 @@ func TestHeaderTransport_MatchesHostWithoutCaseButWithPort(t *testing.T) {
 	_, err := ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://mcp.example:9443/mcp", nil))
 	require.NoError(t, err)
 	assert.Empty(t, got.Get("Authorization"), "another port is another host")
+	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "http://mcp.example:8443/mcp", nil))
+	require.NoError(t, err)
+	assert.Empty(t, got.Get("Authorization"), "plain http to the same host gets no headers")
 	// Only ASCII folds: σ and ς fold alike yet encode to different names.
 	ht.host = "σ.example:8443"
 	_, err = ht.RoundTrip(httptest.NewRequest(http.MethodPost, "https://σ.EXAMPLE:8443/mcp", nil))
