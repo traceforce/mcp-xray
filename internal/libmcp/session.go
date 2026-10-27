@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -204,10 +205,17 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		// the server might not require authentication
 	}
 
-	// Add the configured headers, and a User-Agent when they do not set one, to all requests
+	// The configured headers go to the configured origin only, so a redirect or
+	// an SSE endpoint event cannot carry them to another, or to plain http.
+	scheme, host := "", ""
+	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
+		scheme, host = req.URL.Scheme, hostKey(req.URL)
+	}
 	httpClient.Transport = &headerTransport{
 		base:    http.DefaultTransport,
 		headers: cfg.Headers,
+		scheme:  scheme,
+		host:    host,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -235,19 +243,36 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// all requests, plus a User-Agent when they do not set one.
+// requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
+	scheme  string // with host, the only origin the configured headers are sent to
+	host    string
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to the request
+	// The configured headers go to the configured origin, and never again once a
+	// redirect chain has left its host, as Go strips them (Go also allows the host's
+	// subdomains; this does not). A same-host http hop only withholds them for that
+	// hop. A User-Agent is no credential, so a configured one goes everywhere.
+	same := t.isOrigin(req.URL)
+	for r := req.Response; same && r != nil && r.Request != nil; r = r.Request.Response {
+		same = sameHost(hostKey(r.Request.URL), t.host)
+	}
+	withheld := false
 	for k, v := range t.headers {
-		req.Header.Set(k, v)
+		if same || strings.EqualFold(k, "User-Agent") {
+			req.Header.Set(k, v)
+		} else if isCredentialHeader(k) {
+			withheld = true
+		}
+	}
+	if !same {
+		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
 	}
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
@@ -255,7 +280,71 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("User-Agent", metadata.Name+"/"+metadata.Version)
 	}
 
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	// A 401 from an origin the credential was withheld from is a wrong endpoint, not
+	// a missing credential, on connect and on every later call; the error must not end
+	// in "Unauthorized", which OutcomeForError reads as auth_required.
+	if err == nil && withheld && resp.StatusCode == http.StatusUnauthorized {
+		if req.Method == http.MethodGet && req.Header.Get("Mcp-Protocol-Version") != "" {
+			// The streamable client's optional SSE stream: an error would be retried with
+			// backoff until it fails the session. As a response its first GET is skipped,
+			// and a reconnect ends as Misdirected Request (failed), not auth_required.
+			resp.StatusCode, resp.Status = http.StatusMisdirectedRequest, "421 Misdirected Request"
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("answered 401; the configured credentials are sent only to %s://%s", t.scheme, t.host)
+	}
+	return resp, err
+}
+
+// isOrigin reports whether u is the configured origin, or its https form: an
+// upgrade on the same host protects the credential, a downgrade would expose it.
+func (t *headerTransport) isOrigin(u *url.URL) bool {
+	return sameHost(hostKey(u), t.host) && (strings.EqualFold(u.Scheme, t.scheme) || strings.EqualFold(u.Scheme, "https"))
+}
+
+// hostKey is u's host and port with the scheme's default port left out, so
+// https://h and https://h:443 are one origin.
+func hostKey(u *url.URL) string {
+	if p := u.Port(); (p == "443" && strings.EqualFold(u.Scheme, "https")) || (p == "80" && strings.EqualFold(u.Scheme, "http")) {
+		return strings.TrimSuffix(u.Host, ":"+p)
+	}
+	return u.Host
+}
+
+// isCredentialHeader reports whether a configured header may carry a credential;
+// withholding any other, such as X-Client-Name, cannot explain a 401.
+func isCredentialHeader(k string) bool {
+	k = strings.ToLower(k)
+	for _, part := range []string{"auth", "key", "token", "secret", "pass", "session", "sig", "cred"} {
+		if strings.Contains(k, part) {
+			return true
+		}
+	}
+	return k == "cookie"
+}
+
+// sameHost reports whether two authorities name one server: ASCII letters fold
+// as DNS folds them, every other byte must match, since letters such as σ and ς
+// fold alike yet encode to different names. The port counts.
+func sameHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 // Helper functions
