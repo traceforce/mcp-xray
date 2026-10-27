@@ -329,14 +329,27 @@ func jsonEscapes(v string) []string {
 }
 
 // redactedError reports msg, err's text with the child's secrets masked, and
-// unwraps to err so errors.Is and errors.As still reach it.
+// unwraps to err so errors.Is and errors.As still reach it. brief is msg without
+// the child's output.
 type redactedError struct {
-	msg string
-	err error
+	msg   string
+	brief string
+	err   error
 }
 
 func (e *redactedError) Error() string { return e.msg }
 func (e *redactedError) Unwrap() error { return e.err }
+
+// ReasonWithoutOutput is err's text without a stdio child's output, for findings
+// that config-scan --upload sends off the machine: a child can print a key it read
+// from its own files, which no configured value can mask. The full text stays in
+// the console warning and the local outcomes file.
+func ReasonWithoutOutput(err error) string {
+	if re := (*redactedError)(nil); errors.As(err, &re) {
+		return re.brief
+	}
+	return err.Error()
+}
 
 // redact replaces every occurrence of the secrets in s with one "[redacted]"
 // per masked span, so overlapping matches cannot leave a piece of each other

@@ -169,12 +169,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if tail := stdout.String(); tail != "" {
 			output = append(output, "stdout: "+tail)
 		}
-		msg := "failed to connect: " + err.Error()
+		brief := redact("failed to connect: "+err.Error(), secrets, false)
+		msg := brief
 		if len(output) > 0 {
 			// The SDK error stays last: OutcomeForError classifies by its suffix.
-			msg = fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err)
+			msg = redact(fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err), secrets, false)
 		}
-		return nil, &redactedError{msg: redact(msg, secrets, false), err: err}
+		return nil, &redactedError{msg: msg, brief: brief, err: err}
 	}
 
 	return &SDKSession{
