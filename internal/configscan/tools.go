@@ -124,6 +124,7 @@ func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPSer
 
 	tools, err := libmcp.ListAllTools(ctx, session.Session)
 	if err != nil {
+		err = session.Redact(err) // a server can echo a configured value in its error
 		outcome := libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}
 		// Auth failures get a medium finding that points at credentials and OAuth scopes.
 		if outcome.Status == libmcp.OutcomeAuthRequired {

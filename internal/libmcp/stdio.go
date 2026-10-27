@@ -2,6 +2,7 @@ package libmcp
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -169,8 +172,10 @@ func (t *outputTail) String() string {
 }
 
 // argSecrets returns the parts of a command line that may carry a credential,
-// 8 bytes or more: every argument but a bare flag name, the part after '=' in
-// one, and a URL's user and password.
+// 8 bytes or more: every argument but a bare flag name, the argument after a
+// flag even when it starts with a single '-', and the valueParts of each.
+// ponytail: an attached value (-pVALUE) is not split off; Go-style -transport
+// flags would mask ordinary words.
 func argSecrets(args []string) []string {
 	var secrets []string
 	add := func(v string) {
@@ -178,36 +183,96 @@ func argSecrets(args []string) []string {
 			secrets = append(secrets, v)
 		}
 	}
+	flagValue := false // the previous argument was a flag name, so this one is its value
 	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		isFlag := strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=")
+		// "--" after a flag is the next flag, the first one being boolean.
+		if !isFlag || (flagValue && !strings.HasPrefix(arg, "--")) {
 			add(arg)
 		}
-		if _, value, ok := strings.Cut(arg, "="); ok {
-			add(value)
-		}
-		for _, rest := range strings.Split(arg, "://")[1:] {
-			authority := rest
-			if i := strings.IndexAny(authority, "/?#"); i >= 0 {
-				authority = authority[:i] // userinfo lives before the path, query or fragment
-			}
-			if at := strings.LastIndex(authority, "@"); at >= 0 {
-				user, pass, _ := strings.Cut(authority[:at], ":")
-				for _, v := range []string{user, pass} {
-					add(v)
-					// A child may log the decoded form, so mask that too.
-					if dec, err := url.PathUnescape(v); err == nil && dec != v {
-						add(dec)
-					}
-				}
-			}
+		flagValue = isFlag
+		for _, part := range valueParts(arg) {
+			add(part)
 		}
 	}
 	return secrets
 }
 
-// secretParts returns the values to mask: each value, its lines when it spans
-// several (jsonLines may route them to the diagnostic separately), and the
-// JSON-escaped form of each, since a child that logs structured JSON emits a
+// valueParts returns the parts of a value that may be a credential on their own:
+// the part after '=' in each '&'- or ';'-separated piece (a query or a cookie),
+// the last word of a value with spaces ("Bearer <token>"), the value of a
+// "Name:value" header, and a URL's user and password, as written and decoded,
+// and its long path segments.
+func valueParts(v string) []string {
+	var parts []string
+	if _, value, ok := strings.Cut(v, "="); ok && strings.Contains(value, "&") {
+		parts = append(parts, value) // --password=a&b: the whole value too
+	}
+	for _, piece := range strings.FieldsFunc(v, func(r rune) bool { return r == '&' || r == ';' }) {
+		if _, value, ok := strings.Cut(piece, "="); ok {
+			parts = append(parts, value)
+		}
+	}
+	if words := strings.Fields(v); len(words) > 1 {
+		parts = append(parts, words[len(words)-1])
+	}
+	// mcp-remote's --header X-API-Key:<key> has no space after the colon. A URL
+	// (https://) or a path (C:\...) is not a header.
+	if name, value, ok := strings.Cut(v, ":"); ok && isHeaderName(name) && !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, `\`) {
+		parts = append(parts, value)
+	}
+	for _, rest := range strings.Split(v, "://")[1:] {
+		authority, path := rest, ""
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			authority, path = rest[:i], rest[i:] // userinfo lives before the path, query or fragment
+		}
+		// ponytail: a path segment of 16 bytes or more may be a key (/mcp/<key>/sse): an
+		// error can quote the URL in another form than configured (a masked password, an
+		// SSE messages endpoint), so the whole URL alone does not cover it. Shorter ones are words.
+		for _, seg := range strings.FieldsFunc(path, func(r rune) bool { return strings.ContainsRune("/?#&=", r) }) {
+			if len(seg) >= 16 {
+				parts = append(parts, seg)
+			}
+		}
+		if at := strings.LastIndex(authority, "@"); at >= 0 {
+			user, pass, _ := strings.Cut(authority[:at], ":")
+			for _, s := range []string{user, pass} {
+				parts = append(parts, s)
+				if dec, err := url.PathUnescape(s); err == nil && dec != s { // a child may log the decoded form
+					parts = append(parts, dec)
+				}
+			}
+		}
+	}
+	return parts
+}
+
+// isHeaderName reports whether s is a header name: letters, digits and '-'.
+func isHeaderName(s string) bool {
+	return s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return r != '-' && (r < '0' || r > '9') && (r < 'A' || r > 'Z') && (r < 'a' || r > 'z')
+	}) < 0
+}
+
+// remoteSecrets returns the masking candidates of a remote config: its URL and
+// header values, whole and in parts.
+func remoteSecrets(rawURL string, headers map[string]string) []string {
+	values := []string{rawURL}
+	for _, v := range headers {
+		values = append(values, v)
+	}
+	var all []string
+	for _, v := range values {
+		all = append(append(all, v), valueParts(v)...)
+	}
+	return secretParts(all)
+}
+
+// secretParts returns the values to mask, each without surrounding whitespace
+// (a child that trims a value before logging it must still match, and a
+// trailing newline must not join two reason lines): each value, its lines when
+// it spans several (jsonLines may route them to the diagnostic separately), and
+// the JSON-escaped forms of each, since a child that logs structured JSON emits a
 // value with its quotes, backslashes and newlines escaped.
 func secretParts(values []string) []string {
 	var out []string
@@ -220,22 +285,47 @@ func secretParts(values []string) []string {
 		out = append(out, v)
 	}
 	addForms := func(v string) {
+		v = strings.TrimSpace(v)
 		add(v)
-		if b, err := json.Marshal(v); err == nil {
-			if esc := string(b[1 : len(b)-1]); esc != v { // the quoted body, escapes and all
-				add(esc)
-			}
+		for _, esc := range jsonEscapes(v) {
+			add(esc)
 		}
 	}
 	for _, v := range values {
 		addForms(v)
 		if strings.Contains(v, "\n") {
 			for _, line := range strings.Split(v, "\n") {
-				addForms(strings.TrimSpace(line))
+				addForms(line)
 			}
 		}
 	}
 	return out
+}
+
+// jsonEscapes returns the quoted bodies a JSON logger may print for v: Go's
+// json.Marshal (&, < and > escaped), Node's JSON.stringify and Go's slog (those
+// left raw), and Python's json.dumps (non-ASCII escaped as \uXXXX).
+func jsonEscapes(v string) []string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if enc.Encode(v) != nil {
+		return nil
+	}
+	raw := strings.TrimSuffix(buf.String(), "\n")
+	raw = raw[1 : len(raw)-1]
+	var ascii strings.Builder
+	for _, r := range raw {
+		if r < utf8.RuneSelf {
+			ascii.WriteRune(r)
+			continue
+		}
+		for _, u := range utf16.Encode([]rune{r}) {
+			fmt.Fprintf(&ascii, `\u%04x`, u)
+		}
+	}
+	html, _ := json.Marshal(v)
+	return []string{string(html[1 : len(html)-1]), raw, ascii.String()}
 }
 
 // redactedError reports msg, err's text with the child's secrets masked, and
