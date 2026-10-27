@@ -51,6 +51,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
+	var retryLogin bool   // a refreshed stored login was used, so a 401 is worth one browser login
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
@@ -104,6 +105,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -114,6 +116,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -142,6 +145,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	}
 	if err != nil {
 		cancel()
+		if retryLogin && OutcomeForError(err) == OutcomeAuthRequired {
+			// Scope step-up, an audience change or a revocation: the refreshed token is
+			// not enough, so log in in the browser once instead of reporting auth_required.
+			fmt.Printf("Warning: MCP server '%s' refused the refreshed stored login; logging in again\n", cfg.Name)
+			cfg.skipStoredLogin = true
+			return NewSDKSession(ctx, cfg)
+		}
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
@@ -184,13 +194,31 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 
 	dcrSkippedAuth := false
 	// A stored credential logs in without a browser; a configured Authorization wins over it.
-	if cred, ok := cfg.Credentials[url]; ok && keepable(url, cred, cfg.OAuthTokenEndpoint) && !hasAccessToken(cfg.Headers) {
+	refreshed := false
+	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
+	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
+		disk, err := LoadCredentials(cfg.CredentialsFile)
+		// Never spend the token loaded at startup, which may be spent; a server with no
+		// stored login has none to spend, so an unreadable file does not fail it.
+		if _, stored := cfg.Credentials[url]; err != nil && stored {
+			return nil, false, err
+		}
+		if c, ok := disk[url]; ok {
+			cfg.Credentials[url] = c
+		}
+	}
+	cred, usable, why := cfg.storedLogin(url)
+	if useStored && why != "" {
+		fmt.Printf("Stored login for MCP server '%s' not used: %s\n", cfg.Name, why)
+	}
+	if useStored && usable {
 		accessToken, err := cred.refresh(url)
 		switch {
 		case err == nil:
 			cfg.Credentials[url] = cred // keeps a rotated refresh token
-			cfg.saveCredentials()
+			cfg.saveCredentials(url)
 			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			refreshed = true
 		case cfg.NonInteractive:
 			return nil, false, err
 		default:
@@ -228,13 +256,14 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		} else if accessToken != "" {
 			cfg.Headers = withBearer(cfg.Headers, accessToken)
 			if cfg.Credentials != nil {
+				// One not kept leaves the stored entry alone: another config entry for this
+				// URL, with its own pin, may still use it.
 				if cred != nil && keepable(url, *cred, cfg.OAuthTokenEndpoint) {
 					cfg.Credentials[url] = *cred
+					cfg.saveCredentials(url)
 				} else {
-					delete(cfg.Credentials, url) // nothing this run may reuse
-					fmt.Printf("Login for MCP server '%s' not kept: no refresh token, or its token endpoint is not https on the server's own site\n", cfg.Name)
+					fmt.Printf("Login for MCP server '%s' not kept: %s\n", cfg.Name, cfg.notKeepable())
 				}
-				cfg.saveCredentials()
 			}
 		}
 		// If we cannot discover the access token, just continue with the existing headers
@@ -248,10 +277,11 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		scheme, host = req.URL.Scheme, hostKey(req.URL)
 	}
 	httpClient.Transport = &headerTransport{
-		base:    http.DefaultTransport,
-		headers: cfg.Headers,
-		scheme:  scheme,
-		host:    host,
+		base:      http.DefaultTransport,
+		headers:   cfg.Headers,
+		scheme:    scheme,
+		host:      host,
+		refreshed: refreshed,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -281,10 +311,11 @@ func (s *SDKSession) Close() error {
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
 // requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
-	scheme  string // with host, the only origin the configured headers are sent to
-	host    string
+	base      http.RoundTripper
+	headers   map[string]string
+	scheme    string // with host, the only origin the configured headers are sent to
+	host      string
+	refreshed bool // the bearer came from a refreshed stored login
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {

@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/idna"
@@ -78,15 +79,20 @@ func LoadCredentials(path string) (Credentials, error) {
 }
 
 // Save writes the credentials through a temporary file, so the file is never
-// half written; on Unix it is created owner-only.
+// half written; on Unix it is created owner-only. A symlink keeps pointing at
+// the file it names, and where the rename is refused (a single-file bind mount,
+// a directory the run cannot write) the file is rewritten in place instead.
 func (c Credentials) Save(path string) error {
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return err
 	}
+	if target, err := filepath.EvalSymlinks(path); err == nil {
+		path = target
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
 	if err != nil {
-		return err
+		return writeInPlace(path, data, err)
 	}
 	defer os.Remove(tmp.Name()) // a no-op once renamed
 	if _, err := tmp.Write(data); err != nil {
@@ -100,7 +106,19 @@ func (c Credentials) Save(path string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return writeInPlace(path, data, err)
+	}
+	return nil
+}
+
+// writeInPlace rewrites a file whose directory refuses a temp file or a rename,
+// as a single-file bind mount does; any other write error keeps the old file.
+func writeInPlace(path string, data []byte, cause error) error {
+	if os.WriteFile(path, data, 0600) != nil {
+		return cause
+	}
+	return nil
 }
 
 // keepable reports whether a login may be stored for and reused by an MCP URL:
@@ -114,19 +132,52 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 	if err1 != nil || err2 != nil || m.Scheme != "https" || t.Scheme != "https" {
 		return false
 	}
-	if site(m.Hostname()) == site(t.Hostname()) {
-		return true
+	return sameEndpoint(c.TokenEndpoint, pinned) || site(m.Hostname()) == site(t.Hostname())
+}
+
+// sameEndpoint compares two https URLs as the client dials them: the host in its
+// IDNA form (so İ.com and i.com stay apart), port 443 implied, and a trailing
+// slash ignored.
+func sameEndpoint(a, b string) bool {
+	u, err1 := url.Parse(a)
+	v, err2 := url.Parse(b)
+	if err1 != nil || err2 != nil || u.Scheme != v.Scheme {
+		return false
 	}
-	// The pin authorises an off-site token endpoint by origin, so a 307 to a trailing
-	// slash or a re-encoded endpoint (String lowercases the scheme) still matches a pin
-	// copied verbatim from the AS metadata, which byte-for-byte comparison would miss.
-	if pinned != "" {
-		if p, err := url.Parse(pinned); err == nil &&
-			strings.EqualFold(p.Scheme, t.Scheme) && strings.EqualFold(p.Hostname(), t.Hostname()) && p.Port() == t.Port() {
-			return true
+	uh, err1 := idna.Lookup.ToASCII(u.Hostname())
+	vh, err2 := idna.Lookup.ToASCII(v.Hostname())
+	if err1 != nil || err2 != nil { // IDNA rejects ':' and '_': an IPv6 or underscore host is dialed as written
+		uh, vh = u.Hostname(), v.Hostname()
+	}
+	port := func(u *url.URL) string {
+		if u.Port() == "443" {
+			return ""
 		}
+		return u.Port()
 	}
-	return false
+	return sameHost(uh, vh) && port(u) == port(v) && u.RawQuery == v.RawQuery &&
+		strings.TrimSuffix(u.EscapedPath(), "/") == strings.TrimSuffix(v.EscapedPath(), "/")
+}
+
+// storedLogin returns the login stored for url when this entry may use it, and
+// otherwise why not ("" when none is stored).
+func (cfg MCPServerConfig) storedLogin(url string) (Credential, bool, string) {
+	cred, ok := cfg.Credentials[url]
+	switch {
+	case !ok:
+		return cred, false, ""
+	case !keepable(url, cred, cfg.OAuthTokenEndpoint):
+		return cred, false, cfg.notKeepable()
+	}
+	return cred, true, ""
+}
+
+// notKeepable says why a login is not kept or used, naming the pin when there is one.
+func (cfg MCPServerConfig) notKeepable() string {
+	if cfg.OAuthTokenEndpoint != "" {
+		return "no refresh token, or its token endpoint is neither the pinned " + cfg.OAuthTokenEndpoint + " nor https on the server's own site"
+	}
+	return "no refresh token, or its token endpoint is not https on the server's own site"
 }
 
 // site is a host's registrable domain (mcp.example.com -> example.com), or the
@@ -154,16 +205,31 @@ func site(host string) string {
 	return ascii
 }
 
-// saveCredentials writes the credentials right after a change, so a rotated
-// refresh token survives a crash or cancel later in the run.
-func (cfg MCPServerConfig) saveCredentials() {
+// saveCredentials writes url's entry right after it changes, merged into the file
+// as it is now, so a rotated refresh token survives a crash later in the run and
+// a run overlapping this one keeps its own rotations.
+// ponytail: no file lock; two runs refreshing the same login within one token
+// round trip (re-read, refresh, save) can still race.
+func (cfg MCPServerConfig) saveCredentials(url string) {
 	if cfg.CredentialsFile == "" {
 		return
 	}
-	if err := cfg.Credentials.Save(cfg.CredentialsFile); err != nil {
+	disk, err := LoadCredentials(cfg.CredentialsFile)
+	if err == nil {
+		disk[url] = cfg.Credentials[url]
+		err = disk.Save(cfg.CredentialsFile)
+	}
+	if err != nil { // the file is left as it is
+		credentialsSaveFailed.Store(true)
 		fmt.Printf("Error writing credentials file: %v\n", err)
 	}
 }
+
+var credentialsSaveFailed atomic.Bool
+
+// CredentialsSaveFailed reports whether a save during the run failed, so the run
+// can fail at its end after the other servers were still tried.
+func CredentialsSaveFailed() bool { return credentialsSaveFailed.Load() }
 
 // tokenClient never follows a redirect: it would resend the refresh token in the
 // form body to the Location. Its headerTransport adds MCP X-Ray's User-Agent, so

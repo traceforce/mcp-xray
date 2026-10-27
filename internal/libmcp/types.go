@@ -25,6 +25,7 @@ type MCPServerConfig struct {
 	Credentials        Credentials   // Stored logins by server URL; a browser login is added to it
 	CredentialsFile    string        // Where Credentials is saved after every change; empty keeps them in memory
 	ConnectTimeout     time.Duration // How long initialize may take; 0 means 60 seconds
+	skipStoredLogin    bool          // set for the browser login retried after a refreshed stored login is refused
 }
 
 // EnrichedTool wraps an MCP tool with classified action labels
