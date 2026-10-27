@@ -208,7 +208,8 @@ func site(host string) string {
 // saveCredentials writes url's entry right after it changes, merged into the file
 // as it is now, so a rotated refresh token survives a crash later in the run and
 // a run overlapping this one keeps its own rotations.
-// ponytail: no file lock; two runs saving at the same instant can still race.
+// ponytail: no file lock; two runs refreshing the same login within one token
+// round trip (re-read, refresh, save) can still race.
 func (cfg MCPServerConfig) saveCredentials(url string) {
 	if cfg.CredentialsFile == "" {
 		return
