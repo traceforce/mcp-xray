@@ -104,7 +104,7 @@ Tool lists are paginated to completion; a server that never stops paging is repo
 { "server": "notion", "status": "auth_required", "reason": "failed to connect: calling \"initialize\": sending \"initialize\": Unauthorized", "tool_count": 0 }
 ```
 
-`status` is `ok`, `empty` (connected, but the server lists no tools), `auth_required`, `unlaunchable` (the command could not be started), or `failed`. With `--non-interactive`, MCP X-Ray never opens a browser: a server that needs OAuth is reported as `auth_required` instead of waiting for a login. Each server gets 60 seconds to connect and list its tools. When a stdio server exits or times out before it answers, the `reason` includes the end of its output, as `(stderr: …; stdout: …)`, with configured and inherited environment values and arguments of 8 bytes or more shown as `[redacted]`; shorter values are not masked, so review a reason before sharing it.
+`status` is `ok`, `empty` (connected, but the server lists no tools), `auth_required`, `unlaunchable` (the command could not be started), or `failed`. With `--non-interactive`, MCP X-Ray never opens a browser: a server that needs OAuth is reported as `auth_required` instead of waiting for a login. Each server gets 60 seconds to connect and list its tools. When a stdio server exits or times out before it answers, the `reason` includes the end of its output, as `(stderr: …; stdout: …)`, with configured and inherited environment values and arguments of 8 bytes or more shown as `[redacted]`. Masking is best-effort: shorter values, and anything the server read from its own files, are not masked, so review a reason before sharing it. Findings, which `config-scan --upload` sends to Traceforce Atlas, never include this output.
 
 ### Pentest
 

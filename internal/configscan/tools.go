@@ -103,7 +103,7 @@ func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPSer
 	if err != nil {
 		fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
 		var dcrErr *libmcp.DCRUnauthorizedError
-		msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err)
+		msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %s", server.Name, libmcp.ReasonWithoutOutput(err))
 		if errors.As(err, &dcrErr) {
 			msg = dcrErr.Error()
 		}
