@@ -39,6 +39,8 @@ type OAuthConfig struct {
 	ClientID     string // pre-registered client when server does not support DCR (e.g. Figma)
 	ClientSecret string
 	RedirectURI  string // from config; when set, used as redirect_uri (e.g. cursor://...); when empty, default http://127.0.0.1:8765/callback
+
+	probeUnauthorized bool // the unauthenticated initialize returned 401: the server requires auth
 }
 
 func NewOAuthConfig(mcpUrl string, clientID, clientSecret string, redirectURI string) *OAuthConfig {
@@ -160,7 +162,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	errCh := make(chan string, 1)
 	shutdownServer, err := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
 	if err != nil {
-		return "", nil, &LoginError{Err: err} // never open the browser: whatever holds the port would receive the code
+		return "", nil, err // never open the browser: whatever holds the port would receive the code
 	}
 	defer shutdownServer() // Ensure server is shut down when function returns
 
@@ -175,15 +177,15 @@ func (o *OAuthConfig) OauthDiscovery() (string, *Credential, error) {
 	case code = <-codeCh:
 		// Server will be shut down by defer
 	case err := <-errCh:
-		return "", nil, &LoginError{Err: fmt.Errorf("OAuth error: %s", err)}
+		return "", nil, fmt.Errorf("OAuth error: %s", err)
 	case <-time.After(3 * time.Minute):
-		return "", nil, &LoginError{Err: errors.New("timed out waiting for OAuth callback")}
+		return "", nil, errors.New("timed out waiting for OAuth callback")
 	}
 
 	fmt.Println("6) Exchanging code for tokens…")
 	tok, tokenEP, err := o.exchangeCode(asmd.TokenEndpoint, clientID, clientSecret, code, verifier)
 	if err != nil {
-		return "", nil, &LoginError{Err: err}
+		return "", nil, err
 	}
 	fmt.Println("Access token acquired")
 
@@ -223,6 +225,10 @@ func (o *OAuthConfig) DiscoverPRM() (*PRM, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	// Whether the server requires auth. The fallback to an anonymous connection on a
+	// failed or declined login is keyed on this, not on how far the login got: a server
+	// that answers anonymously yet publishes PRM must still fall back.
+	o.probeUnauthorized = resp.StatusCode == http.StatusUnauthorized
 
 	wwwAuth := resp.Header.Get("WWW-Authenticate")
 	params := o.parseWWWAuthenticate(wwwAuth)
@@ -359,7 +365,13 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	data.Set("code_verifier", codeVerifier)
 	data.Set("resource", o.MCPUrl)
 
-	req, _ := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
+	// A malformed server-advertised token endpoint makes http.NewRequest return a nil
+	// request; setting a header on it panicked the whole run after the user had already
+	// consented. Report the parse failure instead.
+	req, err := http.NewRequest("POST", tokenEP, strings.NewReader(data.Encode()))
+	if err != nil {
+		return TokenResponse{}, "", errors.New("token exchange failed: the token endpoint is not a valid URL")
+	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	// The client and its redirect policy are base's: the token endpoint is one the
@@ -372,7 +384,9 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	}
 	defer resp.Body.Close()
 	tr, reason := readTokenReply(resp)
-	if resp.StatusCode/100 != 2 || tr.AccessToken == "" {
+	// Read the reply like a refresh: an RFC 6749 error code is a refusal even when the
+	// server also returns an access_token, so the exchange failure is reported, not hidden.
+	if resp.StatusCode/100 != 2 || tr.AccessToken == "" || oauthErrorCodes[tr.Error] {
 		return TokenResponse{}, "", fmt.Errorf("token exchange failed: %s", reason)
 	}
 	return tr.TokenResponse, resp.Request.URL.String(), nil
