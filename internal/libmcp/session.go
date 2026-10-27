@@ -208,17 +208,23 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
-			var le *LoginError // the login began: report its failure, not an anonymous retry's 401
-			if errors.As(err, &le) {
-				return nil, false, err
-			}
-			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
+			switch {
+			case errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "":
+				// DCR 403 with no configured client: show the hint and let the anonymous
+				// attempt report auth_required.
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
-			} else {
+				fmt.Printf("Attempting connection without authentication...\n")
+			case oauthConfig.probeUnauthorized:
+				// The server requires auth (the unauthenticated probe returned 401): report
+				// the real login or discovery failure, never hide it behind an anonymous 401.
+				return nil, false, err
+			default:
+				// Optional-auth server: the unauthenticated probe answered, so a declined or
+				// failed login falls back to the anonymous connection.
 				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+				fmt.Printf("Attempting connection without authentication...\n")
 			}
-			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
 			cfg.Headers = withBearer(cfg.Headers, accessToken)
 			if cfg.Credentials != nil {
@@ -403,7 +409,18 @@ func envToSlice(env map[string]string) []string {
 // over a stored or browser login.
 func hasAccessToken(headers map[string]string) bool {
 	for k, v := range headers {
-		if strings.EqualFold(k, "Authorization") && strings.TrimSpace(v) != "" {
+		if !strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		// mcp-xray does not expand header placeholders, so an unexpanded ${env:…} or
+		// {{TOKEN}} is not a credential and must not block a stored or browser login.
+		if strings.Contains(v, "${") || strings.Contains(v, "{{") {
+			continue
+		}
+		// A real Authorization is a scheme plus a non-empty credential ("Bearer x");
+		// a bare scheme ("Bearer") carries nothing.
+		if scheme, cred, ok := strings.Cut(v, " "); ok && scheme != "" && strings.TrimSpace(cred) != "" {
 			return true
 		}
 	}

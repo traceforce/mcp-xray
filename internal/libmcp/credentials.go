@@ -40,14 +40,6 @@ type CredentialError struct{ Err error }
 func (e *CredentialError) Error() string { return e.Err.Error() }
 func (e *CredentialError) Unwrap() error { return e.Err }
 
-// LoginError marks a browser login that began and then failed (no free callback
-// port, an error or no callback, or the code exchange): the server is auth-gated, so a run must not fall
-// back to an anonymous connection whose 401 would hide the cause as auth_required.
-type LoginError struct{ Err error }
-
-func (e *LoginError) Error() string { return e.Err.Error() }
-func (e *LoginError) Unwrap() error { return e.Err }
-
 // LoadCredentials reads a credentials file; a missing or empty file is an empty set.
 func LoadCredentials(path string) (Credentials, error) {
 	// Refused like an ssh key when others can read it (Unix only: Windows has no mode bits).
@@ -60,7 +52,9 @@ func LoadCredentials(path string) (Credentials, error) {
 	}
 	var creds Credentials
 	if len(bytes.TrimSpace(data)) > 0 {
-		// Strict, so an MCP config passed by mistake is refused rather than rewritten.
+		// Strict: a login entry with a field this version does not know is refused rather
+		// than loaded and silently dropped on the next Save (a whole MCP config pasted by
+		// mistake is caught by the entry loop below).
 		dec := json.NewDecoder(bytes.NewReader(data))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&creds); err != nil {
@@ -120,7 +114,19 @@ func keepable(mcpURL string, c Credential, pinned string) bool {
 	if err1 != nil || err2 != nil || m.Scheme != "https" || t.Scheme != "https" {
 		return false
 	}
-	return c.TokenEndpoint == pinned || site(m.Hostname()) == site(t.Hostname())
+	if site(m.Hostname()) == site(t.Hostname()) {
+		return true
+	}
+	// The pin authorises an off-site token endpoint by origin, so a 307 to a trailing
+	// slash or a re-encoded endpoint (String lowercases the scheme) still matches a pin
+	// copied verbatim from the AS metadata, which byte-for-byte comparison would miss.
+	if pinned != "" {
+		if p, err := url.Parse(pinned); err == nil &&
+			strings.EqualFold(p.Scheme, t.Scheme) && strings.EqualFold(p.Hostname(), t.Hostname()) && p.Port() == t.Port() {
+			return true
+		}
+	}
+	return false
 }
 
 // site is a host's registrable domain (mcp.example.com -> example.com), or the
@@ -231,9 +237,20 @@ func (c *Credential) refresh(resource string) (string, error) {
 	// (invalid_target, invalid_token), or an endpoint gone or moved for good, which a
 	// new login rediscovers.
 	// Anything else, such as a WAF's HTML 403, a 405 or a 5xx, is an outage.
-	refused := oauthErrorCodes[tok.Error]
+	// A 408/429/5xx is an outage even when it carries an RFC error code (429
+	// invalid_request, 503 invalid_grant); the stored login stays.
+	outage := resp.StatusCode == http.StatusRequestTimeout || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode/100 == 5
+	refused := !outage && oauthErrorCodes[tok.Error]
 	switch resp.StatusCode {
 	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusNotFound, http.StatusGone, http.StatusMovedPermanently, http.StatusPermanentRedirect:
+		refused = true
+	}
+	// A 2xx that answered with no access token and a non-empty error is the endpoint
+	// refusing the stored token in a non-RFC shape (Slack's 200 {"ok":false,"error":...}),
+	// so a new browser login is worth it. temporarily_unavailable, server_error and
+	// slow_down are the RFC's transient codes: those stay an outage.
+	if resp.StatusCode/100 == 2 && tok.AccessToken == "" && tok.Error != "" &&
+		tok.Error != "temporarily_unavailable" && tok.Error != "server_error" && tok.Error != "slow_down" {
 		refused = true
 	}
 	switch {
