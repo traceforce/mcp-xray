@@ -56,8 +56,9 @@ func TestSummaryComplete(t *testing.T) {
 		summary  Summary
 		complete bool
 	}{
-		{Summary{Servers: 2, ServersWithoutTools: 1, CasesPlanned: 2, CasesExecuted: 2, CasesReview: 1, CasesNotApplicable: 1}, true},
+		{Summary{Servers: 1, CasesPlanned: 2, CasesExecuted: 2, CasesReview: 1, CasesNotApplicable: 1}, true},
 		{Summary{}, false},
+		{Summary{Servers: 2, ServersWithoutTools: 1, CasesPlanned: 1, CasesExecuted: 1, CasesPassed: 1}, false},
 		{Summary{Servers: 1, ServersSkipped: 1}, false},
 		{Summary{Servers: 1, CasesPlanned: 1, CasesSkipped: 1}, false},
 		{Summary{Servers: 1, CasesPlanned: 1, CasesExecuted: 1, CasesErrored: 1}, false},

@@ -45,9 +45,10 @@ type Summary struct {
 	FindingsRemoved     int `json:"findingsRemovedByVerifier"`
 }
 
-// Complete reports whether at least one server ran and no server or test case was skipped, errored or left inconclusive.
+// Complete reports whether at least one server ran and no server was skipped or without tools, and no
+// test case was skipped, errored or left inconclusive.
 func (s Summary) Complete() bool {
-	return s.Servers > 0 && s.ServersSkipped+s.CasesSkipped+s.CasesErrored+s.CasesInconclusive == 0
+	return s.Servers > 0 && s.ServersSkipped+s.ServersWithoutTools+s.CasesSkipped+s.CasesErrored+s.CasesInconclusive == 0
 }
 
 type Notification struct {
