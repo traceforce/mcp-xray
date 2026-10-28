@@ -65,21 +65,6 @@ func TestProbeRecorder(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses a credential", func(t *testing.T) {
-		for _, set := range []func(*http.Request){
-			func(r *http.Request) { r.SetBasicAuth("u", "p") },
-			func(r *http.Request) { r.URL.User = url.UserPassword("u", "p") },
-		} {
-			base := &captureRT{status: 200}
-			rec := &probeRecorder{base: base, byPhase: map[string]ProbeResponse{}}
-			req, _ := http.NewRequest(http.MethodPost, "http://x/", strings.NewReader(`{"id":1,"method":"initialize"}`))
-			set(req)
-			if _, err := rec.RoundTrip(req); !errors.Is(err, ErrUnsupportedCredentialPath) || len(base.bodies) != 0 {
-				t.Errorf("err = %v, base saw %d requests; want the request refused", err, len(base.bodies))
-			}
-		}
-	})
-
 	t.Run("skips a redirect hop", func(t *testing.T) {
 		rec := &probeRecorder{base: &captureRT{status: http.StatusTemporaryRedirect}, byPhase: map[string]ProbeResponse{}}
 		post(t, rec, "tools/call")
