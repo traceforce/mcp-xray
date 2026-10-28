@@ -39,15 +39,12 @@ proto:
 install: build
 	install -m 0755 $(BINARY) $(DESTDIR)
 
-# Run the same checks CI runs. Excludes only the configscan package, whose tests make
-# live network calls to third-party servers (not a deterministic gate).
+# Run the same checks CI runs. Tests that reach the public internet are behind the
+# integration build tag: vet still compiles them, go test -tags integration runs them.
 ci:
 	go build ./...
-	go vet ./...
-	@pkgs=$$(go list ./...) || exit 1; \
-		pkgs=$$(printf '%s\n' "$$pkgs" | grep -v '/internal/configscan$$'); \
-		[ -n "$$pkgs" ] || { echo "no packages to test" >&2; exit 1; }; \
-		go test $$pkgs
+	go vet -tags integration ./...
+	go test ./...
 
 # Clean generated files
 clean:
