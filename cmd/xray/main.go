@@ -431,7 +431,7 @@ func NewPentestCommand() *cobra.Command {
 
 			// Run pentest
 			ctx := context.Background()
-			findings, err := pentestTool.Pentest(ctx, testPlanPath)
+			findings, outcomes, err := pentestTool.Pentest(ctx, testPlanPath)
 			if err != nil {
 				fmt.Printf("Error running pentest: %v\n", err)
 				os.Exit(1)
@@ -463,7 +463,7 @@ func NewPentestCommand() *cobra.Command {
 			if isDirectory && !testPlanDirUserSpecified {
 				testPlanDirPath = testPlanPath
 			}
-			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath)
+			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath, outcomes...)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -535,7 +535,7 @@ func NewVerifyCommand() *cobra.Command {
 				os.Exit(1)
 			}
 
-			findings, err := pentest.ParseSarifToFindings(sarifPath)
+			findings, outcomes, err := pentest.ParseSarifToFindings(sarifPath)
 			if err != nil {
 				fmt.Printf("Error parsing SARIF file: %v\n", err)
 				os.Exit(1)
@@ -564,7 +564,7 @@ func NewVerifyCommand() *cobra.Command {
 				}
 			}
 
-			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "")
+			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "", outcomes...)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -596,8 +596,8 @@ func main() {
 	}
 }
 
-func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
-	sarifBytes, err := report.GenerateSarif(findings)
+func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string, outcomes ...report.Outcome) (string, error) {
+	sarifBytes, err := report.GenerateSarif(findings, outcomes)
 	if err != nil {
 		return "", fmt.Errorf("error generating SARIF report: %w", err)
 	}

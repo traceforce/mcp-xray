@@ -17,8 +17,25 @@ type SARIFReport struct {
 }
 
 type Run struct {
-	Tool    Tool     `json:"tool"`
-	Results []Result `json:"results"`
+	Tool        Tool         `json:"tool"`
+	Results     []Result     `json:"results"`
+	Invocations []Invocation `json:"invocations,omitempty"`
+}
+
+type Invocation struct {
+	ExecutionSuccessful        bool           `json:"executionSuccessful"`
+	ToolExecutionNotifications []Notification `json:"toolExecutionNotifications,omitempty"`
+}
+
+type Notification struct {
+	Level      string         `json:"level"`
+	Message    Message        `json:"message"`
+	Descriptor Descriptor     `json:"descriptor"`
+	Properties map[string]any `json:"properties,omitempty"`
+}
+
+type Descriptor struct {
+	ID string `json:"id"`
 }
 
 type Tool struct {
@@ -40,6 +57,7 @@ type ReportingRule struct {
 
 type Result struct {
 	RuleID     string                 `json:"ruleId"`
+	Kind       string                 `json:"kind,omitempty"`
 	Level      string                 `json:"level,omitempty"`
 	Message    Message                `json:"message"`
 	Locations  []Location             `json:"locations,omitempty"`
@@ -67,7 +85,15 @@ type Message struct {
 	Text string `json:"text"`
 }
 
-func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
+// Outcome is a pentest check that produced no finding: its evaluation state and the reason.
+type Outcome struct {
+	RuleID, Kind, Reason string
+	Properties           map[string]any
+}
+
+// GenerateSarif renders findings as results, each non-errored outcome as a result
+// carrying its kind, and errored outcomes as tool execution notifications.
+func GenerateSarif(findings []*proto.Finding, outcomes []Outcome) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -163,6 +189,22 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 		results = append(results, result)
 	}
 
+	inv := Invocation{ExecutionSuccessful: true}
+	for _, o := range outcomes {
+		switch o.Kind {
+		case "pass", "notApplicable", "review":
+			results = append(results, Result{RuleID: o.RuleID, Kind: o.Kind, Level: "none", Message: Message{Text: o.Reason}, Properties: o.Properties})
+		case "fail":
+			results = append(results, Result{RuleID: o.RuleID, Kind: "fail", Level: "error", Message: Message{Text: o.Reason}, Properties: o.Properties})
+		case "errored":
+			inv.ExecutionSuccessful = false
+			inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications,
+				Notification{Level: "error", Message: Message{Text: o.Reason}, Descriptor: Descriptor{ID: o.RuleID}, Properties: o.Properties})
+		default:
+			return nil, fmt.Errorf("outcome %s: unknown kind %q", o.RuleID, o.Kind)
+		}
+	}
+
 	// Build the SARIF report
 	report := SARIFReport{
 		Version: "2.1.0",
@@ -180,6 +222,9 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 				Results: results,
 			},
 		},
+	}
+	if len(outcomes) > 0 {
+		report.Runs[0].Invocations = []Invocation{inv}
 	}
 
 	// Marshal to JSON
