@@ -16,6 +16,14 @@ type MCPServerConfig struct {
 	OAuthClientID     string
 	OAuthClientSecret string
 	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
+	AuthPolicy        AuthPolicy
+}
+
+// AuthPolicy is the operator-declared access expectation for a server's tools.
+type AuthPolicy struct {
+	Protected  []string `json:"protected"`
+	Public     []string `json:"public"`
+	Repeatable []string `json:"repeatable"`
 }
 
 // ServerToolsData represents tools data for a single server
