@@ -160,7 +160,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	fmt.Println("4) Starting local redirect server…")
 	codeCh := make(chan string, 1)
 	errCh := make(chan string, 1)
-	shutdownServer := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort)
+	shutdownServer := startRedirectServer(codeCh, errCh, defaultRedirectHost, defaultRedirectPort, state)
 	defer shutdownServer() // Ensure server is shut down when function returns
 
 	fmt.Println("5) Opening browser for login/consent…")
@@ -186,7 +186,7 @@ func (o *OAuthConfig) OauthDiscovery() (string, error) {
 	if tok.AccessToken == "" {
 		log.Fatal("Token exchange failed: no access_token")
 	}
-	fmt.Printf(" Access token acquired %+v\n\n", tok)
+	fmt.Println(" Access token acquired")
 
 	return tok.AccessToken, nil
 }
@@ -315,7 +315,6 @@ func (o *OAuthConfig) DynamicClientRegister(asmd *ASMetadata) (*DCRResponse, err
 	if err := json.NewDecoder(resp.Body).Decode(&dcr); err != nil {
 		return nil, err
 	}
-	fmt.Printf("DCR response: %+v\n", dcr)
 	return &dcr, nil
 }
 
@@ -376,10 +375,15 @@ func (o *OAuthConfig) exchangeCode(tokenEP, clientID, clientSecret, code, codeVe
 	return tr
 }
 
-func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int) func() {
+func startRedirectServer(codeCh chan<- string, errCh chan<- string, host string, port int, state string) func() {
 	mux := http.NewServeMux()
 	mux.HandleFunc(RedirectPath, func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		// A callback without this login's state is ignored, so the login keeps waiting for its own.
+		if q.Get("state") != state {
+			http.Error(w, "State mismatch", 400)
+			return
+		}
 		if e := q.Get("error"); e != "" {
 			errCh <- e
 			http.Error(w, "OAuth failed, you can close this tab.", 400)

@@ -40,7 +40,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) 
 
 	findings := []*proto.Finding{}
 	for _, server := range servers {
-		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
+		fmt.Printf("Scanning MCP Server %s\n", server.Name)
 		classification := libmcp.ClassifyTransport(server)
 		switch classification {
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
