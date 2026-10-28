@@ -322,6 +322,10 @@ type probeRecorder struct {
 }
 
 func (r *probeRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	// A server-supplied URL (redirect or SSE endpoint) with userinfo makes net/http add Basic auth.
+	if req.Header.Get("Authorization") != "" {
+		return nil, fmt.Errorf("%w: the request carries a credential", ErrUnsupportedCredentialPath)
+	}
 	phase := ""
 	switch req.Method {
 	case http.MethodGet:

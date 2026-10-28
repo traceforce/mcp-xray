@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -186,6 +187,30 @@ func TestNewSDKSessionDCRUnauthorized(t *testing.T) {
 				t.Fatalf("err = %v, want a DCRUnauthorizedError only when registration was refused", err)
 			}
 		})
+	}
+}
+
+func TestUnauthenticatedProbeRefusesRedirectUserinfo(t *testing.T) {
+	var credentialed atomic.Int32
+	mux := http.NewServeMux()
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		u, _ := url.Parse(ts.URL + "/real")
+		u.User = url.UserPassword("u", "p")
+		http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/real", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credentialed.Add(1)
+		}
+	})
+	u := ts.URL + "/mcp"
+	if _, err := NewUnauthenticatedSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u}); err == nil {
+		t.Fatal("connected through a redirect that carries a credential")
+	}
+	if n := credentialed.Load(); n != 0 {
+		t.Errorf("%d requests carried a credential", n)
 	}
 }
 
