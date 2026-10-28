@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -61,6 +62,21 @@ func TestProbeRecorder(t *testing.T) {
 		}
 		if len(base.bodies) == 0 || !strings.Contains(base.bodies[0], `"method":"initialize"`) {
 			t.Errorf("base did not see restored body: %v", base.bodies)
+		}
+	})
+
+	t.Run("refuses a credential", func(t *testing.T) {
+		for _, set := range []func(*http.Request){
+			func(r *http.Request) { r.SetBasicAuth("u", "p") },
+			func(r *http.Request) { r.URL.User = url.UserPassword("u", "p") },
+		} {
+			base := &captureRT{status: 200}
+			rec := &probeRecorder{base: base, byPhase: map[string]ProbeResponse{}}
+			req, _ := http.NewRequest(http.MethodPost, "http://x/", strings.NewReader(`{"id":1,"method":"initialize"}`))
+			set(req)
+			if _, err := rec.RoundTrip(req); !errors.Is(err, ErrUnsupportedCredentialPath) || len(base.bodies) != 0 {
+				t.Errorf("err = %v, base saw %d requests; want the request refused", err, len(base.bodies))
+			}
 		}
 	})
 
@@ -154,6 +170,30 @@ func TestUnauthenticatedProbeStreamableConnects(t *testing.T) {
 	defer sess.Close()
 	if pr, ok := sess.Probe("initialize"); !ok || pr.Status != 200 {
 		t.Errorf("probe initialize = %+v ok=%v, want 200", pr, ok)
+	}
+}
+
+func TestUnauthenticatedProbeRefusesRedirectUserinfo(t *testing.T) {
+	var credentialed atomic.Int32
+	mux := http.NewServeMux()
+	ts := httptest.NewServer(mux)
+	t.Cleanup(ts.Close)
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		u, _ := url.Parse(ts.URL + "/real")
+		u.User = url.UserPassword("u", "p")
+		http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
+	})
+	mux.HandleFunc("/real", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			credentialed.Add(1)
+		}
+	})
+	u := ts.URL + "/mcp"
+	if _, err := NewUnauthenticatedSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u}); err == nil {
+		t.Fatal("connected through a redirect that carries a credential")
+	}
+	if n := credentialed.Load(); n != 0 {
+		t.Errorf("%d requests carried a credential", n)
 	}
 }
 
