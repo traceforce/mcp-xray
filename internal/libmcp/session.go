@@ -37,7 +37,12 @@ type SDKSession struct {
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
 	recorder  *probeRecorder // set only for anonymous probe sessions
+	// OAuthFallback says why OAuth discovery did not complete when the session connected without an OAuth token.
+	OAuthFallback string
 }
+
+// dcrUnsupported is the OAuthFallback when the server refuses dynamic client registration.
+const dcrUnsupported = "server does not support dynamic client registration"
 
 // ErrUnsupportedCredentialPath marks a config whose credentials mcp-xray cannot
 // remove, so an anonymous probe would not actually be credential-free.
@@ -63,7 +68,7 @@ func (e *ProbeError) Unwrap() error { return e.Err }
 // NewSDKSession creates a new session using the official MCP SDK
 func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error) {
 	var transport mcp.Transport
-	var dcrSkipped bool
+	var oauthFallback string
 
 	// Determine transport type
 	transportType := ClassifyTransport(cfg)
@@ -95,21 +100,21 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		transport = &mcp.CommandTransport{Command: cmd}
 
 	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
-		httpClient, dcrSkippedAuth, err := newHTTPClient(cfg)
+		httpClient, fallback, err := newHTTPClient(cfg)
 		if err != nil {
 			return nil, err
 		}
-		dcrSkipped = dcrSkippedAuth
+		oauthFallback = fallback
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
 		}
 	case proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE:
-		httpClient, dcrSkippedAuth, err := newHTTPClient(cfg)
+		httpClient, fallback, err := newHTTPClient(cfg)
 		if err != nil {
 			return nil, err
 		}
-		dcrSkipped = dcrSkippedAuth
+		oauthFallback = fallback
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -121,11 +126,12 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	sess, err := connect(ctx, transport, transportType, nil)
 	if err != nil {
-		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
+		if oauthFallback == dcrUnsupported && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
+	sess.OAuthFallback = oauthFallback
 	return sess, nil
 }
 
@@ -217,11 +223,12 @@ func (s *SDKSession) Probe(phase string) (ProbeResponse, bool) {
 	return pr, ok
 }
 
-func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
+// newHTTPClient builds cfg's HTTP client and returns the OAuthFallback reason, if any.
+func newHTTPClient(cfg MCPServerConfig) (*http.Client, string, error) {
 	// Note: The official SDK does not yet support HTTP transport directly
 	// Return error to fall back to custom implementation
 	if cfg.URL == nil {
-		return nil, false, fmt.Errorf("no URL specified for HTTP transport")
+		return nil, "", fmt.Errorf("no URL specified for HTTP transport")
 	}
 	url := *cfg.URL
 
@@ -230,13 +237,14 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		Timeout: 20 * time.Second,
 	}
 
-	dcrSkippedAuth := false
+	fallback := ""
 	if !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, err := oauthConfig.OauthDiscovery()
 		if err != nil {
+			fallback = "OAuth discovery did not complete"
 			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
-				dcrSkippedAuth = true
+				fallback = dcrUnsupported
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
 			} else {
 				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
@@ -260,7 +268,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		}
 	}
 
-	return httpClient, dcrSkippedAuth, nil
+	return httpClient, fallback, nil
 }
 
 // Close closes the session

@@ -157,6 +157,38 @@ func TestUnauthenticatedProbeStreamableConnects(t *testing.T) {
 	}
 }
 
+func TestNewSDKSessionDCRUnauthorized(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		dcr403 bool
+	}{
+		{name: "registration refused", dcr403: true},
+		{name: "discovery fails"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+				return mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+			}, nil)
+			mux := http.NewServeMux()
+			mux.Handle("/mcp", auth.RequireBearerToken(func(context.Context, string, *http.Request) (*auth.TokenInfo, error) {
+				return nil, auth.ErrInvalidToken
+			}, nil)(h))
+			if tc.dcr403 {
+				mux.HandleFunc("/.well-known/oauth-protected-resource", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+				mux.HandleFunc("/register", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+			}
+			ts := httptest.NewServer(mux)
+			t.Cleanup(ts.Close)
+			url := ts.URL + "/mcp"
+			_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &url})
+			var dcr *DCRUnauthorizedError
+			if err == nil || errors.As(err, &dcr) != tc.dcr403 {
+				t.Fatalf("err = %v, want a DCRUnauthorizedError only when registration was refused", err)
+			}
+		})
+	}
+}
+
 func TestUnauthenticatedProbeSSERejected(t *testing.T) {
 	url, _ := testServer(t, true, true)
 	_, err := NewUnauthenticatedSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &url})

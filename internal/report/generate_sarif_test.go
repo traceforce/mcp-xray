@@ -12,7 +12,7 @@ var oneFinding = []*proto.Finding{{RuleId: "AUTH-MISSING", Title: "t", Severity:
 
 func render(t *testing.T, outcomes []Outcome) ([]byte, Run) {
 	t.Helper()
-	b, err := GenerateSarif(oneFinding, outcomes)
+	b, err := GenerateSarif(oneFinding, outcomes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,25 @@ func TestGenerateSarifOutcomes(t *testing.T) {
 	if n := run.Invocations[0].ToolExecutionNotifications; len(n) != 1 || n[0].Level != "error" || n[0].Descriptor.ID != "AUTH-MISSING" || n[0].Message.Text != "e" || n[0].Properties["phase"] != "tools/call" {
 		t.Fatalf("notifications = %+v", n)
 	}
-	if _, err := GenerateSarif(oneFinding, []Outcome{{RuleID: "AUTH-MISSING", Kind: "maybe"}}); err == nil {
+	if _, err := GenerateSarif(oneFinding, []Outcome{{RuleID: "AUTH-MISSING", Kind: "maybe"}}, nil); err == nil {
 		t.Fatal("unknown kind must be rejected")
+	}
+}
+
+func TestSummaryComplete(t *testing.T) {
+	for _, tc := range []struct {
+		summary  Summary
+		complete bool
+	}{
+		{Summary{Servers: 2, ServersWithoutTools: 1, CasesPlanned: 2, CasesExecuted: 2, CasesReview: 1, CasesNotApplicable: 1}, true},
+		{Summary{}, false},
+		{Summary{Servers: 1, ServersSkipped: 1}, false},
+		{Summary{Servers: 1, CasesPlanned: 1, CasesSkipped: 1}, false},
+		{Summary{Servers: 1, CasesPlanned: 1, CasesExecuted: 1, CasesErrored: 1}, false},
+		{Summary{Servers: 1, CasesPlanned: 1, CasesExecuted: 1, CasesInconclusive: 1}, false},
+	} {
+		if tc.summary.Complete() != tc.complete {
+			t.Errorf("Complete() for %+v = %v, want %v", tc.summary, !tc.complete, tc.complete)
+		}
 	}
 }

@@ -153,7 +153,7 @@ func NewConfigScanCommand() *cobra.Command {
 			outputUserSpecified := outputPath != ""
 			// Use the actual config path as source name (when uploading, configPaths has exactly one element)
 			sourceName := configPaths[0]
-			actualOutputPath, err := writeFindings(allFindings, outputPath, "config-scan", shouldUpload, sourceName, toolsOutputFile, "")
+			actualOutputPath, err := writeFindings(allFindings, outputPath, "config-scan", shouldUpload, sourceName, toolsOutputFile, "", nil, nil)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -293,7 +293,7 @@ func NewRepoScanCommand() *cobra.Command {
 			if repoPath != "." {
 				sourceName = filepath.Base(repoPath)
 			}
-			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, sourceName, "", "")
+			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, sourceName, "", "", nil, nil)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -431,7 +431,7 @@ func NewPentestCommand() *cobra.Command {
 
 			// Run pentest
 			ctx := context.Background()
-			findings, outcomes, err := pentestTool.Pentest(ctx, testPlanPath)
+			findings, outcomes, summary, err := pentestTool.Pentest(ctx, testPlanPath)
 			if err != nil {
 				fmt.Printf("Error running pentest: %v\n", err)
 				os.Exit(1)
@@ -463,7 +463,7 @@ func NewPentestCommand() *cobra.Command {
 			if isDirectory && !testPlanDirUserSpecified {
 				testPlanDirPath = testPlanPath
 			}
-			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath, outcomes...)
+			actualOutputPath, err := writeFindings(findings, outputPath, "pentest", upload, sourceName, "", testFilePath, outcomes, summary)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -564,7 +564,7 @@ func NewVerifyCommand() *cobra.Command {
 				}
 			}
 
-			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "", outcomes...)
+			actualOutputPath, err := writeFindings(verifiedFindings, outputPath, "verify", upload, sarifPath, "", "", outcomes, nil)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -596,8 +596,8 @@ func main() {
 	}
 }
 
-func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string, outcomes ...report.Outcome) (string, error) {
-	sarifBytes, err := report.GenerateSarif(findings, outcomes)
+func writeFindings(findings []*proto.Finding, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string, outcomes []report.Outcome, summary *report.Summary) (string, error) {
+	sarifBytes, err := report.GenerateSarif(findings, outcomes, summary)
 	if err != nil {
 		return "", fmt.Errorf("error generating SARIF report: %w", err)
 	}

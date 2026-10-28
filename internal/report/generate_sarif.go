@@ -25,6 +25,29 @@ type Run struct {
 type Invocation struct {
 	ExecutionSuccessful        bool           `json:"executionSuccessful"`
 	ToolExecutionNotifications []Notification `json:"toolExecutionNotifications,omitempty"`
+	Properties                 *Summary       `json:"properties,omitempty"`
+}
+
+// Summary counts what a pentest run did; executed cases are the planned ones that were not skipped.
+type Summary struct {
+	Servers             int `json:"servers"`
+	ServersSkipped      int `json:"serversSkipped"`
+	ServersWithoutTools int `json:"serversWithoutTools"`
+	CasesPlanned        int `json:"testCasesPlanned"`
+	CasesExecuted       int `json:"testCasesExecuted"`
+	CasesPassed         int `json:"testCasesPassed"`
+	CasesFailed         int `json:"testCasesFailed"`
+	CasesReview         int `json:"testCasesReview"`
+	CasesInconclusive   int `json:"testCasesInconclusive"`
+	CasesNotApplicable  int `json:"testCasesNotApplicable"`
+	CasesSkipped        int `json:"testCasesSkipped"`
+	CasesErrored        int `json:"testCasesErrored"`
+	FindingsRemoved     int `json:"findingsRemovedByVerifier"`
+}
+
+// Complete reports whether at least one server ran and no server or test case was skipped, errored or left inconclusive.
+func (s Summary) Complete() bool {
+	return s.Servers > 0 && s.ServersSkipped+s.CasesSkipped+s.CasesErrored+s.CasesInconclusive == 0
 }
 
 type Notification struct {
@@ -91,9 +114,9 @@ type Outcome struct {
 	Properties           map[string]any
 }
 
-// GenerateSarif renders findings as results, each non-errored outcome as a result
-// carrying its kind, and errored outcomes as tool execution notifications.
-func GenerateSarif(findings []*proto.Finding, outcomes []Outcome) ([]byte, error) {
+// GenerateSarif renders findings and outcomes as results, errored and skipped outcomes as error and warning
+// notifications, and a pentest summary as invocation properties.
+func GenerateSarif(findings []*proto.Finding, outcomes []Outcome, summary *Summary) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -189,17 +212,24 @@ func GenerateSarif(findings []*proto.Finding, outcomes []Outcome) ([]byte, error
 		results = append(results, result)
 	}
 
-	inv := Invocation{ExecutionSuccessful: true}
+	inv := Invocation{ExecutionSuccessful: true, Properties: summary}
 	for _, o := range outcomes {
 		switch o.Kind {
-		case "pass", "notApplicable", "review":
+		case "pass", "notApplicable", "review", "informational":
+			if o.Properties["outcome"] == "inconclusive" {
+				inv.ExecutionSuccessful = false
+			}
 			results = append(results, Result{RuleID: o.RuleID, Kind: o.Kind, Level: "none", Message: Message{Text: o.Reason}, Properties: o.Properties})
 		case "fail":
 			results = append(results, Result{RuleID: o.RuleID, Kind: "fail", Level: "error", Message: Message{Text: o.Reason}, Properties: o.Properties})
-		case "errored":
+		case "errored", "skipped":
+			level := "error"
+			if o.Kind == "skipped" {
+				level = "warning"
+			}
 			inv.ExecutionSuccessful = false
 			inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications,
-				Notification{Level: "error", Message: Message{Text: o.Reason}, Descriptor: Descriptor{ID: o.RuleID}, Properties: o.Properties})
+				Notification{Level: level, Message: Message{Text: o.Reason}, Descriptor: Descriptor{ID: o.RuleID}, Properties: o.Properties})
 		default:
 			return nil, fmt.Errorf("outcome %s: unknown kind %q", o.RuleID, o.Kind)
 		}
@@ -223,7 +253,7 @@ func GenerateSarif(findings []*proto.Finding, outcomes []Outcome) ([]byte, error
 			},
 		},
 	}
-	if len(outcomes) > 0 {
+	if len(outcomes) > 0 || summary != nil {
 		report.Runs[0].Invocations = []Invocation{inv}
 	}
 
