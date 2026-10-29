@@ -22,44 +22,15 @@ type Run struct {
 	Invocations []Invocation `json:"invocations,omitempty"`
 }
 
+// Invocation says whether the run did all its work; each skipped item is a warning notification.
 type Invocation struct {
 	ExecutionSuccessful        bool           `json:"executionSuccessful"`
 	ToolExecutionNotifications []Notification `json:"toolExecutionNotifications,omitempty"`
-	Properties                 *Summary       `json:"properties,omitempty"`
-}
-
-// Summary counts what a pentest run did; executed cases are the planned ones that were not skipped.
-type Summary struct {
-	Servers             int `json:"servers"`
-	ServersSkipped      int `json:"serversSkipped"`
-	ServersWithoutTools int `json:"serversWithoutTools"`
-	CasesPlanned        int `json:"testCasesPlanned"`
-	CasesExecuted       int `json:"testCasesExecuted"`
-	CasesPassed         int `json:"testCasesPassed"`
-	CasesFailed         int `json:"testCasesFailed"`
-	CasesReview         int `json:"testCasesReview"`
-	CasesInconclusive   int `json:"testCasesInconclusive"`
-	CasesNotApplicable  int `json:"testCasesNotApplicable"`
-	CasesSkipped        int `json:"testCasesSkipped"`
-	CasesErrored        int `json:"testCasesErrored"`
-	FindingsRemoved     int `json:"findingsRemovedByVerifier"`
-}
-
-// Complete reports whether at least one server ran and no server was skipped or without tools, and no
-// test case was skipped, errored or left inconclusive.
-func (s Summary) Complete() bool {
-	return s.Servers > 0 && s.ServersSkipped+s.ServersWithoutTools+s.CasesSkipped+s.CasesErrored+s.CasesInconclusive == 0
 }
 
 type Notification struct {
-	Level      string         `json:"level"`
-	Message    Message        `json:"message"`
-	Descriptor Descriptor     `json:"descriptor"`
-	Properties map[string]any `json:"properties,omitempty"`
-}
-
-type Descriptor struct {
-	ID string `json:"id"`
+	Level   string  `json:"level"`
+	Message Message `json:"message"`
 }
 
 type Tool struct {
@@ -81,7 +52,6 @@ type ReportingRule struct {
 
 type Result struct {
 	RuleID     string                 `json:"ruleId"`
-	Kind       string                 `json:"kind,omitempty"`
 	Level      string                 `json:"level,omitempty"`
 	Message    Message                `json:"message"`
 	Locations  []Location             `json:"locations,omitempty"`
@@ -109,15 +79,8 @@ type Message struct {
 	Text string `json:"text"`
 }
 
-// Outcome is a pentest check that produced no finding: its evaluation state and the reason.
-type Outcome struct {
-	RuleID, Kind, Reason string
-	Properties           map[string]any
-}
-
-// GenerateSarif renders findings and outcomes as results, errored and skipped outcomes as error and warning
-// notifications, and a pentest summary as invocation properties.
-func GenerateSarif(findings []*proto.Finding, outcomes []Outcome, summary *Summary) ([]byte, error) {
+// GenerateSarif renders findings; any skipped reason marks the run as not executed successfully.
+func GenerateSarif(findings []*proto.Finding, skipped ...string) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -213,29 +176,6 @@ func GenerateSarif(findings []*proto.Finding, outcomes []Outcome, summary *Summa
 		results = append(results, result)
 	}
 
-	inv := Invocation{ExecutionSuccessful: true, Properties: summary}
-	for _, o := range outcomes {
-		switch o.Kind {
-		case "pass", "notApplicable", "review", "informational":
-			if o.Properties["outcome"] == "inconclusive" {
-				inv.ExecutionSuccessful = false
-			}
-			results = append(results, Result{RuleID: o.RuleID, Kind: o.Kind, Level: "none", Message: Message{Text: o.Reason}, Properties: o.Properties})
-		case "fail":
-			results = append(results, Result{RuleID: o.RuleID, Kind: "fail", Level: "error", Message: Message{Text: o.Reason}, Properties: o.Properties})
-		case "errored", "skipped":
-			level := "error"
-			if o.Kind == "skipped" {
-				level = "warning"
-			}
-			inv.ExecutionSuccessful = false
-			inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications,
-				Notification{Level: level, Message: Message{Text: o.Reason}, Descriptor: Descriptor{ID: o.RuleID}, Properties: o.Properties})
-		default:
-			return nil, fmt.Errorf("outcome %s: unknown kind %q", o.RuleID, o.Kind)
-		}
-	}
-
 	// Build the SARIF report
 	report := SARIFReport{
 		Version: "2.1.0",
@@ -254,7 +194,11 @@ func GenerateSarif(findings []*proto.Finding, outcomes []Outcome, summary *Summa
 			},
 		},
 	}
-	if len(outcomes) > 0 || summary != nil {
+	if len(skipped) > 0 {
+		inv := Invocation{}
+		for _, s := range skipped {
+			inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications, Notification{Level: "warning", Message: Message{Text: s}})
+		}
 		report.Runs[0].Invocations = []Invocation{inv}
 	}
 

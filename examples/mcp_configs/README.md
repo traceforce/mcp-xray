@@ -20,20 +20,3 @@ Figma's remote MCP server (`https://mcp.figma.com/mcp`) does not support Dynamic
 ```
 
 Without `oauth_client_id`, the tool continues without authentication and Figma will reject MCP requests that require auth.
-
-## Pentest `auth_policy` (AUTH-MISSING)
-
-AUTH-MISSING sends a tool a second call without the configured Authorization header only when the tool is listed under `repeatable`. A `protected` tool must reject that call; a `public` tool is skipped; a tool in neither list is reported for review.
-
-```json
-{
-  "mcpServers": {
-    "example": {
-      "type": "http",
-      "url": "https://mcp.example.com/mcp",
-      "headers": { "Authorization": "Bearer YOUR_TOKEN" },
-      "auth_policy": { "protected": ["list_calls"], "public": ["health"], "repeatable": ["list_calls"] }
-    }
-  }
-}
-```
