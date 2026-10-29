@@ -2,12 +2,15 @@ package libmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	metadata "mcpxray/internal/metadata"
@@ -113,6 +116,65 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Type:      transportType,
 		Transport: transport,
 	}, nil
+}
+
+// NewAnonymousSDKSession connects with no configured header and no OAuth, so no credential is sent.
+// lastStatus reports the server's last HTTP status, also after a failed connect.
+func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, func() int, error) {
+	transportType := ClassifyTransport(cfg)
+	// A stdio server's credentials come from the process, and a URL can carry them too.
+	if transportType == proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO || cfg.URL == nil {
+		return nil, nil, errors.New("no HTTP endpoint to call without credentials")
+	}
+	if u, err := url.Parse(*cfg.URL); err != nil || u.User != nil || u.RawQuery != "" {
+		return nil, nil, errors.New("the configured URL may carry a credential")
+	}
+	st := &statusTransport{base: http.DefaultTransport, sse: transportType == proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE}
+	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: st}
+	var transport mcp.Transport = &mcp.StreamableClientTransport{Endpoint: *cfg.URL, HTTPClient: httpClient}
+	if st.sse {
+		transport = &mcp.SSEClientTransport{Endpoint: *cfg.URL, HTTPClient: httpClient}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: metadata.Name, Version: metadata.Version}, nil)
+	lastStatus := func() int { return int(st.status.Load()) }
+	s, err := client.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, lastStatus, err
+	}
+	return &SDKSession{Session: s, Client: client, Type: transportType, Transport: transport}, lastStatus, nil
+}
+
+// statusTransport records the status of the requests that carry the probe: the initialize and
+// tools/call POSTs, and on SSE the GET that opens the stream. Background GETs, notifications and the
+// client's replies to server requests are skipped, so none can replace the tool call's status.
+type statusTransport struct {
+	base   http.RoundTripper
+	sse    bool
+	status atomic.Int32
+}
+
+func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	method := rpcMethod(req)
+	resp, err := t.base.RoundTrip(req)
+	if err == nil && (method == "initialize" || method == "tools/call" || t.sse && req.Method == http.MethodGet) {
+		t.status.Store(int32(resp.StatusCode))
+	}
+	return resp, err
+}
+
+// rpcMethod returns the JSON-RPC method a POST carries, or "".
+func rpcMethod(req *http.Request) string {
+	if req.Method != http.MethodPost || req.GetBody == nil {
+		return ""
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return ""
+	}
+	defer body.Close()
+	var msg struct{ Method string }
+	_ = json.NewDecoder(body).Decode(&msg)
+	return msg.Method
 }
 
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
