@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 )
 
 // RawConfig is the raw configuration from the file. It's compatible with Cursor, Windsurf and Claude
@@ -23,7 +22,6 @@ type RawServerConfig struct {
 	OAuthClientSecret  string            `json:"oauth_client_secret,omitempty"`
 	Auth               map[string]string `json:"auth,omitempty"`
 	RedirectURI        string            `json:"redirect_uri,omitempty"`
-	AuthPolicy         AuthPolicy        `json:"auth_policy"`
 }
 
 type ConfigParser struct {
@@ -88,11 +86,6 @@ func ParseConfig(data []byte) ([]MCPServerConfig, error) {
 		if oauthClientID == "" && serverConfig.Auth != nil {
 			oauthClientID = serverConfig.Auth["CLIENT_ID"]
 		}
-		for _, t := range serverConfig.AuthPolicy.Protected {
-			if slices.Contains(serverConfig.AuthPolicy.Public, t) {
-				return nil, fmt.Errorf("server %s: auth_policy lists %q as both protected and public; fix the config before scanning", serverName, t)
-			}
-		}
 		server := MCPServerConfig{
 			Name:              serverName,
 			Command:           command,
@@ -105,7 +98,6 @@ func ParseConfig(data []byte) ([]MCPServerConfig, error) {
 			OAuthClientID:     oauthClientID,
 			OAuthClientSecret: serverConfig.OAuthClientSecret,
 			RedirectURI:       serverConfig.RedirectURI,
-			AuthPolicy:        serverConfig.AuthPolicy,
 		}
 		servers = append(servers, server)
 	}
