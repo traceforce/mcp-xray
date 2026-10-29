@@ -128,10 +128,10 @@ func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSessi
 	if u, err := url.Parse(*cfg.URL); err != nil || u.User != nil || u.RawQuery != "" {
 		return nil, nil, errors.New("the configured URL may carry a credential")
 	}
-	st := &statusTransport{base: http.DefaultTransport}
+	st := &statusTransport{base: http.DefaultTransport, sse: transportType == proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE}
 	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: st}
 	var transport mcp.Transport = &mcp.StreamableClientTransport{Endpoint: *cfg.URL, HTTPClient: httpClient}
-	if transportType == proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE {
+	if st.sse {
 		transport = &mcp.SSEClientTransport{Endpoint: *cfg.URL, HTTPClient: httpClient}
 	}
 	client := mcp.NewClient(&mcp.Implementation{Name: metadata.Name, Version: metadata.Version}, nil)
@@ -143,15 +143,17 @@ func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSessi
 	return &SDKSession{Session: s, Client: client, Type: transportType, Transport: transport}, lastStatus, nil
 }
 
-// statusTransport records the status of every JSON-RPC POST and of any refusal.
+// statusTransport records the status of every JSON-RPC POST; on SSE also the GET that opens the
+// connection. A streamable background GET is skipped so it cannot replace the tool call's status.
 type statusTransport struct {
 	base   http.RoundTripper
+	sse    bool
 	status atomic.Int32
 }
 
 func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
-	if err == nil && (req.Method == http.MethodPost || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+	if err == nil && (t.sse || req.Method == http.MethodPost) {
 		t.status.Store(int32(resp.StatusCode))
 	}
 	return resp, err
