@@ -2,6 +2,7 @@ package libmcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -143,8 +144,9 @@ func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSessi
 	return &SDKSession{Session: s, Client: client, Type: transportType, Transport: transport}, lastStatus, nil
 }
 
-// statusTransport records the status of every JSON-RPC POST; on SSE also the GET that opens the
-// connection. A streamable background GET is skipped so it cannot replace the tool call's status.
+// statusTransport records the status of the requests that carry the probe: the initialize and
+// tools/call POSTs, and on SSE the GET that opens the stream. Background GETs, notifications and the
+// client's replies to server requests are skipped, so none can replace the tool call's status.
 type statusTransport struct {
 	base   http.RoundTripper
 	sse    bool
@@ -152,11 +154,27 @@ type statusTransport struct {
 }
 
 func (t *statusTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	method := rpcMethod(req)
 	resp, err := t.base.RoundTrip(req)
-	if err == nil && (t.sse || req.Method == http.MethodPost) {
+	if err == nil && (method == "initialize" || method == "tools/call" || t.sse && req.Method == http.MethodGet) {
 		t.status.Store(int32(resp.StatusCode))
 	}
 	return resp, err
+}
+
+// rpcMethod returns the JSON-RPC method a POST carries, or "".
+func rpcMethod(req *http.Request) string {
+	if req.Method != http.MethodPost || req.GetBody == nil {
+		return ""
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return ""
+	}
+	defer body.Close()
+	var msg struct{ Method string }
+	_ = json.NewDecoder(body).Decode(&msg)
+	return msg.Method
 }
 
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {

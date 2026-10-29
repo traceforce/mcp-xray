@@ -22,6 +22,7 @@ type RawServerConfig struct {
 	OAuthClientSecret  string            `json:"oauth_client_secret,omitempty"`
 	Auth               map[string]string `json:"auth,omitempty"`
 	RedirectURI        string            `json:"redirect_uri,omitempty"`
+	ProtectedTools     []string          `json:"protected_tools,omitempty"`
 }
 
 type ConfigParser struct {
@@ -98,6 +99,7 @@ func ParseConfig(data []byte) ([]MCPServerConfig, error) {
 			OAuthClientID:     oauthClientID,
 			OAuthClientSecret: serverConfig.OAuthClientSecret,
 			RedirectURI:       serverConfig.RedirectURI,
+			ProtectedTools:    serverConfig.ProtectedTools,
 		}
 		servers = append(servers, server)
 	}

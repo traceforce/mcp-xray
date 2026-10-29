@@ -2,6 +2,7 @@ package libmcp
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,14 +48,19 @@ func TestNewAnonymousSDKSession(t *testing.T) {
 
 func TestStatusTransportKeepsTheCallStatus(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodGet {
+		if body, _ := io.ReadAll(r.Body); !strings.Contains(string(body), `"tools/call"`) {
 			w.WriteHeader(http.StatusForbidden)
 		}
 	}))
 	t.Cleanup(ts.Close)
 	st := &statusTransport{base: http.DefaultTransport}
-	for _, method := range []string{http.MethodPost, http.MethodGet} {
-		req, _ := http.NewRequest(method, ts.URL, nil)
+	for _, r := range []struct{ method, body string }{
+		{http.MethodPost, `{"jsonrpc":"2.0","id":1,"method":"tools/call"}`},
+		{http.MethodPost, `{"jsonrpc":"2.0","id":7,"result":{}}`}, // the client's reply to a server ping
+		{http.MethodPost, `{"jsonrpc":"2.0","method":"notifications/cancelled"}`},
+		{http.MethodGet, ""},
+	} {
+		req, _ := http.NewRequest(r.method, ts.URL, strings.NewReader(r.body))
 		resp, err := (&http.Client{Transport: st}).Do(req)
 		if err != nil {
 			t.Fatal(err)
@@ -62,6 +68,6 @@ func TestStatusTransportKeepsTheCallStatus(t *testing.T) {
 		resp.Body.Close()
 	}
 	if got := st.status.Load(); got != http.StatusOK {
-		t.Fatalf("status = %d, want the POST's 200; a background GET must not replace it", got)
+		t.Fatalf("status = %d, want the call's 200; a refused reply, notification or background GET must not replace it", got)
 	}
 }
