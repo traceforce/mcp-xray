@@ -161,7 +161,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 	var wrapped struct {
 		Results []*SecurityFinding `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(response), &wrapped); err == nil && len(wrapped.Results) > 0 {
+	if err := json.Unmarshal([]byte(response), &wrapped); err == nil && wrapped.Results != nil {
 		findings = wrapped.Results
 	} else {
 		// Fallback: try to parse as direct array
