@@ -175,16 +175,9 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 		}
 	}
 
-	if findings == nil {
-		return nil, fmt.Errorf("LLM response is JSON null, expected an array of findings")
-	}
-
 	// Convert to proto.Finding, mapping findings to their respective tools
 	protoFindings := make([]*proto.Finding, 0, len(findings))
 	for _, f := range findings {
-		if f == nil {
-			continue
-		}
 		// Determine which tool this finding belongs to
 		var targetTool *mcp.Tool
 		if f.ToolName != "" {
