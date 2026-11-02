@@ -15,8 +15,7 @@ type MCPServerConfig struct {
 	RawJSON           string
 	OAuthClientID     string
 	OAuthClientSecret string
-	RedirectURI       string   // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
-	ProtectedTools    []string // tools that must refuse a call without credentials (AUTH-MISSING)
+	RedirectURI       string // OAuth redirect URI (e.g. cursor://...; when empty, default http://127.0.0.1:8765/callback)
 }
 
 // ServerToolsData represents tools data for a single server

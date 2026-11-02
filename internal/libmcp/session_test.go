@@ -34,9 +34,9 @@ func TestNewAnonymousSDKSession(t *testing.T) {
 	if err == nil || status() != http.StatusUnauthorized || withToken.Load() != 0 {
 		t.Fatalf("err %v, status %d, requests with a token %d; want a 401 and no token sent", err, status(), withToken.Load())
 	}
-	cmd, before := "server", hits.Load()
+	cmd, unknown, before := "server", "websocket", hits.Load()
 	query, userinfo := ts.URL+"?api_key=good", strings.Replace(ts.URL, "http://", "http://u:p@", 1)
-	for _, c := range []MCPServerConfig{{Name: "stdio", Command: &cmd}, {Name: "query", URL: &query}, {Name: "userinfo", URL: &userinfo}} {
+	for _, c := range []MCPServerConfig{{Name: "stdio", Command: &cmd}, {Name: "unknown", Type: &unknown, URL: &ts.URL}, {Name: "query", URL: &query}, {Name: "userinfo", URL: &userinfo}} {
 		if _, _, err := NewAnonymousSDKSession(context.Background(), c); err == nil {
 			t.Errorf("%s: connected, want a refusal", c.Name)
 		}
