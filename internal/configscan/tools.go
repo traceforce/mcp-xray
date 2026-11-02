@@ -96,7 +96,7 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 
 // listServerTools connects to one server and lists its tools. Connect has its own
 // timer, which starts after any browser login, so a slow SSO or MFA login does not
-// expire it; listing gets its own 30-second deadline, so a server that hangs
+// expire it; listing gets its own 60-second deadline, so a server that hangs
 // cannot use up the others' time.
 func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPServerConfig) serverToolsResult {
 	session, err := libmcp.NewSDKSession(ctx, server)
@@ -122,7 +122,7 @@ func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPSer
 
 	fmt.Printf("Listing tools for server %s\n", server.Name)
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	tools, err := libmcp.ListAllTools(ctx, session.Session)
 	if err != nil {
