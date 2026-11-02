@@ -123,7 +123,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, func() int, error) {
 	transportType := ClassifyTransport(cfg)
 	// A stdio server's credentials come from the process, and a URL can carry them too.
-	if transportType == proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO || cfg.URL == nil {
+	if transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP && transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE || cfg.URL == nil {
 		return nil, nil, errors.New("no HTTP endpoint to call without credentials")
 	}
 	if u, err := url.Parse(*cfg.URL); err != nil || u.User != nil || u.RawQuery != "" {
