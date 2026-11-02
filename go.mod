@@ -1,6 +1,6 @@
 module mcpxray
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.19.0
