@@ -447,6 +447,13 @@ func TestCredentials_SaveWritesInPlaceWhenRenameIsRefused(t *testing.T) {
 	assert.Equal(t, "x1", got["x"].RefreshToken)
 }
 
+func TestCredentials_SaveReportsTheInPlaceWriteError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "creds.json") // no temp file and no in-place write
+	err := Credentials{}.Save(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creds.json", "the write error, not the temp file's")
+}
+
 func TestNewSDKSession_StoredCredentialIsReadAgainBeforeRefresh(t *testing.T) {
 	// Another run rotated r1 to r2 after this one loaded the file: spending r1
 	// would be refused, or revoke the grant at a reuse-detecting provider.

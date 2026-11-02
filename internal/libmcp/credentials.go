@@ -92,7 +92,7 @@ func (c Credentials) Save(path string) error {
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".credentials-*")
 	if err != nil {
-		return writeInPlace(path, data, err)
+		return writeInPlace(path, data)
 	}
 	defer os.Remove(tmp.Name()) // a no-op once renamed
 	if _, err := tmp.Write(data); err != nil {
@@ -107,18 +107,16 @@ func (c Credentials) Save(path string) error {
 		return err
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
-		return writeInPlace(path, data, err)
+		return writeInPlace(path, data)
 	}
 	return nil
 }
 
 // writeInPlace rewrites a file whose directory refuses a temp file or a rename,
-// as a single-file bind mount does; any other write error keeps the old file.
-func writeInPlace(path string, data []byte, cause error) error {
-	if os.WriteFile(path, data, 0600) != nil {
-		return cause
-	}
-	return nil
+// as a single-file bind mount does. It is not atomic: a write that fails partway
+// (disk full, quota) can leave the file empty or partial.
+func writeInPlace(path string, data []byte) error {
+	return os.WriteFile(path, data, 0600)
 }
 
 // keepable reports whether a login may be stored for and reused by an MCP URL:
