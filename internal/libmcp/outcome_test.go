@@ -150,6 +150,26 @@ func TestNewSDKSession_InteractiveRunsDiscovery(t *testing.T) {
 	assert.True(t, discovery.Load())
 }
 
+func TestNewSDKSession_InteractiveConnectsWithConfiguredKey(t *testing.T) {
+	// The discovery probe carries no configured headers, so its 401 must not stop a
+	// server that authenticates with X-API-Key from connecting with the key.
+	inner := jsonrpcServer(t, func(int) string { return "" })
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-API-Key") != "k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(ts.Close)
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, Headers: map[string]string{"X-API-Key": "k"}})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+	tools, err := ListAllTools(context.Background(), s.Session)
+	require.NoError(t, err)
+	assert.Len(t, tools, 1)
+}
+
 func TestOutcomeForError_Unlaunchable(t *testing.T) {
 	cmd := "mcpxray-no-such-binary-0b1e"
 	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", Command: &cmd})

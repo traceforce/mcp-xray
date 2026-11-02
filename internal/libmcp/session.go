@@ -215,9 +215,11 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
 				fmt.Printf("Attempting connection without authentication...\n")
-			case oauthConfig.probeUnauthorized:
+			case oauthConfig.probeUnauthorized && !hasCredentialHeader(cfg.Headers):
 				// The server requires auth (the unauthenticated probe returned 401): report
 				// the real login or discovery failure, never hide it behind an anonymous 401.
+				// The probe carries no configured headers, so with an X-API-Key or similar
+				// configured, its 401 says nothing about that key: connect with it instead.
 				return nil, false, err
 			default:
 				// Optional-auth server: the unauthenticated probe answered, so a declined or
@@ -402,6 +404,17 @@ func envToSlice(env map[string]string) []string {
 		result = append(result, fmt.Sprintf("%s=%s", k, v))
 	}
 	return result
+}
+
+// hasCredentialHeader reports whether the headers configure a non-empty value
+// that may carry a credential, such as X-API-Key or Cookie.
+func hasCredentialHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if isCredentialHeader(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // hasAccessToken reports whether the headers configure an Authorization value in
