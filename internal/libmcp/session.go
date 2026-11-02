@@ -40,7 +40,8 @@ type SDKSession struct {
 // Redact masks the config's secrets in an error from a call made after connect,
 // such as tools/list, before it becomes an outcome reason or a finding.
 func (s *SDKSession) Redact(err error) error {
-	return &redactedError{msg: redact(err.Error(), s.secrets, false), err: err}
+	msg := redact(err.Error(), s.secrets, false)
+	return &redactedError{msg: msg, brief: msg, err: err}
 }
 
 // connectTimeout bounds initialize unless the config sets its own, so a child
@@ -109,7 +110,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			if _, v, ok := strings.Cut(executable, "="); ok {
 				msg = redact(msg, secretParts([]string{v}), false)
 			}
-			return nil, &redactedError{msg: msg, err: err}
+			return nil, &redactedError{msg: msg, brief: msg, err: err}
 		}
 		transport = stdio
 
