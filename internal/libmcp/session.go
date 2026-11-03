@@ -35,6 +35,14 @@ type SDKSession struct {
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
 	cancel    context.CancelFunc // ends the context the transport connected with
+	secrets   []string           // the config's and environment's values that Redact masks
+}
+
+// Redact masks the config's secrets in an error from a call made after connect,
+// such as tools/list, before it becomes an outcome reason or a finding.
+func (s *SDKSession) Redact(err error) error {
+	msg := redact(err.Error(), s.secrets, false)
+	return &redactedError{msg: msg, brief: msg, err: err}
 }
 
 // connectTimeout bounds initialize unless the config sets its own, so a child
@@ -51,6 +59,8 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
+	var secrets []string  // config and environment values that must never appear in an error
+	var retryLogin bool   // a refreshed stored login was used, so a 401 is worth one browser login
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
@@ -83,18 +93,26 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		// Inherited values count too: the child may echo any of them.
 		for _, kv := range cmd.Environ() {
 			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-				stderr.secrets = append(stderr.secrets, v)
+				secrets = append(secrets, v)
 			}
 		}
-		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
-		stderr.secrets = secretParts(stderr.secrets) // add each line and JSON-escaped form
-		stdout.secrets = stderr.secrets
+		for _, v := range cfg.Env { // configured values in parts too: AUTH_HEADER="Bearer <token>"
+			secrets = append(secrets, valueParts(v)...)
+		}
+		secrets = secretParts(append(secrets, argSecrets(commandArgs)...))
+		stderr.secrets, stdout.secrets = secrets, secrets
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
 		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect: %w", err)
+			// exec reports only the executable token: mask a NAME=<value> before the
+			// command, not the paths inherited values name (USERPROFILE, APPDATA).
+			msg := "failed to connect: " + err.Error()
+			if _, v, ok := strings.Cut(executable, "="); ok {
+				msg = redact(msg, secretParts([]string{v}), false)
+			}
+			return nil, &redactedError{msg: msg, brief: msg, err: err}
 		}
 		transport = stdio
 
@@ -104,6 +122,8 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -114,6 +134,8 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -142,6 +164,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	}
 	if err != nil {
 		cancel()
+		if retryLogin && OutcomeForError(err) == OutcomeAuthRequired {
+			// Scope step-up, an audience change or a revocation: the refreshed token is
+			// not enough, so log in in the browser once instead of reporting auth_required.
+			fmt.Printf("Warning: MCP server '%s' refused the refreshed stored login; logging in again\n", cfg.Name)
+			cfg.skipStoredLogin = true
+			return NewSDKSession(ctx, cfg)
+		}
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
@@ -152,12 +181,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if tail := stdout.String(); tail != "" {
 			output = append(output, "stdout: "+tail)
 		}
-		msg := "failed to connect: " + err.Error()
+		brief := redact("failed to connect: "+err.Error(), secrets, false)
+		msg := brief
 		if len(output) > 0 {
 			// The SDK error stays last: OutcomeForError classifies by its suffix.
-			msg = fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err)
+			msg = redact(fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err), secrets, false)
 		}
-		return nil, &redactedError{msg: redact(msg, stderr.secrets, false), err: err}
+		return nil, &redactedError{msg: msg, brief: brief, err: err}
 	}
 
 	return &SDKSession{
@@ -166,7 +196,14 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Type:      transportType,
 		Transport: transport,
 		cancel:    cancel,
+		secrets:   secrets,
 	}, nil
+}
+
+// transportSecrets returns what a remote error can echo: the URL's and the
+// headers' values, including a bearer OAuth discovery added for this client.
+func transportSecrets(cfg MCPServerConfig, c *http.Client) []string {
+	return remoteSecrets(*cfg.URL, c.Transport.(*headerTransport).headers)
 }
 
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
@@ -184,13 +221,31 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 
 	dcrSkippedAuth := false
 	// A stored credential logs in without a browser; a configured Authorization wins over it.
-	if cred, ok := cfg.Credentials[url]; ok && keepable(url, cred, cfg.OAuthTokenEndpoint) && !hasAccessToken(cfg.Headers) {
+	refreshed := false
+	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
+	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
+		disk, err := LoadCredentials(cfg.CredentialsFile)
+		// Never spend the token loaded at startup, which may be spent; a server with no
+		// stored login has none to spend, so an unreadable file does not fail it.
+		if _, stored := cfg.Credentials[url]; err != nil && stored {
+			return nil, false, err
+		}
+		if c, ok := disk[url]; ok {
+			cfg.Credentials[url] = c
+		}
+	}
+	cred, usable, why := cfg.storedLogin(url)
+	if useStored && why != "" {
+		fmt.Printf("Stored login for MCP server '%s' not used: %s\n", cfg.Name, why)
+	}
+	if useStored && usable {
 		accessToken, err := cred.refresh(url)
 		switch {
 		case err == nil:
 			cfg.Credentials[url] = cred // keeps a rotated refresh token
-			cfg.saveCredentials()
+			cfg.saveCredentials(url)
 			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			refreshed = true
 		case cfg.NonInteractive:
 			return nil, false, err
 		default:
@@ -208,27 +263,36 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
 		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
-			var le *LoginError // the login began: report its failure, not an anonymous retry's 401
-			if errors.As(err, &le) {
-				return nil, false, err
-			}
-			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
+			switch {
+			case errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "":
+				// DCR 403 with no configured client: show the hint and let the anonymous
+				// attempt report auth_required.
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
-			} else {
-				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+				fmt.Printf("Attempting connection without authentication...\n")
+			case oauthConfig.probeUnauthorized && !hasCredentialHeader(cfg.Headers):
+				// The server requires auth (the unauthenticated probe returned 401): report
+				// the real login or discovery failure, never hide it behind an anonymous 401.
+				// The probe carries no configured headers, so with an X-API-Key or similar
+				// configured, its 401 says nothing about that key: connect with it instead.
+				return nil, false, err
+			default:
+				// Optional-auth server: the unauthenticated probe answered, so a declined or
+				// failed login falls back to the anonymous connection.
+				fmt.Printf("Warning: OAuth discovery failed: %s\n", redact(err.Error(), remoteSecrets(url, cfg.Headers), false))
+				fmt.Printf("Attempting connection without authentication...\n")
 			}
-			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
 			cfg.Headers = withBearer(cfg.Headers, accessToken)
 			if cfg.Credentials != nil {
+				// One not kept leaves the stored entry alone: another config entry for this
+				// URL, with its own pin, may still use it.
 				if cred != nil && keepable(url, *cred, cfg.OAuthTokenEndpoint) {
 					cfg.Credentials[url] = *cred
+					cfg.saveCredentials(url)
 				} else {
-					delete(cfg.Credentials, url) // nothing this run may reuse
-					fmt.Printf("Login for MCP server '%s' not kept: no refresh token, or its token endpoint is not https on the server's own site\n", cfg.Name)
+					fmt.Printf("Login for MCP server '%s' not kept: %s\n", cfg.Name, cfg.notKeepable())
 				}
-				cfg.saveCredentials()
 			}
 		}
 		// If we cannot discover the access token, just continue with the existing headers
@@ -242,10 +306,11 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 		scheme, host = req.URL.Scheme, hostKey(req.URL)
 	}
 	httpClient.Transport = &headerTransport{
-		base:    http.DefaultTransport,
-		headers: cfg.Headers,
-		scheme:  scheme,
-		host:    host,
+		base:      http.DefaultTransport,
+		headers:   cfg.Headers,
+		scheme:    scheme,
+		host:      host,
+		refreshed: refreshed,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -275,10 +340,11 @@ func (s *SDKSession) Close() error {
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
 // requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
-	scheme  string // with host, the only origin the configured headers are sent to
-	host    string
+	base      http.RoundTripper
+	headers   map[string]string
+	scheme    string // with host, the only origin the configured headers are sent to
+	host      string
+	refreshed bool // the bearer came from a refreshed stored login
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -398,12 +464,34 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
+// hasCredentialHeader reports whether the headers configure a non-empty value
+// that may carry a credential, such as X-API-Key or Cookie.
+func hasCredentialHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if isCredentialHeader(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // hasAccessToken reports whether the headers configure an Authorization value in
 // any spelling and scheme (Bearer, Basic, token): a configured credential wins
 // over a stored or browser login.
 func hasAccessToken(headers map[string]string) bool {
 	for k, v := range headers {
-		if strings.EqualFold(k, "Authorization") && strings.TrimSpace(v) != "" {
+		if !strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		// mcp-xray does not expand header placeholders, so an unexpanded ${env:…} or
+		// {{TOKEN}} is not a credential and must not block a stored or browser login.
+		if strings.Contains(v, "${") || strings.Contains(v, "{{") {
+			continue
+		}
+		// A real Authorization is a scheme plus a non-empty credential ("Bearer x");
+		// a bare scheme ("Bearer") carries nothing.
+		if scheme, cred, ok := strings.Cut(v, " "); ok && scheme != "" && strings.TrimSpace(cred) != "" {
 			return true
 		}
 	}

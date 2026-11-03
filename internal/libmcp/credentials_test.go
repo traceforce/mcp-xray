@@ -118,6 +118,10 @@ func TestNewSDKSession_RejectedCredentialReportsAuthRequired(t *testing.T) {
 		{http.StatusTemporaryRedirect, nil, OutcomeFailed},
 		{http.StatusTooManyRequests, nil, OutcomeFailed},
 		{http.StatusServiceUnavailable, nil, OutcomeFailed},
+		{http.StatusOK, map[string]string{"error": "invalid_refresh_token"}, OutcomeAuthRequired}, // Slack's non-RFC refusal shape
+		{http.StatusOK, map[string]string{"error": "expired_token"}, OutcomeAuthRequired},
+		{http.StatusTooManyRequests, map[string]string{"error": "invalid_request"}, OutcomeFailed},  // an RFC code on a 429 is still an outage
+		{http.StatusServiceUnavailable, map[string]string{"error": "invalid_grant"}, OutcomeFailed}, // likewise on a 503
 	} {
 		srv, _ := tokenServer(t, tc.status, tc.reply)
 		creds[ts.URL] = Credential{TokenEndpoint: srv.URL, ClientID: "c", RefreshToken: "r"}
@@ -234,6 +238,62 @@ func TestExchangeCode_LoopbackHTTPAndSameOriginRedirect(t *testing.T) {
 	assert.Equal(t, ts.URL+"/token/", endpoint, "a refresh, which follows no redirect, goes where the exchange ended")
 }
 
+func TestExchangeCode_MalformedEndpointDoesNotPanic(t *testing.T) {
+	// A server-advertised token endpoint that does not parse made http.NewRequest return
+	// a nil request, which panicked on the next header set, after the user had consented.
+	o := NewOAuthConfig("https://mcp.example/mcp", "c", "s", "http://127.0.0.1:8765/callback")
+	for _, ep := range []string{"https://%zz/token", "https://auth example.com/token"} {
+		_, _, err := o.exchangeCode(ep, "c", "s", "code", "verifier")
+		require.Error(t, err, ep)
+		assert.Contains(t, err.Error(), "token exchange failed")
+	}
+}
+
+func TestExchangeCode_RefusalWithTokenIsReported(t *testing.T) {
+	// An RFC error code is a refusal even when the server also returns an access_token,
+	// so the exchange failure is reported rather than a stale token used.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"error":"invalid_grant","access_token":"stale"}`))
+	}))
+	t.Cleanup(ts.Close)
+	o := NewOAuthConfig("https://mcp.example/mcp", "c", "s", "http://127.0.0.1:8765/callback")
+	_, _, err := o.exchangeCode(ts.URL, "c", "s", "code", "verifier")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid_grant")
+}
+
+func TestKeepable_PinMatchesByOrigin(t *testing.T) {
+	// A pin copied verbatim from the AS metadata still keeps an off-site login when the
+	// stored endpoint was redirected (307 to a trailing slash) or had its scheme re-cased.
+	c := Credential{TokenEndpoint: "https://login.semgrep.dev/oauth2/token/"}
+	assert.True(t, keepable("https://mcp.semgrep.io/mcp", c, "https://login.semgrep.dev/oauth2/token"), "a 307 to /token/ still matches the pin")
+	assert.True(t, keepable("https://mcp.semgrep.io/mcp", c, "HTTPS://login.semgrep.dev/oauth2/token"), "an uppercase scheme matches")
+	assert.False(t, keepable("https://mcp.semgrep.io/mcp", c, "https://evil.example.com/token"), "a different host is not kept")
+	assert.False(t, keepable("https://mcp.semgrep.io/mcp", c, ""), "no pin and off-site is not kept")
+}
+
+func TestLoadCredentials_RefusesUnknownField(t *testing.T) {
+	// A login entry with a field this version does not know is refused, not loaded and
+	// silently dropped on the next Save.
+	path := filepath.Join(t.TempDir(), "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"https://mcp.example/mcp":{"token_endpoint":"https://a/t","refresh_token":"r","expires_at":123}}`), 0o600))
+	_, err := LoadCredentials(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse credentials file")
+}
+
+func TestLoadCredentials_KeepsResource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"https://mcp.example/mcp":{"token_endpoint":"https://a/t","refresh_token":"r","resource":"https://mcp.example/"}}`), 0o600))
+	creds, err := LoadCredentials(path)
+	require.NoError(t, err)
+	require.NoError(t, creds.Save(path))
+	creds, err = LoadCredentials(path)
+	require.NoError(t, err)
+	assert.Equal(t, "https://mcp.example/", creds["https://mcp.example/mcp"].Resource)
+}
+
 func TestCredentials_SaveAndLoad(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "creds.json")
 	creds, err := LoadCredentials(path)
@@ -326,6 +386,10 @@ func TestWithBearer_ReplacesEverySpellingOfAuthorization(t *testing.T) {
 	assert.True(t, hasAccessToken(headers), "a bearer counts in any spelling")
 	assert.True(t, hasAccessToken(map[string]string{"authorization": "Basic x"}), "so does any configured scheme")
 	assert.False(t, hasAccessToken(map[string]string{"Authorization": " "}))
+	assert.False(t, hasAccessToken(map[string]string{"Authorization": "${env:MCP_TOKEN}"}), "an unexpanded ${…} placeholder is not a credential")
+	assert.False(t, hasAccessToken(map[string]string{"Authorization": "{{TOKEN}}"}), "nor a {{…}} placeholder")
+	assert.False(t, hasAccessToken(map[string]string{"Authorization": "Bearer"}), "a bare scheme carries nothing")
+	assert.True(t, hasAccessToken(map[string]string{"Authorization": "Bearer real-token"}), "a scheme plus a credential counts")
 	assert.Equal(t, map[string]string{"Authorization": "Bearer new", "X-Custom": "1"}, withBearer(headers, "new"))
 	assert.Len(t, headers, 3, "the caller's map is left as configured")
 }
@@ -351,6 +415,99 @@ func TestRedirectServer_IgnoresACallbackForAnotherLogin(t *testing.T) {
 	require.NoError(t, err)
 	resp.Body.Close()
 	assert.Equal(t, "c", <-codeCh)
+}
+
+func TestCredentials_SaveKeepsSymlinkAndMergesOtherRuns(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "private.json")
+	link := filepath.Join(dir, "creds.json")
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y1"}}.Save(target))
+	symlinked := os.Symlink(target, link) == nil // Windows needs a privilege for it
+	if !symlinked {
+		link = target
+	}
+	// Another run rotated y after this one loaded the file; this run rotates x.
+	mine := Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x2"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y1"}}
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}, "y": {TokenEndpoint: "https://a.example/t", RefreshToken: "y2"}}.Save(link))
+	MCPServerConfig{Credentials: mine, CredentialsFile: link}.saveCredentials("x")
+
+	if symlinked {
+		info, err := os.Lstat(link)
+		require.NoError(t, err)
+		assert.NotZero(t, info.Mode()&os.ModeSymlink, "the link still points at the private file")
+	}
+	got, err := LoadCredentials(target)
+	require.NoError(t, err)
+	assert.Equal(t, "x2", got["x"].RefreshToken)
+	assert.Equal(t, "y2", got["y"].RefreshToken, "the other run's rotation survives")
+	assert.False(t, CredentialsSaveFailed())
+}
+
+func TestCredentials_SaveWritesInPlaceWhenRenameIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("needs a directory the test cannot write")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte("{}"), 0600))
+	require.NoError(t, os.Chmod(dir, 0500)) // like a single-file bind mount: no temp file beside it
+	t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+	require.NoError(t, Credentials{"x": {TokenEndpoint: "https://a.example/t", RefreshToken: "x1"}}.Save(path))
+	got, err := LoadCredentials(path)
+	require.NoError(t, err)
+	assert.Equal(t, "x1", got["x"].RefreshToken)
+}
+
+func TestCredentials_SaveReportsTheInPlaceWriteError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "creds.json") // no temp file and no in-place write
+	err := Credentials{}.Save(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "creds.json", "the write error, not the temp file's")
+}
+
+func TestNewSDKSession_StoredCredentialIsReadAgainBeforeRefresh(t *testing.T) {
+	// Another run rotated r1 to r2 after this one loaded the file: spending r1
+	// would be refused, or revoke the grant at a reuse-detecting provider.
+	tok, form := tokenServer(t, http.StatusOK, map[string]string{"access_token": "a", "refresh_token": "r3"})
+	ts := bearerServer(t, "Bearer a")
+	path := filepath.Join(t.TempDir(), "creds.json")
+	require.NoError(t, Credentials{ts.URL: {TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: "r2"}}.Save(path))
+	stale := Credentials{ts.URL: {TokenEndpoint: tok.URL, ClientID: "c", RefreshToken: "r1"}}
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: stale, CredentialsFile: path})
+	require.NoError(t, err)
+	_ = s.Close()
+	assert.Equal(t, "r2", form.Load().(url.Values).Get("refresh_token"))
+}
+
+func TestStoredLogin_Pin(t *testing.T) {
+	u := "https://mcp.example.com/mcp"
+	cred := Credential{TokenEndpoint: "https://auth.other.example/token", ClientID: "c1", RefreshToken: "r"}
+	cfg := MCPServerConfig{Credentials: Credentials{u: cred}, OAuthTokenEndpoint: "HTTPS://Auth.Other.Example:443/token/"}
+	_, ok, why := cfg.storedLogin(u)
+	assert.True(t, ok, why) // the pin matches as the client dials it
+	assert.False(t, sameEndpoint("https://İ.com/token", "https://i.com/token"), "the dialed IDNA host differs")
+	cfg.OAuthTokenEndpoint = "https://auth.other.example/token2"
+	_, ok, why = cfg.storedLogin(u)
+	assert.False(t, ok)
+	assert.Contains(t, why, "the pinned https://auth.other.example/token2", "the message names the pin")
+	assert.False(t, sameEndpoint("https://a.example/t", ""), "no pin matches nothing")
+	assert.False(t, sameEndpoint("https://a.example/t", "https://a.example/t?x=1"))
+	assert.False(t, sameEndpoint("https://a.example:8443/t", "https://a.example:8/t"))
+	// IDNA rejects ':' and '_', so these hosts compare as net/http dials them.
+	assert.True(t, sameEndpoint("https://[2001:db8::1]/token", "https://[2001:DB8::1]/token"))
+	assert.True(t, sameEndpoint("https://keycloak_auth:8443/t", "https://keycloak_auth:8443/t"))
+	assert.False(t, sameEndpoint("https://keycloak_auth/t", "https://keycloak-auth/t"))
+}
+
+func TestNewSDKSession_UnreadableFileDoesNotFailServerWithoutLogin(t *testing.T) {
+	// Another run's in-place write can leave the file briefly partial. A server with
+	// no stored login has no token to protect, so it still connects.
+	ts := bearerServer(t, "")
+	path := filepath.Join(t.TempDir(), "creds.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{"https://other.example/mcp": {`), 0o600))
+	s, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &ts.URL, NonInteractive: true, Credentials: Credentials{}, CredentialsFile: path})
+	require.NoError(t, err)
+	_ = s.Close()
 }
 
 func TestCredentialRefresh_RetriesWithoutResourceOnInvalidTarget(t *testing.T) {

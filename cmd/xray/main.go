@@ -313,12 +313,11 @@ func NewDumpToolsCommand() *cobra.Command {
 			}
 			fmt.Printf("\nDumped %d tools from %d server(s) to %s\n", totalTools, len(allToolsData), toolsOutputFile)
 
-			// The per-change saves only log a write error; this final save fails the run if the credentials could not be written.
-			if credentialsFile != "" {
-				if err := credentials.Save(credentialsFile); err != nil {
-					fmt.Printf("Error writing credentials file: %v\n", err)
-					os.Exit(1)
-				}
+			// Each change was saved, merged, as it happened; a failed save only logged, so
+			// fail the run now. Rewriting the whole map would revert an overlapping run.
+			if libmcp.CredentialsSaveFailed() {
+				fmt.Println("Error writing credentials file: a save during the run failed (see above)")
+				os.Exit(1)
 			}
 		},
 	}

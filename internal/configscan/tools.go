@@ -99,16 +99,16 @@ func (s *ToolsScanner) listAllServerTools(ctx context.Context) ([]serverToolsRes
 	return results, nil
 }
 
-// listServerTools connects to one server and lists its tools under its own
-// 60-second deadline, so a server that hangs cannot use up the others' time.
+// listServerTools connects to one server and lists its tools. Connect has its own
+// timer, which starts after any browser login, so a slow SSO or MFA login does not
+// expire it; listing gets its own 60-second deadline, so a server that hangs
+// cannot use up the others' time.
 func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPServerConfig) serverToolsResult {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
 	session, err := libmcp.NewSDKSession(ctx, server)
 	if err != nil {
 		fmt.Printf("Warning: Failed to connect to MCP server '%s': %v\n", server.Name, err)
 		var dcrErr *libmcp.DCRUnauthorizedError
-		msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %v", server.Name, err)
+		msg := fmt.Sprintf("Could not establish connection to MCP server '%s'. The server may not be running, the endpoint may be unreachable, or the transport type may not be supported. Error: %s", server.Name, libmcp.ReasonWithoutOutput(err))
 		if errors.As(err, &dcrErr) {
 			msg = dcrErr.Error()
 		}
@@ -127,8 +127,11 @@ func (s *ToolsScanner) listServerTools(ctx context.Context, server libmcp.MCPSer
 
 	fmt.Printf("Listing tools for server %s\n", server.Name)
 
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
 	tools, err := libmcp.ListAllTools(ctx, session.Session)
 	if err != nil {
+		err = session.Redact(err) // a server can echo a configured value in its error
 		outcome := libmcp.ServerOutcome{Server: server.Name, Status: libmcp.OutcomeForError(err), Reason: err.Error()}
 		// Auth failures get a medium finding that points at credentials and OAuth scopes.
 		if outcome.Status == libmcp.OutcomeAuthRequired {
