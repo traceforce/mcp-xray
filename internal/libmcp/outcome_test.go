@@ -175,6 +175,8 @@ func TestOutcomeForError_Unlaunchable(t *testing.T) {
 	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", Command: &cmd})
 	require.Error(t, err)
 	assert.Equal(t, OutcomeUnlaunchable, OutcomeForError(err))
+	assert.Equal(t, err.Error(), ReasonWithoutOutput(err), "a start error has no child output to drop")
+	assert.Equal(t, "boom", ReasonWithoutOutput((&SDKSession{}).Redact(errors.New("boom"))))
 }
 
 func TestOutcomeForError(t *testing.T) {

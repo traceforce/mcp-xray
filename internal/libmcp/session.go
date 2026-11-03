@@ -35,6 +35,14 @@ type SDKSession struct {
 	Type      proto.MCPTransportType
 	Transport mcp.Transport
 	cancel    context.CancelFunc // ends the context the transport connected with
+	secrets   []string           // the config's and environment's values that Redact masks
+}
+
+// Redact masks the config's secrets in an error from a call made after connect,
+// such as tools/list, before it becomes an outcome reason or a finding.
+func (s *SDKSession) Redact(err error) error {
+	msg := redact(err.Error(), s.secrets, false)
+	return &redactedError{msg: msg, brief: msg, err: err}
 }
 
 // connectTimeout bounds initialize unless the config sets its own, so a child
@@ -51,6 +59,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 
 	var transport mcp.Transport
 	var dcrSkipped bool
+	var secrets []string  // config and environment values that must never appear in an error
 	var retryLogin bool   // a refreshed stored login was used, so a 401 is worth one browser login
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // what it wrote to stdout before its first message, likewise
@@ -84,18 +93,26 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		// Inherited values count too: the child may echo any of them.
 		for _, kv := range cmd.Environ() {
 			if _, v, _ := strings.Cut(kv, "="); len(v) >= 8 { // shorter values such as "1" or "true" would mangle unrelated text
-				stderr.secrets = append(stderr.secrets, v)
+				secrets = append(secrets, v)
 			}
 		}
-		stderr.secrets = append(stderr.secrets, argSecrets(commandArgs)...)
-		stderr.secrets = secretParts(stderr.secrets) // add each line and JSON-escaped form
-		stdout.secrets = stderr.secrets
+		for _, v := range cfg.Env { // configured values in parts too: AUTH_HEADER="Bearer <token>"
+			secrets = append(secrets, valueParts(v)...)
+		}
+		secrets = secretParts(append(secrets, argSecrets(commandArgs)...))
+		stderr.secrets, stdout.secrets = secrets, secrets
 		cmd.Stderr = &stderr
 		cmd.WaitDelay = stdioPipeWait // a grandchild holding stderr open must not block Wait
 
 		stdio, err := startStdio(cmd, &stdout)
 		if err != nil {
-			return nil, fmt.Errorf("failed to connect: %w", err)
+			// exec reports only the executable token: mask a NAME=<value> before the
+			// command, not the paths inherited values name (USERPROFILE, APPDATA).
+			msg := "failed to connect: " + err.Error()
+			if _, v, ok := strings.Cut(executable, "="); ok {
+				msg = redact(msg, secretParts([]string{v}), false)
+			}
+			return nil, &redactedError{msg: msg, brief: msg, err: err}
 		}
 		transport = stdio
 
@@ -105,6 +122,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
 		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
@@ -116,6 +134,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 			return nil, err
 		}
 		dcrSkipped = dcrSkippedAuth
+		secrets = transportSecrets(cfg, httpClient)
 		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
@@ -162,11 +181,11 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		if tail := stdout.String(); tail != "" {
 			output = append(output, "stdout: "+tail)
 		}
-		brief := redact("failed to connect: "+err.Error(), stderr.secrets, false)
+		brief := redact("failed to connect: "+err.Error(), secrets, false)
 		msg := brief
 		if len(output) > 0 {
 			// The SDK error stays last: OutcomeForError classifies by its suffix.
-			msg = redact(fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err), stderr.secrets, false)
+			msg = redact(fmt.Sprintf("failed to connect (%s): %v", strings.Join(output, "; "), err), secrets, false)
 		}
 		return nil, &redactedError{msg: msg, brief: brief, err: err}
 	}
@@ -177,7 +196,14 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		Type:      transportType,
 		Transport: transport,
 		cancel:    cancel,
+		secrets:   secrets,
 	}, nil
+}
+
+// transportSecrets returns what a remote error can echo: the URL's and the
+// headers' values, including a bearer OAuth discovery added for this client.
+func transportSecrets(cfg MCPServerConfig, c *http.Client) []string {
+	return remoteSecrets(*cfg.URL, c.Transport.(*headerTransport).headers)
 }
 
 func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
@@ -253,7 +279,7 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 			default:
 				// Optional-auth server: the unauthenticated probe answered, so a declined or
 				// failed login falls back to the anonymous connection.
-				fmt.Printf("Warning: OAuth discovery failed: %v\n", err)
+				fmt.Printf("Warning: OAuth discovery failed: %s\n", redact(err.Error(), remoteSecrets(url, cfg.Headers), false))
 				fmt.Printf("Attempting connection without authentication...\n")
 			}
 		} else if accessToken != "" {

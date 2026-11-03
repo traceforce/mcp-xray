@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +37,10 @@ func TestMain(m *testing.M) {
 	case "stderr":
 		fmt.Fprintln(os.Stderr, "token:", os.Getenv("MCPXRAY_TEST_TOKEN"))
 		fmt.Fprintln(os.Stderr, "npm error E401 Unauthorized")
+		os.Exit(1)
+	case "lastword": // logs only the token of MCPXRAY_TEST_TOKEN="Bearer <token>"
+		words := strings.Fields(os.Getenv("MCPXRAY_TEST_TOKEN"))
+		fmt.Fprintln(os.Stderr, "invalid token", words[len(words)-1])
 		os.Exit(1)
 	case "args":
 		fmt.Fprintln(os.Stderr, "args:", strings.Join(os.Args[1:], " "))
@@ -187,6 +192,75 @@ func TestArgSecrets(t *testing.T) {
 		"https://ghp_0123456789:x-oauth-basic@github.com/o/r"}
 	assert.Equal(t, []string{"sk-0123456789", "--token=ghp_0123456789", "ghp_0123456789",
 		"https://ghp_0123456789:x-oauth-basic@github.com/o/r", "ghp_0123456789", "x-oauth-basic"}, argSecrets(args))
+}
+
+func TestArgSecrets_ValueForms(t *testing.T) {
+	got := argSecrets([]string{"--api-key", "-PLACEHOLDER_abcdefgh", "-transport", "stdio",
+		"https://x.example/mcp?client=x&api_key=PLACEHOLDER_query", "Authorization: Bearer PLACEHOLDER_header"})
+	assert.NotContains(t, got, "ransport", "a Go-style single-dash flag is not split")
+	assert.Contains(t, argSecrets([]string{"--password=PLACEHOLDER&suffixXYZ"}), "PLACEHOLDER&suffixXYZ")
+	for _, want := range []string{"-PLACEHOLDER_abcdefgh", "PLACEHOLDER_query", "PLACEHOLDER_header"} {
+		assert.Contains(t, got, want)
+	}
+}
+
+func TestSecretParts_MasksEveryLoggerEscaping(t *testing.T) {
+	// Node and slog leave & raw, Python escapes non-ASCII, and a child may trim.
+	secrets := secretParts([]string{"PLACEHOLDER\"VALUE&abcdefgh", "pässwort_abcdefgh", "PLACEHOLDER_trimmed \r\n"})
+	for _, logged := range []string{`"PLACEHOLDER\"VALUE&abcdefgh"`, `"PLACEHOLDER\"VALUE\u0026abcdefgh"`,
+		`"p\u00e4sswort_abcdefgh"`, "token: PLACEHOLDER_trimmed\nnext line"} {
+		got := redact(logged, secrets, false)
+		assert.NotContains(t, got, "abcdefgh", logged)
+		assert.NotContains(t, got, "PLACEHOLDER_trimmed", logged)
+	}
+	assert.Equal(t, "token: [redacted]\nnext line", redact("token: PLACEHOLDER_trimmed\nnext line", secrets, false))
+}
+
+func TestNewSDKSession_RemoteErrorMasksURLAndHeaderValues(t *testing.T) {
+	// Nothing listens there, so Go's error quotes the URL, key included.
+	u := "http://127.0.0.1:1/mcp?api_key=PLACEHOLDER_query1"
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u, NonInteractive: true})
+	require.Error(t, err)
+	assert.Contains(t, errors.Unwrap(err).Error(), "PLACEHOLDER_query1", "the SDK error does carry the key")
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_query1")
+
+	s := &SDKSession{secrets: remoteSecrets(u, map[string]string{"Authorization": "Bearer --PLACEHOLDER_header1"})}
+	assert.EqualError(t, s.Redact(errors.New(`calling "tools/list": bad token --PLACEHOLDER_header1`)), `calling "tools/list": bad token [redacted]`)
+
+	// Go quotes the URL with its password as ***, so the whole URL no longer matches
+	// and only the path segment covers the key.
+	u = "http://deploy:pw_X@127.0.0.1:1/mcp/sk-ak-PLACEHOLDERKEY123"
+	_, err = NewSDKSession(context.Background(), MCPServerConfig{Name: "s", URL: &u, NonInteractive: true})
+	require.Error(t, err)
+	assert.Contains(t, errors.Unwrap(err).Error(), "sk-ak-PLACEHOLDERKEY123", "the SDK error does carry the key")
+	assert.NotContains(t, err.Error(), "sk-ak-PLACEHOLDERKEY123")
+}
+
+func TestValueParts_KeyForms(t *testing.T) {
+	got := valueParts("https://mcp.example.com/api/mcp/s/PLACEHOLDER_pathtoken1/sse")
+	assert.Contains(t, got, "PLACEHOLDER_pathtoken1", "a long path segment, as an SSE messages endpoint echoes it")
+	assert.NotContains(t, got, "api", "a short path segment is a word")
+	assert.Contains(t, valueParts("X-API-Key:sk-live-0123456789"), "sk-live-0123456789", "mcp-remote's --header Name:value")
+	assert.Contains(t, valueParts("session=PLACEHOLDER_cookie1; theme=dark"), "PLACEHOLDER_cookie1", "a cookie piece")
+	assert.Empty(t, valueParts(`C:\Users\someone\server.js`), "a Windows path is not a header")
+}
+
+func TestNewSDKSession_StdioMasksConfiguredEnvInParts(t *testing.T) {
+	// mcp-remote's Windows pattern: --header Authorization:${AUTH_HEADER} with
+	// AUTH_HEADER="Bearer <token>", and a child that logs the token alone.
+	cfg := childConfig(t, "lastword")
+	cfg.Env["MCPXRAY_TEST_TOKEN"] = "Bearer PLACEHOLDER_envtoken1"
+	_, err := NewSDKSession(context.Background(), cfg)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "invalid token [redacted]")
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_envtoken1")
+}
+
+func TestNewSDKSession_StartErrorMasksEnvPrefix(t *testing.T) {
+	cmd := "NAME=PLACEHOLDER_startvalue node server.js"
+	_, err := NewSDKSession(context.Background(), MCPServerConfig{Name: "s", Command: &cmd})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "PLACEHOLDER_startvalue")
 }
 
 func TestArgSecrets_DecodesURLCredentials(t *testing.T) {
