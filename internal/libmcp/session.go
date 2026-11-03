@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -59,6 +60,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	var transport mcp.Transport
 	var dcrSkipped bool
 	var secrets []string  // config and environment values that must never appear in an error
+	var retryLogin bool   // a refreshed stored login was used, so a 401 is worth one browser login
 	var stderr outputTail // what a stdio child wrote to stderr, for the connect error
 	var stdout outputTail // what it wrote to stdout before its first message, likewise
 
@@ -121,6 +123,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		}
 		dcrSkipped = dcrSkippedAuth
 		secrets = transportSecrets(cfg, httpClient)
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.StreamableClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -132,6 +135,7 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 		}
 		dcrSkipped = dcrSkippedAuth
 		secrets = transportSecrets(cfg, httpClient)
+		retryLogin = httpClient.Transport.(*headerTransport).refreshed && !cfg.NonInteractive
 		transport = &mcp.SSEClientTransport{
 			Endpoint:   *cfg.URL,
 			HTTPClient: httpClient,
@@ -160,6 +164,13 @@ func NewSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSession, error
 	}
 	if err != nil {
 		cancel()
+		if retryLogin && OutcomeForError(err) == OutcomeAuthRequired {
+			// Scope step-up, an audience change or a revocation: the refreshed token is
+			// not enough, so log in in the browser once instead of reporting auth_required.
+			fmt.Printf("Warning: MCP server '%s' refused the refreshed stored login; logging in again\n", cfg.Name)
+			cfg.skipStoredLogin = true
+			return NewSDKSession(ctx, cfg)
+		}
 		if dcrSkipped && strings.Contains(err.Error(), "Unauthorized") {
 			return nil, &DCRUnauthorizedError{ServerName: cfg.Name}
 		}
@@ -209,31 +220,97 @@ func newHTTPClient(cfg MCPServerConfig) (*http.Client, bool, error) {
 	}
 
 	dcrSkippedAuth := false
+	// A stored credential logs in without a browser; a configured Authorization wins over it.
+	refreshed := false
+	useStored := !cfg.skipStoredLogin && !hasAccessToken(cfg.Headers)
+	if useStored && cfg.CredentialsFile != "" && cfg.Credentials != nil { // another run may have rotated it since this one started
+		disk, err := LoadCredentials(cfg.CredentialsFile)
+		// Never spend the token loaded at startup, which may be spent; a server with no
+		// stored login has none to spend, so an unreadable file does not fail it.
+		if _, stored := cfg.Credentials[url]; err != nil && stored {
+			return nil, false, err
+		}
+		if c, ok := disk[url]; ok {
+			cfg.Credentials[url] = c
+		}
+	}
+	cred, usable, why := cfg.storedLogin(url)
+	if useStored && why != "" {
+		fmt.Printf("Stored login for MCP server '%s' not used: %s\n", cfg.Name, why)
+	}
+	if useStored && usable {
+		accessToken, err := cred.refresh(url)
+		switch {
+		case err == nil:
+			cfg.Credentials[url] = cred // keeps a rotated refresh token
+			cfg.saveCredentials(url)
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			refreshed = true
+		case cfg.NonInteractive:
+			return nil, false, err
+		default:
+			// Only a refused token (CredentialError) is worth a fresh browser login; a
+			// transient or transport outage stays a failure, not auth_required after an
+			// unauthenticated retry that hides the real cause.
+			var ce *CredentialError
+			if !errors.As(err, &ce) {
+				return nil, false, err
+			}
+			fmt.Printf("Warning: stored credential for MCP server '%s' refused: %v; logging in again\n", cfg.Name, err)
+		}
+	}
 	if !cfg.NonInteractive && !hasAccessToken(cfg.Headers) {
 		oauthConfig := NewOAuthConfig(url, cfg.OAuthClientID, cfg.OAuthClientSecret, cfg.RedirectURI)
-		accessToken, err := oauthConfig.OauthDiscovery()
+		accessToken, cred, err := oauthConfig.OauthDiscovery()
 		if err != nil {
-			if errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "" {
+			switch {
+			case errors.Is(err, ErrDCRForbidden) && cfg.OAuthClientID == "":
+				// DCR 403 with no configured client: show the hint and let the anonymous
+				// attempt report auth_required.
 				dcrSkippedAuth = true
 				fmt.Printf("MCP server '%s' does not support DCR (403). Add \"oauth_client_id\" to this server in your MCP config to connect. See examples/mcp_configs/README.md.\n", cfg.Name)
-			} else {
+				fmt.Printf("Attempting connection without authentication...\n")
+			case oauthConfig.probeUnauthorized && !hasCredentialHeader(cfg.Headers):
+				// The server requires auth (the unauthenticated probe returned 401): report
+				// the real login or discovery failure, never hide it behind an anonymous 401.
+				// The probe carries no configured headers, so with an X-API-Key or similar
+				// configured, its 401 says nothing about that key: connect with it instead.
+				return nil, false, err
+			default:
+				// Optional-auth server: the unauthenticated probe answered, so a declined or
+				// failed login falls back to the anonymous connection.
 				fmt.Printf("Warning: OAuth discovery failed: %s\n", redact(err.Error(), remoteSecrets(url, cfg.Headers), false))
+				fmt.Printf("Attempting connection without authentication...\n")
 			}
-			fmt.Printf("Attempting connection without authentication...\n")
 		} else if accessToken != "" {
-			if cfg.Headers == nil {
-				cfg.Headers = make(map[string]string)
+			cfg.Headers = withBearer(cfg.Headers, accessToken)
+			if cfg.Credentials != nil {
+				// One not kept leaves the stored entry alone: another config entry for this
+				// URL, with its own pin, may still use it.
+				if cred != nil && keepable(url, *cred, cfg.OAuthTokenEndpoint) {
+					cfg.Credentials[url] = *cred
+					cfg.saveCredentials(url)
+				} else {
+					fmt.Printf("Login for MCP server '%s' not kept: %s\n", cfg.Name, cfg.notKeepable())
+				}
 			}
-			cfg.Headers["Authorization"] = "Bearer " + accessToken
 		}
 		// If we cannot discover the access token, just continue with the existing headers
 		// the server might not require authentication
 	}
 
-	// Add the configured headers, and a User-Agent when they do not set one, to all requests
+	// The configured headers go to the configured origin only, so a redirect or
+	// an SSE endpoint event cannot carry them to another, or to plain http.
+	scheme, host := "", ""
+	if req, err := http.NewRequest(http.MethodGet, url, nil); err == nil {
+		scheme, host = req.URL.Scheme, hostKey(req.URL)
+	}
 	httpClient.Transport = &headerTransport{
-		base:    http.DefaultTransport,
-		headers: cfg.Headers,
+		base:      http.DefaultTransport,
+		headers:   cfg.Headers,
+		scheme:    scheme,
+		host:      host,
+		refreshed: refreshed,
 	}
 
 	return httpClient, dcrSkippedAuth, nil
@@ -261,19 +338,37 @@ func (s *SDKSession) Close() error {
 }
 
 // headerTransport wraps an http.RoundTripper and adds the configured headers to
-// all requests, plus a User-Agent when they do not set one.
+// requests for the configured origin, plus a User-Agent when they do not set one.
 type headerTransport struct {
-	base    http.RoundTripper
-	headers map[string]string
+	base      http.RoundTripper
+	headers   map[string]string
+	scheme    string // with host, the only origin the configured headers are sent to
+	host      string
+	refreshed bool // the bearer came from a refreshed stored login
 }
 
 func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Clone the request to avoid modifying the original
 	req = req.Clone(req.Context())
 
-	// Add all configured headers to the request
+	// The configured headers go to the configured origin, and never again once a
+	// redirect chain has left its host, as Go strips them (Go also allows the host's
+	// subdomains; this does not). A same-host http hop only withholds them for that
+	// hop. A User-Agent is no credential, so a configured one goes everywhere.
+	same := t.isOrigin(req.URL)
+	for r := req.Response; same && r != nil && r.Request != nil; r = r.Request.Response {
+		same = sameHost(hostKey(r.Request.URL), t.host)
+	}
+	withheld := false
 	for k, v := range t.headers {
-		req.Header.Set(k, v)
+		if same || strings.EqualFold(k, "User-Agent") {
+			req.Header.Set(k, v)
+		} else if isCredentialHeader(k) {
+			withheld = true
+		}
+	}
+	if !same {
+		req.Header.Del("Referer") // Go sets it to the previous URL, which may hold a key
 	}
 	// Go would otherwise send User-Agent: Go-http-client/1.1, which some servers refuse.
 	// An explicitly empty configured value means send none, so test presence, not emptiness.
@@ -281,7 +376,83 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		req.Header.Set("User-Agent", metadata.Name+"/"+metadata.Version)
 	}
 
-	return t.base.RoundTrip(req)
+	resp, err := t.base.RoundTrip(req)
+	// A 401 from an origin the credential was withheld from is a wrong endpoint, not
+	// a missing credential, on connect and on every later call; the error must not end
+	// in "Unauthorized", which OutcomeForError reads as auth_required.
+	if err == nil && withheld && resp.StatusCode == http.StatusUnauthorized {
+		if req.Method == http.MethodGet && req.Header.Get("Mcp-Protocol-Version") != "" {
+			// The streamable client's optional SSE stream: an error would be retried with
+			// backoff until it fails the session. As a response its first GET is skipped,
+			// and a reconnect ends as Misdirected Request (failed), not auth_required.
+			resp.StatusCode, resp.Status = http.StatusMisdirectedRequest, "421 Misdirected Request"
+			return resp, nil
+		}
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("answered 401; the configured credentials are sent only to %s://%s", t.scheme, t.host)
+	}
+	return resp, err
+}
+
+// isOrigin reports whether u is the configured origin, or its https form: an
+// upgrade on the same host protects the credential, a downgrade would expose it.
+func (t *headerTransport) isOrigin(u *url.URL) bool {
+	return sameHost(hostKey(u), t.host) && (strings.EqualFold(u.Scheme, t.scheme) || strings.EqualFold(u.Scheme, "https"))
+}
+
+// hostKey is u's host and port with the scheme's default port left out, so
+// https://h and https://h:443 are one origin.
+func hostKey(u *url.URL) string {
+	if p := u.Port(); (p == "443" && strings.EqualFold(u.Scheme, "https")) || (p == "80" && strings.EqualFold(u.Scheme, "http")) {
+		return strings.TrimSuffix(u.Host, ":"+p)
+	}
+	return u.Host
+}
+
+// isCredentialHeader reports whether a configured header may carry a credential;
+// withholding any other, such as X-Client-Name, cannot explain a 401.
+func isCredentialHeader(k string) bool {
+	k = strings.ToLower(k)
+	for _, part := range []string{"auth", "key", "token", "secret", "pass", "session", "sig", "cred"} {
+		if strings.Contains(k, part) {
+			return true
+		}
+	}
+	return k == "cookie"
+}
+
+// sameHost reports whether two authorities name one server: ASCII letters fold
+// as DNS folds them, every other byte must match, since letters such as σ and ς
+// fold alike yet encode to different names. The port counts.
+func sameHost(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
+// withBearer returns a copy of headers with the access token set, leaving the
+// caller's map as configured.
+func withBearer(headers map[string]string, token string) map[string]string {
+	out := map[string]string{"Authorization": "Bearer " + token}
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") { // another spelling would race this one onto the wire
+			out[k] = v
+		}
+	}
+	return out
 }
 
 // Helper functions
@@ -293,21 +464,36 @@ func envToSlice(env map[string]string) []string {
 	return result
 }
 
-// hasAccessToken checks if the headers contain an access token
+// hasCredentialHeader reports whether the headers configure a non-empty value
+// that may carry a credential, such as X-API-Key or Cookie.
+func hasCredentialHeader(headers map[string]string) bool {
+	for k, v := range headers {
+		if isCredentialHeader(k) && strings.TrimSpace(v) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAccessToken reports whether the headers configure an Authorization value in
+// any spelling and scheme (Bearer, Basic, token): a configured credential wins
+// over a stored or browser login.
 func hasAccessToken(headers map[string]string) bool {
-	if headers == nil {
-		return false
+	for k, v := range headers {
+		if !strings.EqualFold(k, "Authorization") {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		// mcp-xray does not expand header placeholders, so an unexpanded ${env:…} or
+		// {{TOKEN}} is not a credential and must not block a stored or browser login.
+		if strings.Contains(v, "${") || strings.Contains(v, "{{") {
+			continue
+		}
+		// A real Authorization is a scheme plus a non-empty credential ("Bearer x");
+		// a bare scheme ("Bearer") carries nothing.
+		if scheme, cred, ok := strings.Cut(v, " "); ok && scheme != "" && strings.TrimSpace(cred) != "" {
+			return true
+		}
 	}
-	// Check for "Authorization" key (case-sensitive since map keys are case-sensitive)
-	// HTTP headers are case-insensitive, but we check the common capitalized form
-	if authHeader, ok := headers["Authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
-	// Also check lowercase "authorization" in case it was stored that way
-	if authHeader, ok := headers["authorization"]; ok && strings.HasPrefix(authHeader, "Bearer ") {
-		return true
-	}
-
 	return false
 }

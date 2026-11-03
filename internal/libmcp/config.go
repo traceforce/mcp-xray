@@ -22,6 +22,7 @@ type RawServerConfig struct {
 	OAuthClientSecret  string            `json:"oauth_client_secret,omitempty"`
 	Auth               map[string]string `json:"auth,omitempty"`
 	RedirectURI        string            `json:"redirect_uri,omitempty"`
+	OAuthTokenEndpoint string            `json:"oauth_token_endpoint,omitempty"`
 }
 
 type ConfigParser struct {
@@ -87,17 +88,18 @@ func ParseConfig(data []byte) ([]MCPServerConfig, error) {
 			oauthClientID = serverConfig.Auth["CLIENT_ID"]
 		}
 		server := MCPServerConfig{
-			Name:              serverName,
-			Command:           command,
-			Args:              serverConfig.Args,
-			URL:               url,
-			Env:               serverConfig.Env,
-			Headers:           serverConfig.Headers,
-			Type:              transportType,
-			RawJSON:           string(rawJSON),
-			OAuthClientID:     oauthClientID,
-			OAuthClientSecret: serverConfig.OAuthClientSecret,
-			RedirectURI:       serverConfig.RedirectURI,
+			Name:               serverName,
+			Command:            command,
+			Args:               serverConfig.Args,
+			URL:                url,
+			Env:                serverConfig.Env,
+			Headers:            serverConfig.Headers,
+			Type:               transportType,
+			RawJSON:            string(rawJSON),
+			OAuthClientID:      oauthClientID,
+			OAuthClientSecret:  serverConfig.OAuthClientSecret,
+			RedirectURI:        serverConfig.RedirectURI,
+			OAuthTokenEndpoint: serverConfig.OAuthTokenEndpoint,
 		}
 		servers = append(servers, server)
 	}

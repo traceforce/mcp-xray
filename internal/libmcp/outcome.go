@@ -59,7 +59,8 @@ func ListAllTools(ctx context.Context, session *mcp.ClientSession) ([]*mcp.Tool,
 
 // OutcomeForError maps a connect or tools/list error to an outcome status.
 // A command that cannot be found or started (missing, not executable, wrong
-// format) is unlaunchable; a server that answers 401 is auth_required.
+// format) is unlaunchable; a server that answers 401, or whose stored
+// credential the token endpoint refuses, is auth_required.
 func OutcomeForError(err error) string {
 	if re := (*redactedError)(nil); errors.As(err, &re) {
 		err = re.err // classify what the SDK said, not its masked display text
@@ -67,11 +68,12 @@ func OutcomeForError(err error) string {
 	var execErr *exec.Error
 	var pathErr *fs.PathError
 	var dcrErr *DCRUnauthorizedError
+	var credErr *CredentialError
 	switch {
 	case errors.As(err, &execErr), errors.As(err, &pathErr) && pathErr.Op == "fork/exec":
 		return OutcomeUnlaunchable
 	// The SDK ends a 401 error with the status text; a suffix match keeps a URL or cursor in the message from counting.
-	case errors.As(err, &dcrErr), strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized"):
+	case errors.As(err, &dcrErr), errors.As(err, &credErr), strings.HasSuffix(strings.TrimSpace(err.Error()), "Unauthorized"):
 		return OutcomeAuthRequired
 	}
 	return OutcomeFailed
