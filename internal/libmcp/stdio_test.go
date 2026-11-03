@@ -116,6 +116,9 @@ func TestNewSDKSession_StdioExitReportsStderr(t *testing.T) {
 	assert.NotContains(t, err.Error(), "ghp_secret_0123456789")
 	// The child's last line ends with Unauthorized, which must not read as a 401.
 	assert.Equal(t, OutcomeFailed, OutcomeForError(err))
+	// Findings, which config-scan --upload sends off the machine, get no child output.
+	assert.NotContains(t, ReasonWithoutOutput(err), "stderr")
+	assert.True(t, strings.HasPrefix(ReasonWithoutOutput(err), "failed to connect: "), ReasonWithoutOutput(err))
 }
 
 func TestNewSDKSession_StdioExitRedactsArgSecrets(t *testing.T) {
