@@ -89,16 +89,14 @@ func (c *LLMClient) GetType() int {
 
 // CallLLM calls the LLM API
 func (c *LLMClient) CallLLM(ctx context.Context, userPrompt string, outputFormat int) (string, error) {
-	systemPrompt := `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
-Analyze the provided tool information and return a JSON array of security findings.
-Each finding must have: severity, rule_id, title, message, and optionally category.
-Return ONLY valid JSON, no markdown formatting, no code fences.`
+	format := "JSON"
 	if outputFormat == OutputFormatYAML {
-		systemPrompt = `You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
-Analyze the provided tool information and return a YAML object of security findings.
-Each finding must have: severity, rule_id, title, message, and optionally category.
-Return ONLY valid YAML, no markdown formatting, no code fences.`
+		format = "YAML"
 	}
+	// Format only: each caller's prompt carries its own schema.
+	systemPrompt := fmt.Sprintf(`You are a security analyst specializing in analyzing API tools and schemas for security vulnerabilities.
+Answer in exactly the %s structure the request describes.
+Return ONLY valid %s, no markdown formatting, no code fences.`, format, format)
 
 	content, err := c.ChatClient.Chat(ctx, systemPrompt, []ChatMessage{
 		{Role: "user", Content: userPrompt},
