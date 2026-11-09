@@ -135,6 +135,7 @@ Return a JSON object with a "results" field containing an array of security find
 - message: A detailed explanation of the security risk
 - category: Optional category of the vulnerability
 
+If there are no findings, return {"results": []}.
 Return ONLY valid JSON, no markdown, no code fences, no additional text.
 
 Tools to analyze:%s
@@ -161,7 +162,7 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 	var wrapped struct {
 		Results []*SecurityFinding `json:"results"`
 	}
-	if err := json.Unmarshal([]byte(response), &wrapped); err == nil && len(wrapped.Results) > 0 {
+	if err := json.Unmarshal([]byte(response), &wrapped); err == nil && wrapped.Results != nil {
 		findings = wrapped.Results
 	} else {
 		// Fallback: try to parse as direct array
@@ -178,6 +179,9 @@ func (a *LLMAnalyzer) parseBatchLLMResponse(response string, tools []*mcp.Tool, 
 	// Convert to proto.Finding, mapping findings to their respective tools
 	protoFindings := make([]*proto.Finding, 0, len(findings))
 	for _, f := range findings {
+		if f == nil {
+			return nil, fmt.Errorf("LLM response contains a null finding")
+		}
 		// Determine which tool this finding belongs to
 		var targetTool *mcp.Tool
 		if f.ToolName != "" {
