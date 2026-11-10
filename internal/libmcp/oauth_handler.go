@@ -476,6 +476,5 @@ func openBrowser(u string) {
 	}
 	_ = cmd.Start()
 	// don't wait; manual open already supported by printed URL
-	_ = cmd.Process.Release()
 	_ = context.Background()
 }

@@ -39,3 +39,9 @@ func TestRedirectServerIgnoresWrongState(t *testing.T) {
 		t.Fatalf("callback with this login's state = %d, want 200 and code c", got)
 	}
 }
+
+// A machine with no browser opener must not crash the login.
+func TestOpenBrowserWithoutOpener(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	openBrowser("http://127.0.0.1/authorize")
+}

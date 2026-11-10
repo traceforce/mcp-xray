@@ -39,8 +39,8 @@ proto:
 install: build
 	install -m 0755 $(BINARY) $(DESTDIR)
 
-# Run the same checks CI runs. Excludes only the configscan package, whose tests make
-# live network calls to third-party servers (not a deterministic gate).
+# Run the same checks CI runs. The configscan package is excluded, since most of its
+# tests make live network calls; only its deterministic print tests run.
 ci:
 	go build ./...
 	go vet ./...
@@ -48,6 +48,7 @@ ci:
 		pkgs=$$(printf '%s\n' "$$pkgs" | grep -v '/internal/configscan$$'); \
 		[ -n "$$pkgs" ] || { echo "no packages to test" >&2; exit 1; }; \
 		go test $$pkgs
+	go test -run '^TestScanPrintsNo' ./internal/configscan
 
 # Clean generated files
 clean:
