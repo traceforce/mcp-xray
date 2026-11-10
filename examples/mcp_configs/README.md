@@ -23,4 +23,4 @@ Without `oauth_client_id`, the tool continues without authentication and Figma w
 
 ## AUTH-MISSING
 
-The AUTH-MISSING pentest opens a separate HTTP/SSE session with no configured headers or OAuth token. Only HTTP 401 or 403 from the probe proves authentication was refused. Tool errors and successful anonymous calls require review; they do not establish an authentication bypass or prove enforcement. Business prerequisites do not block this independent probe.
+The AUTH-MISSING pentest opens a separate HTTP/SSE session with no configured headers or OAuth token. Only HTTP 401 or 403 from the probe proves authentication was refused. Tool errors and successful anonymous calls require review and make the assessment incomplete; they do not establish an authentication bypass or prove enforcement. Business prerequisites do not block this independent probe.

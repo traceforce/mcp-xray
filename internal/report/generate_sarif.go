@@ -17,8 +17,20 @@ type SARIFReport struct {
 }
 
 type Run struct {
-	Tool    Tool     `json:"tool"`
-	Results []Result `json:"results"`
+	Tool        Tool         `json:"tool"`
+	Results     []Result     `json:"results"`
+	Invocations []Invocation `json:"invocations,omitempty"`
+}
+
+// Invocation says whether the run did all its work; each skipped item is a warning notification.
+type Invocation struct {
+	ExecutionSuccessful        bool           `json:"executionSuccessful"`
+	ToolExecutionNotifications []Notification `json:"toolExecutionNotifications,omitempty"`
+}
+
+type Notification struct {
+	Level   string  `json:"level"`
+	Message Message `json:"message"`
 }
 
 type Tool struct {
@@ -67,7 +79,8 @@ type Message struct {
 	Text string `json:"text"`
 }
 
-func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
+// GenerateSarif renders findings; any skipped reason marks the run as not executed successfully.
+func GenerateSarif(findings []*proto.Finding, skipped ...string) ([]byte, error) {
 	// Build rules map
 	ruleMap := make(map[string]*ReportingRule)
 	for i := range findings {
@@ -180,6 +193,13 @@ func GenerateSarif(findings []*proto.Finding) ([]byte, error) {
 				Results: results,
 			},
 		},
+	}
+	if len(skipped) > 0 {
+		inv := Invocation{}
+		for _, s := range skipped {
+			inv.ToolExecutionNotifications = append(inv.ToolExecutionNotifications, Notification{Level: "warning", Message: Message{Text: s}})
+		}
+		report.Runs[0].Invocations = []Invocation{inv}
 	}
 
 	// Marshal to JSON
