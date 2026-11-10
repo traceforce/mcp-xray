@@ -32,7 +32,7 @@ func TestScanPrintsNoServerConfig(t *testing.T) {
 
 func TestScanPrintsNoURLSecret(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
-	cfg := `{"mcpServers":{"remote":{"url":"https://mcp.invalid/CANARY-PATH?api_key=CANARY-QUERY"}}}`
+	cfg := `{"mcpServers":{"remote":{"type":"http","url":"mcp://example.com/CANARY-PATH?api_key=CANARY-QUERY"}}}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
