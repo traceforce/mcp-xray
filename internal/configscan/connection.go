@@ -40,7 +40,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) 
 
 	findings := []*proto.Finding{}
 	for _, server := range servers {
-		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
+		fmt.Printf("Scanning MCP Server %s\n", server.Name)
 		classification := libmcp.ClassifyTransport(server)
 		switch classification {
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
@@ -240,7 +240,7 @@ func (s *ConnectionScanner) checkCertificate(cfg libmcp.MCPServerConfig) ([]*pro
 	// Make request to check Connection
 	resp, err := client.Get(urlStr)
 	if err != nil {
-		fmt.Printf("Http error: %s, response: %+v\n", err.Error(), resp)
+		fmt.Printf("Http error: %s\n", errors.Unwrap(err))
 		if isCertificateError(err) {
 			return []*proto.Finding{
 				{
@@ -319,7 +319,7 @@ func (s *ConnectionScanner) checkTLSVersion(tlsVersion uint16, cfg libmcp.MCPSer
 	// Make request to check Connection
 	resp, err := client.Get(urlStr)
 	if err != nil {
-		fmt.Printf("Http error: %s\n", err.Error())
+		fmt.Printf("Http error: %s\n", errors.Unwrap(err))
 		// Check if this is NOT a TLS protocol error (version not supported)
 		if !isTLSProtocolError(err) {
 			// Connection error - report as finding and stop checking other TLS versions
@@ -410,7 +410,7 @@ func (s *ConnectionScanner) detectIdentityControl(cfg libmcp.MCPServerConfig) ([
 
 	resp, err := client.Get(*cfg.URL)
 	if resp == nil || err != nil {
-		return nil, err
+		return nil, errors.Unwrap(err)
 	}
 	defer resp.Body.Close()
 
