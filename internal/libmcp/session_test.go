@@ -34,12 +34,15 @@ func TestNewAnonymousSDKSession(t *testing.T) {
 	if err == nil || status() != http.StatusUnauthorized || withToken.Load() != 0 {
 		t.Fatalf("err %v, status %d, requests with a token %d; want a 401 and no token sent", err, status(), withToken.Load())
 	}
-	cmd, unknown, before := "server", "websocket", hits.Load()
+	cmd, unknown, bad, before := "server", "websocket", "http://[::1", hits.Load()
 	query, userinfo := ts.URL+"?api_key=good", strings.Replace(ts.URL, "http://", "http://u:p@", 1)
 	for _, c := range []MCPServerConfig{{Name: "stdio", Command: &cmd}, {Name: "unknown", Type: &unknown, URL: &ts.URL}, {Name: "query", URL: &query}, {Name: "userinfo", URL: &userinfo}} {
 		if _, status, err := NewAnonymousSDKSession(context.Background(), c); err == nil || status() != 0 {
 			t.Errorf("%s: connected or reported a status, want a refusal with status 0", c.Name)
 		}
+	}
+	if _, _, err := NewAnonymousSDKSession(context.Background(), MCPServerConfig{Name: "bad", URL: &bad}); err == nil || strings.Contains(err.Error(), "credential") {
+		t.Errorf("malformed URL: err %v, want the parse error", err)
 	}
 	if hits.Load() != before {
 		t.Errorf("a refused config still reached the server")

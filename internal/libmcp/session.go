@@ -128,7 +128,7 @@ func NewAnonymousSDKSession(ctx context.Context, cfg MCPServerConfig) (*SDKSessi
 	if transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP && transportType != proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE || cfg.URL == nil {
 		return nil, lastStatus, errors.New("no HTTP endpoint to call without credentials")
 	}
-	if u, err := url.Parse(*cfg.URL); err != nil || u.User != nil || u.RawQuery != "" {
+	if u, err := url.Parse(*cfg.URL); err == nil && (u.User != nil || u.RawQuery != "") {
 		return nil, lastStatus, errors.New("the configured URL may carry a credential")
 	}
 	httpClient := &http.Client{Timeout: 20 * time.Second, Transport: st}
