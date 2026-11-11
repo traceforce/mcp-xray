@@ -234,8 +234,10 @@ func parseRuleBlock(block string) (*UnsafePattern, error) {
 	// Convert reason string to Reason type
 	reasonType := Reason(reason)
 
-	// Compile regex pattern
-	pattern, err := regexp.Compile(patternStr)
+	// Compile regex pattern. Input is lowercased by NormalizeForPatternMatching before
+	// matching, so compile case-insensitively or any rule with an uppercase letter
+	// (shell=True, new Function, execSync, ...) can never match.
+	pattern, err := regexp.Compile("(?i)" + patternStr)
 	if err != nil {
 		return nil, fmt.Errorf("invalid regex pattern for rule %s: %w", id, err)
 	}
