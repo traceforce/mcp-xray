@@ -2,6 +2,7 @@ package reposcan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -73,9 +74,16 @@ func DetectUnsafeCommands(ctx context.Context, filePath string, content string) 
 
 // PopulateUnsafeCommands detects unsafe commands and populates the unsafe_commands_result field in proto.MCPServer
 func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
+	findings, _, err := s.scan(ctx)
+	return findings, err
+}
+
+// scan is Scan, also returning the taint engines' failure (taintErr), which
+// Scan only prints: a target scan records it in the unit's execution.
+func (s *SASTScanner) scan(ctx context.Context) (findings []*proto.Finding, taintErr error, err error) {
 	var allMatches []yararules.UnsafeCommandMatch
 
-	err := filepath.Walk(s.repoPath, func(filePath string, info os.FileInfo, err error) error {
+	err = filepath.Walk(s.repoPath, func(filePath string, info os.FileInfo, err error) error {
 		// Warn but continue when an ENTRY can't be walked or statted (e.g. permission
 		// denied): one bad path must not abort the scan, but the skip is surfaced so
 		// reduced coverage is not silent. The scan ROOT is different: if it cannot be
@@ -129,16 +137,16 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	})
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to walk repository: %w", err)
+		return nil, nil, fmt.Errorf("failed to walk repository: %w", err)
 	}
 
 	fmt.Printf("SAST found %d unsafe commands\n", len(allMatches))
-	findings := yararules.ToFindings(allMatches)
+	findings = yararules.ToFindings(allMatches)
 
 	// Taint engine runs in addition to the YARA scan above. It degrades quietly when
 	// the OpenGrep binary is absent, so existing YARA/SCA/secrets output is unaffected.
-	findings = append(findings, s.runTaintEngine(ctx)...)
-	return findings, nil
+	taintFindings, taintErr := s.runTaintEngine(ctx)
+	return append(findings, taintFindings...), taintErr, nil
 }
 
 // runTaintEngine runs every installed source->sink taint engine and merges their paths.
@@ -147,9 +155,10 @@ func (s *SASTScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 // otherwise, so there is no engine flag at all -- installing an engine is what enables it.
 // Neither engine aborts the scan on failure: OpenGrep discards its results and reports
 // the error, while CodeQL keeps whatever paths the languages that succeeded produced and
-// reports the ones that failed.
-func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
+// reports the ones that failed. The returned error joins those failures.
+func (s *SASTScanner) runTaintEngine(ctx context.Context) ([]*proto.Finding, error) {
 	var paths []taint.PathRecord
+	var failures []error
 
 	// OpenGrep: fast intra-file Python taint.
 	ocfg := taint.DefaultConfig()
@@ -167,7 +176,9 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 	if eng := taint.NewEngine(ocfg); eng.Available() {
 		if p, err := eng.Scan(ctx, s.repoPath); err != nil {
 			fmt.Printf("SAST opengrep error (skipping): %v\n", err)
+			failures = append(failures, fmt.Errorf("opengrep: %w", err))
 		} else {
+			p = s.dropExcludedPaths(p) // --exclude carries ExcludedPaths patterns, not ExcludedDirs
 			fmt.Printf("SAST opengrep found %d taint paths\n", len(p))
 			paths = append(paths, p...)
 		}
@@ -202,16 +213,37 @@ func (s *SASTScanner) runTaintEngine(ctx context.Context) []*proto.Finding {
 		// the engine never having run.
 		if err != nil {
 			fmt.Printf("SAST codeql analysis failed (results may be incomplete): %v\n", err)
+			failures = append(failures, fmt.Errorf("codeql: %w", err))
 		}
 		fmt.Printf("SAST codeql found %d taint paths\n", len(p))
 	}
 
-	return taint.PathsToFindings(taint.MergePaths(paths))
+	return taint.PathsToFindings(taint.MergePaths(s.reportRelative(paths))), errors.Join(failures...)
+}
+
+// reportRelative rebases taint paths, which the engines report relative to
+// the scan root, onto the configured ReportRoot.
+func (s *SASTScanner) reportRelative(paths []taint.PathRecord) []taint.PathRecord {
+	if s.config.ReportRoot == "" {
+		return paths
+	}
+	rebase := func(file string) string {
+		rel, err := filepath.Rel(s.config.ReportRoot, filepath.Join(s.repoPath, file))
+		if err != nil {
+			return file
+		}
+		return filepath.ToSlash(rel)
+	}
+	for i := range paths {
+		paths[i].SinkFile, paths[i].SourceFile = rebase(paths[i].SinkFile), rebase(paths[i].SourceFile)
+	}
+	return paths
 }
 
 // dropExcludedPaths removes taint paths whose sink or source file is under a configured
-// excluded path, so CodeQL honors the same exclusions as opengrep/SCA/secrets (its
-// extraction has no engine-side exclude, so its results are filtered here).
+// excluded path, so both taint engines honor the same exclusions as SCA/secrets/YARA:
+// CodeQL's extraction has no engine-side exclude, and opengrep's --exclude takes only
+// the ExcludedPaths patterns, not the scan unit's ExcludedDirs.
 func (s *SASTScanner) dropExcludedPaths(paths []taint.PathRecord) []taint.PathRecord {
 	out := paths[:0]
 	for _, p := range paths {

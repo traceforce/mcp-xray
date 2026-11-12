@@ -44,3 +44,57 @@ func TestSASTScanSkipsBadEntryButScansRoot(t *testing.T) {
 		t.Error("the unsafe command in h.py must still be found")
 	}
 }
+
+// A scan unit's directory exclusions (an unselected project nested in it)
+// apply to the taint engines' results too. Opt-in like the taint package's
+// integration test: it runs only with MCPXRAY_OPENGREP_BIN set.
+func TestSASTScanHonorsExcludedDirsForTaint(t *testing.T) {
+	if os.Getenv("MCPXRAY_OPENGREP_BIN") == "" {
+		t.Skip("set MCPXRAY_OPENGREP_BIN to a pinned opengrep to run this integration test")
+	}
+	root := t.TempDir()
+	for _, dir := range []string{"own", "foreign"} {
+		copyFixture(t, filepath.Join("taint", "testdata", "py-vuln"), filepath.Join(root, dir))
+	}
+	config := DefaultConfig()
+	config.Root, config.ExcludedDirs = root, []string{"foreign"}
+
+	findings, err := NewSASTScanner(root, config).Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	taintFindings := 0
+	for _, finding := range findings {
+		if finding.Tool != "opengrep" {
+			continue
+		}
+		taintFindings++
+		if strings.HasPrefix(filepath.ToSlash(finding.File), "foreign/") {
+			t.Errorf("taint finding in the excluded directory: %s", finding.File)
+		}
+	}
+	if taintFindings == 0 {
+		t.Fatal("no taint findings in the scanned copy; the test proves nothing")
+	}
+}
+
+func copyFixture(t *testing.T, from, to string) {
+	t.Helper()
+	err := filepath.Walk(from, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(from, path)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Join(to, filepath.Dir(rel)), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(to, rel), data, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

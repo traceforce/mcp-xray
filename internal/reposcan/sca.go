@@ -2,8 +2,11 @@ package reposcan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"mcpxray/proto"
@@ -13,6 +16,13 @@ import (
 	"github.com/ossf/osv-schema/bindings/go/osvschema"
 	cvss "github.com/pandatix/go-cvss/31"
 )
+
+// ErrUnsupportedInput distinguishes a valid scan invocation with no
+// dependency input understood by OSV from an actual scanner failure.
+var ErrUnsupportedInput = errors.New("unsupported SCA input")
+
+// IsUnsupportedScanError reports whether err means there was nothing to scan.
+func IsUnsupportedScanError(err error) bool { return errors.Is(err, ErrUnsupportedInput) }
 
 type SCAScanner struct {
 	repoPath string
@@ -49,6 +59,148 @@ func (s *SCAScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	fmt.Printf("Found %d vulnerabilities\n", len(findings))
 
 	return findings, nil
+}
+
+// scanUnit runs SCA over a target scan's unit: the scan root minus the
+// unit's ExcludedDirs (other targets' trees). Like Scan it reads every
+// dependency file osv-scanner finds there, ExcludedPaths included, so the
+// units of a plan cover what a full-repository scan covers. Unlike Scan it
+// reports a failed osv-scanner call, and ErrUnsupportedInput when there was
+// no dependency input at all, so the unit's execution record is accurate.
+func (s *SCAScanner) scanUnit() ([]*proto.Finding, error) {
+	recursiveRoots, shallowRoots := s.unitScanRoots()
+
+	var combined models.VulnerabilityResults
+	calls, unsupported := 0, 0
+	scanGroup := func(dirs []string, recursive bool) error {
+		if len(dirs) == 0 {
+			return nil
+		}
+		calls++
+		results, callErr := runOSVScan(dirs, recursive)
+		combined.Results = append(combined.Results, results.Results...)
+		if callErr == nil {
+			return nil
+		}
+		if isUnsupportedOSVInput(callErr) {
+			// Many split roots hold no manifest of their own; the scan as a
+			// whole is unsupported only when every group says so.
+			unsupported++
+			return nil
+		}
+		log.Printf("scan error: %v", callErr)
+		return fmt.Errorf("osv scan failed: %w", callErr)
+	}
+
+	// Two calls, because osv-scanner's Recursive flag applies to a whole
+	// call rather than to each path (see splitScanRoots).
+	if err := scanGroup(recursiveRoots, true); err != nil {
+		return nil, err
+	}
+	if err := scanGroup(shallowRoots, false); err != nil {
+		return nil, err
+	}
+	if unsupported == calls {
+		return nil, fmt.Errorf("%w: no packages found in scan", ErrUnsupportedInput)
+	}
+
+	// Normalize the results into a list of Findings
+	findings := FromOSV(combined)
+	fmt.Printf("Found %d vulnerabilities\n", len(findings))
+
+	return findings, nil
+}
+
+// unitScanRoots splits the scan root for scanUnit, leaving out only the
+// unit's ExcludedDirs.
+func (s *SCAScanner) unitScanRoots() (recursiveRoots, shallowRoots []string) {
+	return splitScanRoots(s.repoPath, &Config{Root: s.config.Root, ExcludedDirs: s.config.ExcludedDirs})
+}
+
+// ScanRootOwnFiles runs SCA over root's own files, without descending into
+// any subdirectory. It checks a workspace's shared root lockfile for targets
+// that have none of their own, without rescanning other targets'
+// directories.
+func ScanRootOwnFiles(root string) ([]*proto.Finding, error) {
+	results, err := runOSVScan([]string{root}, false)
+	if err != nil {
+		if isUnsupportedOSVInput(err) {
+			return nil, fmt.Errorf("%w: no packages found in scan", ErrUnsupportedInput)
+		}
+		return nil, fmt.Errorf("osv scan failed: %w", err)
+	}
+	return FromOSV(results), nil
+}
+
+// runOSVScan invokes osv-scanner over dirs. osvscanner.ErrVulnerabilitiesFound
+// is success: DoScan returns it alongside complete results whenever it
+// finds a vulnerability (the CLI's exit code 1).
+func runOSVScan(dirs []string, recursive bool) (models.VulnerabilityResults, error) {
+	results, err := osvscanner.DoScan(osvscanner.ScannerActions{
+		DirectoryPaths: dirs,
+		Recursive:      recursive,
+
+		// Optional: enable call/reachability analysis per ecosystem
+		// Example keys include "npm", "pypi", "go" (see osv-scanner docs)
+		// CallAnalysisStates: map[string]bool{"go": true, "npm": true, "pypi": true},
+	})
+	if err != nil && !errors.Is(err, osvscanner.ErrVulnerabilitiesFound) {
+		return results, err
+	}
+	return results, nil
+}
+
+func isUnsupportedOSVInput(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "no packages found in scan")
+}
+
+// splitScanRoots picks the directories to hand osv-scanner so that cfg's
+// exclusions are honored: osv-scanner cannot recurse "except these
+// subdirectories", so exclusion happens by choosing directories, the way the
+// SAST and secrets scanners skip excluded paths during their walk. Which
+// files are manifests is left entirely to osv-scanner.
+//
+// recursiveRoots are subtrees with no exclusion anywhere inside them.
+// shallowRoots are directories with an excluded descendant: their own files
+// (a workspace's root manifest, say) are scanned non-recursively, since a
+// recursive scan would pull the excluded descendant back in.
+func splitScanRoots(root string, cfg *Config) (recursiveRoots, shallowRoots []string) {
+	if cfg.ShouldExclude(root) {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		// Let osv-scanner report why root cannot be read.
+		return []string{root}, nil
+	}
+
+	var childDirs []string
+	directlyPruned := false
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(root, entry.Name())
+		if cfg.ShouldExclude(child) {
+			directlyPruned = true
+			continue
+		}
+		childDirs = append(childDirs, child)
+	}
+
+	// An exclusion at any depth below a child decides root's case too.
+	for _, child := range childDirs {
+		childRecursive, childShallow := splitScanRoots(child, cfg)
+		recursiveRoots = append(recursiveRoots, childRecursive...)
+		shallowRoots = append(shallowRoots, childShallow...)
+	}
+
+	if !directlyPruned && len(shallowRoots) == 0 {
+		// Nothing below root is excluded: scan it as one subtree.
+		return []string{root}, nil
+	}
+	shallowRoots = append(shallowRoots, root)
+	return recursiveRoots, shallowRoots
 }
 
 // severityFromScore maps CVSS base score => unified bucket.

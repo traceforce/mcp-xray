@@ -14,10 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"mcpxray/internal/aggregation"
 	configscan "mcpxray/internal/configscan"
 	"mcpxray/internal/pentest"
 	"mcpxray/internal/report"
 	reposcan "mcpxray/internal/reposcan"
+	"mcpxray/internal/targetresolve"
 	"mcpxray/proto"
 
 	"github.com/spf13/cobra"
@@ -196,7 +198,14 @@ func NewRepoScanCommand() *cobra.Command {
 		Short: "Scan the repository of the MCP server",
 		Args:  cobra.MaximumNArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("Scanning the repository of the MCP server")
+			targets, err := readTargetFlags(cmd)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			if !targets.list {
+				fmt.Println("Scanning the repository of the MCP server")
+			}
 			repoPath := "."
 			if len(args) > 0 {
 				repoPath = args[0]
@@ -241,9 +250,10 @@ func NewRepoScanCommand() *cobra.Command {
 			runSecrets := runAll || enableSecrets
 			runSAST := runAll || enableSAST
 
-			// Validate environment variables if upload is requested (before scanning)
+			// Validate environment variables if upload is requested (before scanning);
+			// --list-targets scans and uploads nothing
 			upload, _ := cmd.Flags().GetBool("upload")
-			if upload {
+			if upload && !targets.list {
 				if err := validateTraceforceEnv(); err != nil {
 					fmt.Println(err)
 					os.Exit(1)
@@ -252,6 +262,29 @@ func NewRepoScanCommand() *cobra.Command {
 
 			var allFindings []*proto.Finding
 			ctx := context.Background()
+
+			outputPath, _ := cmd.Flags().GetString("output")
+			cleanup, _ := cmd.Flags().GetBool("clean-up")
+
+			if targets.enabled {
+				output := reportOutput{path: outputPath, upload: upload, cleanup: cleanup}
+				handled, err := runTargetScan(ctx, repoPath, targets, *config, reposcan.ScannerSelection{SCA: runCVE, Secrets: runSecrets, SAST: runSAST}, output)
+				if err != nil {
+					if targets.json {
+						// Keep stdout for the JSON listing alone.
+						fmt.Fprintln(os.Stderr, err)
+					} else {
+						fmt.Println(err)
+					}
+					os.Exit(1)
+				}
+				if handled {
+					return
+				}
+				fmt.Println("No MCP target detected; scanning the full repository")
+			} else {
+				printTargetHint(repoPath)
+			}
 
 			// Run CVE/SCA scan if enabled
 			if runCVE {
@@ -286,14 +319,7 @@ func NewRepoScanCommand() *cobra.Command {
 				allFindings = append(allFindings, sastFindings...)
 			}
 
-			outputPath, _ := cmd.Flags().GetString("output")
-			cleanup, _ := cmd.Flags().GetBool("clean-up")
-			// For repo-scan, use repo path basename or default to "repo-scan"
-			sourceName := "repo-scan"
-			if repoPath != "." {
-				sourceName = filepath.Base(repoPath)
-			}
-			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, sourceName, "", "")
+			actualOutputPath, err := writeFindings(allFindings, outputPath, "repo-scan", upload, repoSourceName(repoPath), "", "")
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -319,7 +345,403 @@ func NewRepoScanCommand() *cobra.Command {
 	cmd.Flags().Int("codeql-timeout", 0, "Per-language CodeQL budget in seconds, covering database create + analyze (0 = MCPXRAY_CODEQL_TIMEOUT, else 600). Raise for large repositories.")
 	cmd.Flags().Bool("upload", false, "Upload the SARIF report to Traceforce Atlas endpoint (requires TRACEFORCE_CLIENT_ID, and TRACEFORCE_CLIENT_SECRET env vars)")
 	cmd.Flags().Bool("clean-up", false, "Remove all generated files after successful upload (requires --upload)")
+	cmd.Flags().Bool("target-resolution", false, "Detect the MCP targets in the repository and scan only the selected one plus its shared dependencies, instead of the whole repository")
+	cmd.Flags().String("target", "", "Name of the MCP target to scan (see --list-targets)")
+	cmd.Flags().StringArray("target-id", nil, "ID of an MCP target to scan (can be specified multiple times)")
+	cmd.Flags().Bool("all-targets", false, "Scan all discovered MCP targets in one deduplicated plan")
+	cmd.Flags().Bool("include-repo-global", false, "Also scan, once, the repository files that belong to no selected target")
+	cmd.Flags().Bool("explain-scope", false, "Print the scan plan before scanning and execution diagnostics after")
+	cmd.Flags().StringArray("output-dir", nil, "MCP X-Ray output directory to keep out of the scan scope (can be specified multiple times)")
+	cmd.Flags().Bool("list-targets", false, "Print the MCP targets discovered in the repository and exit without scanning")
+	cmd.Flags().Bool("json", false, "With --list-targets, print the targets as JSON")
 	return cmd
+}
+
+// targetFlags is the target-resolution part of a repo-scan invocation.
+// --target-resolution, --list-targets, a target selection,
+// --include-repo-global or --explain-scope switches repo-scan from scanning
+// the whole repository to scanning selected MCP targets.
+type targetFlags struct {
+	enabled           bool
+	list, json        bool
+	name              string
+	ids               []string
+	all               bool
+	includeRepoGlobal bool
+	explainScope      bool
+	outputDirs        []string
+}
+
+func readTargetFlags(cmd *cobra.Command) (targetFlags, error) {
+	var t targetFlags
+	flags := cmd.Flags()
+	resolution, _ := flags.GetBool("target-resolution")
+	t.list, _ = flags.GetBool("list-targets")
+	t.json, _ = flags.GetBool("json")
+	t.name, _ = flags.GetString("target")
+	t.ids, _ = flags.GetStringArray("target-id")
+	t.all, _ = flags.GetBool("all-targets")
+	t.includeRepoGlobal, _ = flags.GetBool("include-repo-global")
+	t.explainScope, _ = flags.GetBool("explain-scope")
+	t.outputDirs, _ = flags.GetStringArray("output-dir")
+	if t.json && !t.list {
+		return t, fmt.Errorf("--json requires --list-targets")
+	}
+	t.enabled = resolution || t.list || t.explicitSelection() || t.includeRepoGlobal || t.explainScope
+	return t, nil
+}
+
+// explicitSelection reports whether specific targets were requested (by
+// name, by ID or all of them). Such a request must fail when no target is
+// discovered rather than silently fall back to a full-repository scan.
+func (t targetFlags) explicitSelection() bool {
+	return t.name != "" || len(t.ids) > 0 || t.all
+}
+
+type reportOutput struct {
+	path            string
+	upload, cleanup bool
+}
+
+// runTargetScan carries out a target-resolution repo-scan: resolve the
+// repository's MCP targets, list them or plan a scan of the selected ones,
+// scan each scan unit once, and write one deduplicated SARIF report.
+// handled is false when the repository has no MCP target and none was
+// explicitly requested, leaving the caller to scan the whole repository.
+func runTargetScan(ctx context.Context, repoPath string, targets targetFlags, base reposcan.Config, selection reposcan.ScannerSelection, output reportOutput) (handled bool, err error) {
+	root, err := realDirectory(repoPath)
+	if err != nil {
+		return true, err
+	}
+	resolution, err := targetresolve.Resolve(root)
+	if err != nil {
+		return true, fmt.Errorf("error resolving MCP targets: %w", err)
+	}
+	for _, warning := range resolution.Warnings {
+		fmt.Fprintln(os.Stderr, "Warning:", warning)
+	}
+	if targets.list {
+		return true, listTargets(resolution, targets.json)
+	}
+	if len(resolution.Targets) == 0 {
+		if targets.explicitSelection() {
+			return true, fmt.Errorf("no requested MCP target was discovered; the repository has no discoverable MCP targets to scan")
+		}
+		return false, nil
+	}
+
+	targetIDs, err := selectTargetIDs(resolution, targets)
+	if err != nil {
+		return true, err
+	}
+	plan, err := targetresolve.BuildScanPlan(resolution, targetresolve.PlanOptions{TargetIDs: targetIDs, AllTargets: targets.all, IncludeRepoGlobal: targets.includeRepoGlobal, OutputPath: output.path, OutputDirs: targets.outputDirs})
+	if err != nil {
+		return true, fmt.Errorf("error building scan plan: %w", err)
+	}
+	fmt.Printf("Scanning %d target(s) across %d scan unit(s)\n", len(plan.SelectedTargets), len(plan.Units))
+	if targets.explainScope {
+		if err := printJSON(targetresolve.StructuredScanPlan(plan)); err != nil {
+			return true, err
+		}
+	}
+
+	result, err := scanPlan(ctx, plan, base, selection)
+	if err != nil {
+		return true, err
+	}
+	aggregated := aggregation.Aggregate(plan.RepoRoot, result.attributed)
+	if targets.explainScope {
+		if err := printJSON(scanDiagnostics(result, aggregated)); err != nil {
+			return true, err
+		}
+	}
+	sarifBytes, err := targetSARIF(plan, result, aggregated)
+	if err != nil {
+		return true, err
+	}
+	return true, writeReport(sarifBytes, targetSourceName(repoPath, plan, resolution.Targets), output)
+}
+
+// realDirectory returns the symlink-free path of the repository directory
+// at repoPath. Target resolution walks the repository and the scanners'
+// findings are attributed to targets by path, so both must see it under one
+// name: through a symlinked root, resolution found no targets at all.
+func realDirectory(repoPath string) (string, error) {
+	info, err := os.Stat(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("cannot read scan root %s: %w", repoPath, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("scan root %s is not a directory", repoPath)
+	}
+	return filepath.EvalSymlinks(repoPath)
+}
+
+// scanDiagnostics is what --explain-scope prints after scanning: every
+// scanner execution, and how the findings the scanners reported split into
+// those no selected target owns, unique ones and duplicates.
+func scanDiagnostics(result *planScanResult, aggregated []*aggregation.AggregatedFinding) map[string]interface{} {
+	raw := 0
+	for _, execution := range result.executions {
+		raw += execution.FindingCount
+	}
+	return map[string]interface{}{
+		"executions":             result.executions,
+		"rawFindingCount":        raw,
+		"outOfScopeFindingCount": raw - len(result.attributed),
+		"uniqueFindingCount":     len(aggregated),
+		"duplicateFindingCount":  len(result.attributed) - len(aggregated),
+	}
+}
+
+func listTargets(resolution *targetresolve.Resolution, asJSON bool) error {
+	if !asJSON {
+		printDiscoveredTargets(resolution.Targets, resolution.Projects, resolution.RepoRoot)
+		return nil
+	}
+	data, err := targetresolve.ResolutionJSON(resolution)
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
+// selectTargetIDs turns --target, --target-id and --all-targets into the
+// IDs to plan, falling back to selectTarget (the only target, or an
+// interactive pick) when none was given.
+func selectTargetIDs(resolution *targetresolve.Resolution, targets targetFlags) ([]string, error) {
+	ids := append([]string(nil), targets.ids...)
+	if targets.name != "" {
+		target, err := targetByName(resolution.Targets, resolution.RepoRoot, targets.name)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, target.ID)
+	}
+	if len(ids) == 0 && !targets.all {
+		target, err := selectTarget(resolution.Targets, resolution.Projects, resolution.RepoRoot)
+		if err != nil {
+			return nil, err
+		}
+		ids = []string{target.ID}
+	}
+	return ids, nil
+}
+
+// planScanResult is everything scanning a plan produced, before
+// deduplication.
+type planScanResult struct {
+	attributed []aggregation.AttributedFinding
+	executions []reposcan.ScannerExecution
+}
+
+// add records one scan's executions and its findings, attributed by plan,
+// that keep accepts.
+func (r *planScanResult) add(plan *targetresolve.ScanPlan, scanUnitID string, detailed reposcan.DetailedScanResult, keep func(aggregation.AttributedFinding) bool) {
+	r.executions = append(r.executions, detailed.Executions...)
+	for _, executed := range detailed.Findings {
+		if af := attribute(plan, executed.Finding, scanUnitID, executed.ExecutionID); keep(af) {
+			r.attributed = append(r.attributed, af)
+		}
+	}
+}
+
+// workspaceRootFallbackUnitID identifies the dependency scan of the
+// repository-relative directory dir's own files, made on behalf of the
+// targets relying on a workspace lockfile there that no unit scans.
+func workspaceRootFallbackUnitID(dir string) string {
+	return "workspace-root-fallback:" + dir
+}
+
+// scanPlan runs the selected scanners once per scan unit, plus a dependency
+// scan of each directory holding a workspace lockfile that targets rely on
+// but no unit scans, and attributes every finding to the targets that own
+// its file. Any failed scanner fails the whole scan: a report without its
+// findings would understate them. A partial execution (a SAST taint engine
+// failed) does not, as a taint engine failure does not fail a full scan;
+// its record carries the error.
+func scanPlan(ctx context.Context, plan *targetresolve.ScanPlan, base reposcan.Config, selection reposcan.ScannerSelection) (*planScanResult, error) {
+	result := &planScanResult{}
+	// The scanners match exclusion patterns below the root they are given,
+	// so a unit rooted inside a directory the user excluded (-e examples, a
+	// server at examples/srv) is checked against the repository root, as a
+	// full scan would see it.
+	repoWide := base
+	repoWide.Root = plan.RepoRoot
+	for _, unit := range plan.Units {
+		cfg := base
+		cfg.Root, cfg.ExcludedDirs, cfg.ReportRoot = unit.Root, unit.ExcludedDirs, plan.RepoRoot
+		unitSelection := selection
+		if repoWide.ShouldExclude(unit.Root) {
+			// A full scan never walks into it; only its dependency scan,
+			// which reads the whole tree, does.
+			unitSelection.Secrets, unitSelection.SAST = false, false
+		}
+		inputSummary := fmt.Sprintf("root=%s manifests=%d lockfiles=%d files=%d", unit.RelativeRoot, len(unit.Manifests), len(unit.Lockfiles), len(unit.Files))
+		result.add(plan, unit.ID, reposcan.ScanDetailed(ctx, unit.Root, &cfg, unitSelection, unit.ID, inputSummary), func(af aggregation.AttributedFinding) bool {
+			return plan.Reports(af.TargetIDs)
+		})
+	}
+	if selection.SCA {
+		for _, dir := range plan.FallbackLockfileDirs() {
+			unitID := workspaceRootFallbackUnitID(dir)
+			detailed := reposcan.ScanRootOwnFilesDetailed(filepath.Join(plan.RepoRoot, filepath.FromSlash(dir)), unitID, "root="+dir+" own files only")
+			result.add(plan, unitID, detailed, ownedByATarget)
+		}
+	}
+
+	var failures []string
+	for _, execution := range result.executions {
+		if execution.Status == reposcan.ScannerFailed {
+			failures = append(failures, execution.Scanner+" on "+execution.ScanUnitID+": "+execution.Error)
+		}
+	}
+	if len(failures) > 0 {
+		return nil, fmt.Errorf("scanner failures: %s", strings.Join(failures, "; "))
+	}
+	return result, nil
+}
+
+// ownedByATarget keeps a fallback lockfile check's findings in the fallback
+// lockfiles: every other file in the directory was already covered, or
+// deliberately left out, by the plan's own units.
+func ownedByATarget(af aggregation.AttributedFinding) bool { return len(af.TargetIDs) > 0 }
+
+// attribute credits a raw finding to the targets and components that own
+// its file.
+func attribute(plan *targetresolve.ScanPlan, finding *proto.Finding, scanUnitID, executionID string) aggregation.AttributedFinding {
+	ownership := plan.OwnershipOf(finding.File)
+	return aggregation.AttributedFinding{
+		Finding:      finding,
+		TargetIDs:    ownership.TargetIDs,
+		ComponentIDs: ownership.ComponentIDs,
+		ScanUnitID:   scanUnitID,
+		ExecutionID:  executionID,
+		Relation:     string(ownership.Relation),
+		Context:      ownership.Context,
+	}
+}
+
+// targetSARIF renders the deduplicated findings with their attribution, plus
+// run-level properties that keep every selected target visible even when it
+// has no findings.
+func targetSARIF(plan *targetresolve.ScanPlan, result *planScanResult, aggregated []*aggregation.AggregatedFinding) ([]byte, error) {
+	rawCount := make(map[string]int)
+	for _, af := range result.attributed {
+		for _, targetID := range af.TargetIDs {
+			rawCount[targetID]++
+		}
+	}
+	uniqueCount := make(map[string]int)
+	findings := make([]*proto.Finding, 0, len(aggregated))
+	properties := make([]map[string]interface{}, 0, len(aggregated))
+	for _, item := range aggregated {
+		findings = append(findings, item.Finding)
+		properties = append(properties, item.SARIFProperties())
+		for _, targetID := range item.TargetIDs {
+			uniqueCount[targetID]++
+		}
+	}
+	runProperties := map[string]interface{}{
+		"targetSummaries": plan.TargetSummaries(rawCount, uniqueCount),
+		"scanPlan":        summarizeScanPlan(plan),
+		"executions":      result.executions,
+	}
+	return report.GenerateSarifWithProperties(findings, properties, plan.RepoRoot, runProperties)
+}
+
+// scanPlanSummary is the scan plan as a SARIF report records it. File lists
+// are counted rather than listed: a large repository's inventory would
+// dominate the report, and --explain-scope prints them in full.
+type scanPlanSummary struct {
+	SelectedTargets []targetresolve.TargetPlanView `json:"selectedTargets"`
+	Units           []scanUnitSummary              `json:"scanUnits"`
+	InventoryCount  int                            `json:"inventoryCount"`
+	UnownedCount    int                            `json:"unownedCount"`
+	Excluded        []string                       `json:"excluded,omitempty"`
+	Ambiguous       []string                       `json:"ambiguous,omitempty"`
+}
+
+type scanUnitSummary struct {
+	ID                string                            `json:"id"`
+	Root              string                            `json:"root"`
+	TargetIDs         []string                          `json:"targetIds,omitempty"`
+	Relations         map[string]targetresolve.Relation `json:"relations,omitempty"`
+	ExcludedDirs      []string                          `json:"excludedDirs,omitempty"`
+	FallbackLockfiles map[string][]string               `json:"fallbackLockfiles,omitempty"`
+	FileCount         int                               `json:"fileCount"`
+	ManifestCount     int                               `json:"manifestCount"`
+	LockfileCount     int                               `json:"lockfileCount"`
+}
+
+func summarizeScanPlan(plan *targetresolve.ScanPlan) scanPlanSummary {
+	view := targetresolve.StructuredScanPlan(plan)
+	summary := scanPlanSummary{SelectedTargets: view.SelectedTargets, InventoryCount: len(view.Inventory), UnownedCount: len(view.Unowned), Excluded: view.Excluded, Ambiguous: view.Ambiguous}
+	for _, unit := range view.Units {
+		summary.Units = append(summary.Units, scanUnitSummary{
+			ID:                unit.ID,
+			Root:              unit.RelativeRoot,
+			TargetIDs:         unit.TargetIDs,
+			Relations:         unit.Relations,
+			ExcludedDirs:      unit.ExcludedDirs,
+			FallbackLockfiles: unit.FallbackLockfiles,
+			FileCount:         len(unit.Files),
+			ManifestCount:     len(unit.Manifests),
+			LockfileCount:     len(unit.Lockfiles),
+		})
+	}
+	return summary
+}
+
+func writeReport(sarifBytes []byte, sourceName string, output reportOutput) error {
+	actualOutputPath, err := writeSarifBytes(sarifBytes, output.path, "repo-scan", output.upload, sourceName, "", "")
+	if err != nil {
+		return err
+	}
+	if output.cleanup && output.upload {
+		if err := cleanupGeneratedFiles(actualOutputPath, "", "", ""); err != nil {
+			return fmt.Errorf("error cleaning up files: %w", err)
+		}
+		fmt.Printf("Generated files cleaned up\n")
+	}
+	return nil
+}
+
+// repoSourceName is the source a repo-scan report is uploaded as: the
+// repository path's basename, or "repo-scan" for the current directory.
+func repoSourceName(repoPath string) string {
+	if repoPath == "." {
+		return "repo-scan"
+	}
+	return filepath.Base(repoPath)
+}
+
+// targetSourceName is the source a target scan is uploaded as: the
+// repository's, as for a full scan, followed, when the plan scans one
+// target, by that target's name, so that each server keeps its own report
+// history. A name another of the repository's targets shares would mix two
+// servers' histories, so such a target is named by its directory instead.
+func targetSourceName(repoPath string, plan *targetresolve.ScanPlan, targets []*targetresolve.Target) string {
+	if len(plan.SelectedTargets) != 1 {
+		return repoSourceName(repoPath)
+	}
+	selected := plan.SelectedTargets[0]
+	for _, other := range targets {
+		if other.ID != selected.ID && other.Name == selected.Name {
+			return repoSourceName(repoPath) + "/" + selected.Project.RelDir
+		}
+	}
+	return repoSourceName(repoPath) + "/" + selected.Name
+}
+
+func printJSON(value interface{}) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func NewPentestCommand() *cobra.Command {
@@ -601,7 +1023,12 @@ func writeFindings(findings []*proto.Finding, outputPath string, commandName str
 	if err != nil {
 		return "", fmt.Errorf("error generating SARIF report: %w", err)
 	}
+	return writeSarifBytes(sarifBytes, outputPath, commandName, upload, sourceName, toolsFilePath, testFilePath)
+}
 
+// writeSarifBytes writes a generated SARIF report to outputPath (or a
+// timestamped default) and uploads it when requested.
+func writeSarifBytes(sarifBytes []byte, outputPath string, commandName string, upload bool, sourceName string, toolsFilePath string, testFilePath string) (string, error) {
 	if outputPath == "" {
 		timestamp := time.Now().Format(time.RFC3339)
 		// Make RFC3339 filename-safe by replacing colons with hyphens
@@ -609,8 +1036,7 @@ func writeFindings(findings []*proto.Finding, outputPath string, commandName str
 		outputPath = fmt.Sprintf("findings-%s-%s.sarif.json", commandName, timestamp)
 	}
 
-	err = os.WriteFile(outputPath, sarifBytes, 0644)
-	if err != nil {
+	if err := os.WriteFile(outputPath, sarifBytes, 0644); err != nil {
 		return "", fmt.Errorf("error writing to output file %s: %w", outputPath, err)
 	}
 

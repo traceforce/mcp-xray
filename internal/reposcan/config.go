@@ -12,11 +12,21 @@ type Config struct {
 	// ExcludedPaths are path-segment patterns (files or directories) to exclude from
 	// scanning (e.g., ".venv", "node_modules", "cache").
 	ExcludedPaths []string
+	// ExcludedDirs are relative directory paths (relative to Root) excluded by
+	// prefix match. Unlike ExcludedPaths (which matches individual path
+	// segments), these match the full relative path from Root, so
+	// "servers/server-b" excludes only that specific subtree without
+	// affecting unrelated paths that happen to contain a "servers" segment.
+	ExcludedDirs []string
 	// Root is the scan root. Exclude patterns are matched only against path segments
 	// BELOW it, so the name of a directory ABOVE the repo (a checkout under /tmp or
 	// ~/build) can never exclude the whole scan. Empty keeps the legacy whole-path
 	// behavior.
 	Root string
+	// ReportRoot is the directory a taint finding names its file relative to, in
+	// its File and Message. Empty means the scan root; a target scan sets the
+	// repository root, so that a flow reads the same whichever unit finds it.
+	ReportRoot string
 	// CodeQLAllowBuild grants consent to compile Go targets during CodeQL analysis.
 	CodeQLAllowBuild bool
 	// CodeQLTimeoutSec overrides the per-language CodeQL budget (create + analyze), in
@@ -27,57 +37,73 @@ type Config struct {
 	CodeQLTimeoutSec int
 }
 
+// defaultExcludedDirs are the directories scanning skips by default:
+// dependency caches, build outputs and VCS/IDE metadata. Some names (bin,
+// build) can also hold a project's own files; --use-default-excludes=false
+// scans them.
+var defaultExcludedDirs = []string{
+	".venv",
+	"venv",
+	"__pycache__",
+	".pytest_cache",
+	"node_modules",
+	".node_modules",
+	"vendor",
+	"target",
+	"dist",
+	"build",
+	".build",
+	"out",
+	".out",
+	"cache",
+	".cache",
+	"tmp",
+	".tmp",
+	"temp",
+	".temp",
+	".git",
+	".svn",
+	".hg",
+	".bzr",
+	".idea",
+	".vscode",
+	".vs",
+	".gradle",
+	".mvn",
+	"bin",
+	"obj",
+	".next",
+	".nuxt",
+	".turbo",
+	".yarn",
+	"coverage",
+	".coverage",
+	".nyc_output",
+	"*.egg-info",
+	".eggs",
+	".tox",
+}
+
+// defaultExcludedFiles are lockfiles: skipped by the SAST and secrets
+// scanners, while dependency scanning reads them.
+var defaultExcludedFiles = []string{
+	"go.sum",
+	"package-lock.json",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+}
+
+// DefaultExcludedDirs returns the directory patterns every repository walk
+// skips by default.
+func DefaultExcludedDirs() []string {
+	return append([]string(nil), defaultExcludedDirs...)
+}
+
 // DefaultConfig returns a configuration with sensible defaults
 func DefaultConfig() *Config {
 	return &Config{
-		MaxFileSize: 10 * 1024 * 1024, // 10MB
-		ExcludedPaths: []string{
-			".venv",
-			"venv",
-			"__pycache__",
-			".pytest_cache",
-			"node_modules",
-			".node_modules",
-			"vendor",
-			"target",
-			"dist",
-			"build",
-			".build",
-			"out",
-			".out",
-			"cache",
-			".cache",
-			"tmp",
-			".tmp",
-			"temp",
-			".temp",
-			".git",
-			".svn",
-			".hg",
-			".bzr",
-			".idea",
-			".vscode",
-			".vs",
-			".gradle",
-			".mvn",
-			"bin",
-			"obj",
-			".next",
-			".nuxt",
-			".turbo",
-			".yarn",
-			"coverage",
-			".coverage",
-			".nyc_output",
-			"*.egg-info",
-			".eggs",
-			".tox",
-			"go.sum",
-			"package-lock.json",
-			"yarn.lock",
-			"pnpm-lock.yaml",
-			"pnpm-lock.yaml",
-		},
+		MaxFileSize:   10 * 1024 * 1024, // 10MB
+		ExcludedPaths: append(DefaultExcludedDirs(), defaultExcludedFiles...),
 	}
 }
 
@@ -103,6 +129,18 @@ func (c *Config) ShouldExclude(filePath string) bool {
 	if normalizedPath == "." {
 		return false // the scan root itself is never excluded
 	}
+
+	// Directory-path exclusions: prefix match on the full relative path.
+	for _, dir := range c.ExcludedDirs {
+		normDir := filepath.ToSlash(filepath.Clean(dir))
+		if normDir == "." {
+			continue
+		}
+		if normalizedPath == normDir || strings.HasPrefix(normalizedPath, normDir+"/") {
+			return true
+		}
+	}
+
 	pathParts := strings.Split(normalizedPath, "/")
 
 	// Check each path segment against exclude patterns
