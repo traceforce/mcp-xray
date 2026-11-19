@@ -46,7 +46,9 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) 
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
 			results, err := s.ScanConnection(ctx, server)
 			if err != nil {
-				return nil, err
+				// Certificate and TLS checks already recorded this failure.
+				// Keep those findings; the dial error still fails the scan.
+				return append(findings, results...), err
 			}
 			findings = append(findings, results...)
 		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_STDIO:
