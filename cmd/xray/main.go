@@ -127,8 +127,11 @@ func NewConfigScanCommand() *cobra.Command {
 				}
 			}
 
-			// Scan all config paths and combine findings
+			// Scan all config paths and combine findings.
+			// Keep any findings from a failed config and exit non-zero after
+			// writing the report.
 			var allFindings []*proto.Finding
+			configFailed := false
 			ctx := context.Background()
 
 			for _, configPath := range configPaths {
@@ -137,12 +140,13 @@ func NewConfigScanCommand() *cobra.Command {
 				scanner, err := configscan.NewConfigScanner(configPath, analyzerType, llmModel, toolsOutputFile, maxRetries)
 				if err != nil {
 					fmt.Printf("Warning: Error creating config scanner for %s: %v\n", configPath, err)
+					configFailed = true
 					continue
 				}
 				findings, err := scanner.Scan(ctx)
 				if err != nil {
 					fmt.Printf("Warning: Error scanning configuration %s: %v\n", configPath, err)
-					continue
+					configFailed = true
 				}
 				allFindings = append(allFindings, findings...)
 			}
@@ -176,6 +180,9 @@ func NewConfigScanCommand() *cobra.Command {
 				if outputPathToClean != "" || toolsPathToClean != "" {
 					fmt.Printf("Generated files cleaned up\n")
 				}
+			}
+			if configFailed {
+				os.Exit(1)
 			}
 		},
 	}
