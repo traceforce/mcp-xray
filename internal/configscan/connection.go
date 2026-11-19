@@ -27,7 +27,7 @@ func NewConnectionScanner(configPath string) *ConnectionScanner {
 	}
 }
 
-// For HTTP MCP servers, scan for authentication vulnerabilities.
+// For HTTP and SSE MCP servers, scan for authentication vulnerabilities.
 // For STDIO MCP servers, this part will be skipped.
 func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) {
 	// Parse configPath
@@ -43,7 +43,7 @@ func (s *ConnectionScanner) Scan(ctx context.Context) ([]*proto.Finding, error) 
 		fmt.Printf("Scanning MCP Server %+v\n", server.RawJSON)
 		classification := libmcp.ClassifyTransport(server)
 		switch classification {
-		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP:
+		case proto.MCPTransportType_MCP_TRANSPORT_TYPE_HTTP, proto.MCPTransportType_MCP_TRANSPORT_TYPE_SSE:
 			results, err := s.ScanConnection(ctx, server)
 			if err != nil {
 				return nil, err

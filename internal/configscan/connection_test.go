@@ -1,11 +1,14 @@
 package configscan
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
@@ -416,5 +419,42 @@ func TestDetectIdentityControl(t *testing.T) {
 		assert.Equal(t, proto.FindingType_FINDING_TYPE_CONNECTION, findings[0].Type)
 		assert.Equal(t, "test-server", findings[0].McpServerName)
 		assert.Equal(t, "/test/config.json", findings[0].File)
+	})
+}
+
+// TestScanRunsConnectionChecksForSSE scans configs through ConnectionScanner.Scan.
+// The scanner reports a loopback URL before any network call, so an HTTP config and an
+// equivalent SSE config produce the same connection finding. TLS and OAuth
+// checks live in that same Scan path. TestDetectIdentityControl calls
+// detectIdentityControl directly.
+func TestScanRunsConnectionChecksForSSE(t *testing.T) {
+	scanRuleIDs := func(t *testing.T, body string) []string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "mcp.json")
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		findings, err := NewConnectionScanner(path).Scan(context.Background())
+		assert.Nil(t, err)
+		ids := make([]string, 0, len(findings))
+		for _, f := range findings {
+			assert.Equal(t, "connection-scanner", f.Tool)
+			assert.Equal(t, proto.FindingType_FINDING_TYPE_CONNECTION, f.Type)
+			ids = append(ids, f.RuleId)
+		}
+		return ids
+	}
+
+	httpIDs := scanRuleIDs(t, `{"mcpServers":{"local":{"url":"http://127.0.0.1:9/mcp"}}}`)
+	assert.Equal(t, []string{"localhost-loopback-detection"}, httpIDs)
+
+	t.Run("explicit http type", func(t *testing.T) {
+		assert.Equal(t, httpIDs, scanRuleIDs(t, `{"mcpServers":{"local":{"type":"http","url":"http://127.0.0.1:9/mcp"}}}`))
+	})
+	t.Run("explicit sse type", func(t *testing.T) {
+		assert.Equal(t, httpIDs, scanRuleIDs(t, `{"mcpServers":{"local":{"type":"sse","url":"http://127.0.0.1:9/mcp"}}}`))
+	})
+	t.Run("sse url", func(t *testing.T) {
+		assert.Equal(t, httpIDs, scanRuleIDs(t, `{"mcpServers":{"local":{"url":"http://127.0.0.1:9/sse"}}}`))
 	})
 }
